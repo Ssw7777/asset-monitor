@@ -33,15 +33,15 @@ const EVM: Array<[string, string, number]> = [
 ];
 
 const ABSTRACT: Array<[string, string, number]> = [
-  ["Linea（Abstract）", "0x3a7a0477ad09d8abc78254bf1e53dcc7ed5f030d", 980.4],
+  ["Linea（Abstract）", "0x3a7a0477ad09d8abc78254bf1e53dcc7ed5f030d", 400],
   ["Trust（Abstract）", "0x9f600c729e953536f90fbf5dd41891eee68e1de7", 3586.06],
-  ["Xter1（Abstract）", "0x1897868924ba4722e9c01e9619aad55d83c17f34", 420.2],
+  ["Xter1（Abstract）", "0x1897868924ba4722e9c01e9619aad55d83c17f34", 350],
   ["Xter2（Abstract）", "0x41c0f5ca063da149c227c21d106a7838cbc74d19", 152.82],
-  ["Xter3（Abstract）", "0x5d79bc991884f2316c06631f9de704c441f57121", 310.5],
+  ["Xter3（Abstract）", "0x5d79bc991884f2316c06631f9de704c441f57121", 280],
   ["Xter4（Abstract）", "0xabd87fc5e600ca7205b95f6d9b26e7c974067caa", 675.11],
-  ["Xter5（Abstract）", "0x97a1f45f3e64d99d2e222547e20f9fcc8f2d5ff0", 245.3],
-  ["Xter6（Abstract）", "0x446018c09bd2a9c50cba161e90b1bca5433acdeb", 188.4],
-  ["Gas分发（Abstract）", "0xe8094c9380899205af6ac43181625cad21840c1e", 55.2],
+  ["Xter5（Abstract）", "0x97a1f45f3e64d99d2e222547e20f9fcc8f2d5ff0", 220],
+  ["Xter6（Abstract）", "0x446018c09bd2a9c50cba161e90b1bca5433acdeb", 180],
+  ["Gas分发（Abstract）", "0xe8094c9380899205af6ac43181625cad21840c1e", 116.18],
   ["SafePal（Abstract）", "0x3bfd51e42705873fbca47f22484820c9e09dcf61", 649.46],
 ];
 

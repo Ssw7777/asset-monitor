@@ -123,6 +123,13 @@ export function computeTotals(s: PortfolioState) {
   const cexUsd = s.exchanges.reduce((a, e) => a + (Number(e.balanceUsd) || 0), 0);
   const evmUsd = s.wallets.filter((w) => w.chain === "EVM").reduce((a, w) => a + w.balanceUsd, 0);
   const abstractUsd = s.wallets.filter((w) => w.chain === "ABSTRACT").reduce((a, w) => a + w.balanceUsd, 0);
-  const totalUsd = manualUsd + onchainUsd + cexUsd;
-  return { manualUsd, onchainUsd, cexUsd, evmUsd, abstractUsd, totalUsd };
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  return {
+    manualUsd: round2(manualUsd),
+    onchainUsd: round2(onchainUsd),
+    cexUsd: round2(cexUsd),
+    evmUsd: round2(evmUsd),
+    abstractUsd: round2(abstractUsd),
+    totalUsd: round2(manualUsd + onchainUsd + cexUsd),
+  };
 }
