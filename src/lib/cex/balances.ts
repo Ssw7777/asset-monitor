@@ -4,7 +4,7 @@ import type { EncryptedSecretsBlob } from "../types";
 
 export interface CexResult {
   balanceUsd: number;
-  status: "ok" | "missing_keys" | "error";
+  status: "ok" | "missing_keys" | "missing_passphrase" | "error";
   error?: string;
 }
 
@@ -17,8 +17,17 @@ export async function fetchOkxBalance(blob?: EncryptedSecretsBlob | null): Promi
   const apiKey = keys.okx.apiKey;
   const secret = keys.okx.secret;
   const passphrase = keys.okx.passphrase;
+
+  // Surfacing: keys present but passphrase absent → missing_passphrase (not silent baseline)
+  if (!missing(apiKey, secret) && missing(passphrase)) {
+    return {
+      balanceUsd: 0,
+      status: "missing_passphrase",
+      error: "OKX passphrase missing (OKX_API_PASSPHRASE or encrypted keys)",
+    };
+  }
   if (missing(apiKey, secret, passphrase)) {
-    return { balanceUsd: 0, status: "missing_keys" };
+    return { balanceUsd: 0, status: "missing_keys", error: "OKX API key/secret/passphrase not configured" };
   }
   try {
     const ts = new Date().toISOString();
@@ -37,7 +46,7 @@ export async function fetchOkxBalance(blob?: EncryptedSecretsBlob | null): Promi
     const res = await fetch("https://www.okx.com" + path, { headers, cache: "no-store" });
     const data = await res.json();
     if (!res.ok || data.code !== "0") {
-      return { balanceUsd: 0, status: "error", error: data.msg || res.statusText };
+      return { balanceUsd: 0, status: "error", error: data.msg || res.statusText || `HTTP ${res.status}` };
     }
     const details = data.data?.[0]?.details || [];
     let total = 0;
@@ -56,7 +65,9 @@ export async function fetchBinanceBalance(blob?: EncryptedSecretsBlob | null): P
   const keys = resolveCexKeys(blob);
   const apiKey = keys.binance.apiKey;
   const secret = keys.binance.secret;
-  if (missing(apiKey, secret)) return { balanceUsd: 0, status: "missing_keys" };
+  if (missing(apiKey, secret)) {
+    return { balanceUsd: 0, status: "missing_keys", error: "Binance API key/secret not configured" };
+  }
   try {
     const ts = Date.now();
     const query = `timestamp=${ts}`;
@@ -68,7 +79,9 @@ export async function fetchBinanceBalance(blob?: EncryptedSecretsBlob | null): P
     });
     const data = await res.json();
     if (!res.ok) {
-      return { balanceUsd: 0, status: "error", error: data.msg || res.statusText };
+      const msg = data.msg || res.statusText || `HTTP ${res.status}`;
+      // Geo / restricted region often returns 451 or explicit restriction text
+      return { balanceUsd: 0, status: "error", error: msg };
     }
     const balances: Array<{ asset: string; free: string; locked: string }> = data.balances || [];
     const stables = new Set(["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "DAI"]);
@@ -104,7 +117,9 @@ export async function fetchGateBalance(blob?: EncryptedSecretsBlob | null): Prom
   const keys = resolveCexKeys(blob);
   const apiKey = keys.gate.apiKey;
   const secret = keys.gate.secret;
-  if (missing(apiKey, secret)) return { balanceUsd: 0, status: "missing_keys" };
+  if (missing(apiKey, secret)) {
+    return { balanceUsd: 0, status: "missing_keys", error: "Gate API key/secret not configured" };
+  }
   try {
     const method = "GET";
     const urlPath = "/api/v4/spot/accounts";

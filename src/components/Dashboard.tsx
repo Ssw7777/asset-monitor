@@ -190,7 +190,7 @@ export function Dashboard() {
             <div className="text-sm text-gray-500 mb-2">交易所资产</div>
             <div className="text-3xl font-semibold">{usd(totals.cexUsd)}</div>
             <div className="mt-4 text-sm text-gray-500">
-              {exchanges.filter((e) => e.status === "ok" || e.status === "baseline").length} / {exchanges.length} 已读取
+              {exchanges.filter((e) => e.status === "ok").length} / {exchanges.length} 实时 · 其余保留上次/基线
               {data.hasEncryptedSecrets ? " · 已存加密密钥" : ""}
             </div>
           </section>
@@ -211,19 +211,27 @@ export function Dashboard() {
                   <div className="font-medium">{EX_LABEL[ex.exchange] || ex.exchange}</div>
                   <span
                     className={`w-2 h-2 rounded-full ${
-                      ex.status === "ok" || ex.status === "baseline" ? "bg-emerald-500" : "bg-amber-400"
+                      ex.status === "ok"
+                        ? "bg-emerald-500"
+                        : ex.status === "baseline"
+                          ? "bg-emerald-500"
+                          : ex.status === "error" || ex.status === "missing_passphrase"
+                            ? "bg-red-400"
+                            : "bg-amber-400"
                     }`}
                   />
                 </div>
                 <div className="text-2xl font-semibold">{usd(ex.balanceUsd)}</div>
                 <div className="text-xs text-gray-400 mt-2">
-                  {ex.status === "missing_keys"
-                    ? "未配置 API（显示基线）"
-                    : ex.status === "error"
-                      ? `错误，保留上次 · ${ex.error || ""}`
-                      : ex.status === "baseline"
-                        ? `基线数据 · ${timeAgo(ex.lastUpdated)}`
-                        : `最新数据 · ${timeAgo(ex.lastUpdated)}`}
+                  {ex.status === "missing_passphrase"
+                    ? `缺少 passphrase · ${ex.error || "请配置 OKX_API_PASSPHRASE"}`
+                    : ex.status === "missing_keys"
+                      ? `未配置 API · ${ex.error || "显示上次/基线余额"}`
+                      : ex.status === "error"
+                        ? `错误，保留上次 · ${ex.error || ""}`
+                        : ex.status === "baseline"
+                          ? `基线数据 · ${timeAgo(ex.lastUpdated)}`
+                          : `最新数据 · ${timeAgo(ex.lastUpdated)}`}
                 </div>
               </div>
             ))}

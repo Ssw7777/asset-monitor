@@ -14,14 +14,15 @@ export interface Wallet {
   chain: ChainType;
   balanceUsd: number;
   lastUpdated: string | null;
-  status: "ok" | "stale" | "error" | "baseline";
+  /** ok = live; cached = kept last good / TTL; error = refresh failed; baseline = seed only (pre-refresh) */
+  status: "ok" | "cached" | "stale" | "error" | "baseline";
 }
 
 export interface ExchangeBalance {
   exchange: "okx" | "binance" | "gate";
   balanceUsd: number;
   lastUpdated: string | null;
-  status: "ok" | "missing_keys" | "error" | "baseline";
+  status: "ok" | "missing_keys" | "missing_passphrase" | "error" | "baseline";
   error?: string;
 }
 

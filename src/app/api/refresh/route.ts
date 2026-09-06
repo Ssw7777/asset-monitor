@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth";
-import { fetchBinanceBalance, fetchGateBalance, fetchOkxBalance } from "@/lib/cex/balances";
+import { fetchBinanceBalance, fetchGateBalance, fetchOkxBalance, type CexResult } from "@/lib/cex/balances";
 import { refreshWallets } from "@/lib/onchain/debank";
 import { BASELINE } from "@/lib/seed";
 import {
@@ -12,6 +12,59 @@ import {
   updateWallets,
 } from "@/lib/store";
 import type { ExchangeBalance } from "@/lib/types";
+
+/** Prefer Hong Kong for Binance (US regions are geo-blocked). */
+export const preferredRegion = ["hkg1"];
+export const dynamic = "force-dynamic";
+
+function mapExchange(
+  exchange: ExchangeBalance["exchange"],
+  result: CexResult,
+  prev: ExchangeBalance | undefined,
+  baseline: number,
+  now: string
+): ExchangeBalance {
+  const keepBalance =
+    result.status === "ok" ? result.balanceUsd : (prev?.balanceUsd ?? baseline);
+
+  if (result.status === "ok") {
+    return {
+      exchange,
+      balanceUsd: result.balanceUsd,
+      lastUpdated: now,
+      status: "ok",
+    };
+  }
+
+  // After a refresh attempt: never leave status as baseline.
+  // missing_passphrase / missing_keys / error are surfaced clearly; balance kept.
+  if (result.status === "missing_passphrase") {
+    return {
+      exchange,
+      balanceUsd: keepBalance,
+      lastUpdated: prev?.lastUpdated ?? null,
+      status: "missing_passphrase",
+      error: result.error,
+    };
+  }
+  if (result.status === "missing_keys") {
+    return {
+      exchange,
+      balanceUsd: keepBalance,
+      lastUpdated: prev?.lastUpdated ?? null,
+      status: "missing_keys",
+      error: result.error,
+    };
+  }
+  // error — keep previous balance, status must be error (not baseline)
+  return {
+    exchange,
+    balanceUsd: keepBalance,
+    lastUpdated: prev?.lastUpdated ?? null,
+    status: "error",
+    error: result.error || "refresh failed",
+  };
+}
 
 export async function POST() {
   const denied = await requireAuth();
@@ -27,53 +80,15 @@ export async function POST() {
     fetchGateBalance(blob),
   ]);
 
-  const prevMap = Object.fromEntries(state.exchanges.map((e) => [e.exchange, e]));
+  const prevMap = Object.fromEntries(state.exchanges.map((e) => [e.exchange, e])) as Record<
+    string,
+    ExchangeBalance | undefined
+  >;
+
   const exchanges: ExchangeBalance[] = [
-    {
-      exchange: "okx",
-      balanceUsd: okx.status === "ok" ? okx.balanceUsd : (prevMap.okx?.balanceUsd ?? BASELINE.okx),
-      lastUpdated: okx.status === "ok" ? now : prevMap.okx?.lastUpdated ?? now,
-      status:
-        okx.status === "ok"
-          ? "ok"
-          : okx.status === "missing_keys"
-            ? prevMap.okx
-              ? "baseline"
-              : "missing_keys"
-            : "error",
-      error: okx.error,
-    },
-    {
-      exchange: "binance",
-      balanceUsd:
-        binance.status === "ok"
-          ? binance.balanceUsd
-          : (prevMap.binance?.balanceUsd ?? BASELINE.binance),
-      lastUpdated: binance.status === "ok" ? now : prevMap.binance?.lastUpdated ?? now,
-      status:
-        binance.status === "ok"
-          ? "ok"
-          : binance.status === "missing_keys"
-            ? prevMap.binance
-              ? "baseline"
-              : "missing_keys"
-            : "error",
-      error: binance.error,
-    },
-    {
-      exchange: "gate",
-      balanceUsd: gate.status === "ok" ? gate.balanceUsd : (prevMap.gate?.balanceUsd ?? BASELINE.gate),
-      lastUpdated: gate.status === "ok" ? now : prevMap.gate?.lastUpdated ?? now,
-      status:
-        gate.status === "ok"
-          ? "ok"
-          : gate.status === "missing_keys"
-            ? prevMap.gate
-              ? "baseline"
-              : "missing_keys"
-            : "error",
-      error: gate.error,
-    },
+    mapExchange("okx", okx, prevMap.okx, BASELINE.okx, now),
+    mapExchange("binance", binance, prevMap.binance, BASELINE.binance, now),
+    mapExchange("gate", gate, prevMap.gate, BASELINE.gate, now),
   ];
   await updateExchanges(exchanges);
 

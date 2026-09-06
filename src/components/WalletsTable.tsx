@@ -42,7 +42,7 @@ export function WalletsTable({
 
   const evmCount = wallets.filter((w) => w.chain === "EVM").length;
   const absCount = wallets.filter((w) => w.chain === "ABSTRACT").length;
-  const okCount = wallets.filter((w) => w.status === "ok" || w.status === "baseline").length;
+  const okCount = wallets.filter((w) => w.status === "ok" || w.status === "cached" || w.status === "stale" || w.status === "baseline").length;
 
   async function api(body: Record<string, unknown>) {
     setBusy(true);
@@ -314,7 +314,7 @@ export function WalletsTable({
               <div className="text-[11px] text-gray-400">
                 {w.status === "ok"
                   ? `最新 · ${timeAgo(w.lastUpdated)}`
-                  : w.status === "stale"
+                  : w.status === "cached" || w.status === "stale"
                     ? `缓存 · ${timeAgo(w.lastUpdated)}`
                     : w.status === "baseline"
                       ? `基线 · ${timeAgo(w.lastUpdated)}`
