@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth";
-import { computeTotals, deleteManual, readStore, upsertManual } from "@/lib/store";
+import { computeTotals, deleteManual, publicState, readStore, upsertManual } from "@/lib/store";
 import type { ManualAsset } from "@/lib/types";
 
 export async function GET() {
   const denied = await requireAuth();
   if (denied) return denied;
-  const s = readStore();
+  const s = await readStore();
   return NextResponse.json({ manual: s.manual, totals: computeTotals(s) });
 }
 
@@ -20,8 +20,12 @@ export async function POST(req: NextRequest) {
     amountUsd: Math.round((Number(body.amountUsd) || 0) * 100) / 100,
     updatedAt: new Date().toISOString(),
   };
-  const s = upsertManual(item);
-  return NextResponse.json({ manual: s.manual, totals: computeTotals(s) });
+  const s = await upsertManual(item);
+  return NextResponse.json({
+    ...publicState(s),
+    manual: s.manual,
+    totals: computeTotals(s),
+  });
 }
 
 export async function PUT(req: NextRequest) {
@@ -34,6 +38,6 @@ export async function DELETE(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id");
   if (!id) return NextResponse.json({ error: "缺少 id" }, { status: 400 });
-  const s = deleteManual(id);
+  const s = await deleteManual(id);
   return NextResponse.json({ manual: s.manual, totals: computeTotals(s) });
 }

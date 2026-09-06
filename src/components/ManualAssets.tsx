@@ -98,7 +98,7 @@ export function ManualAssets({
         ))}
       </div>
       <div className="flex justify-between text-xs text-gray-400 mt-3">
-        <span>{saving ? "保存中…" : "修改后自动保存到本机"}</span>
+        <span>{saving ? "保存中…" : "修改后自动保存"}</span>
         <span>{items.length} 条记录</span>
       </div>
     </section>

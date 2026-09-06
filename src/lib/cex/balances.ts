@@ -1,4 +1,6 @@
 import crypto from "crypto";
+import { resolveCexKeys } from "../crypto";
+import type { EncryptedSecretsBlob } from "../types";
 
 export interface CexResult {
   balanceUsd: number;
@@ -10,11 +12,11 @@ function missing(...keys: (string | undefined)[]) {
   return keys.some((k) => !k || !k.trim());
 }
 
-/** OKX: GET /api/v5/account/balance — signed server-side only */
-export async function fetchOkxBalance(): Promise<CexResult> {
-  const apiKey = process.env.OKX_API_KEY;
-  const secret = process.env.OKX_API_SECRET;
-  const passphrase = process.env.OKX_API_PASSPHRASE;
+export async function fetchOkxBalance(blob?: EncryptedSecretsBlob | null): Promise<CexResult> {
+  const keys = resolveCexKeys(blob);
+  const apiKey = keys.okx.apiKey;
+  const secret = keys.okx.secret;
+  const passphrase = keys.okx.passphrase;
   if (missing(apiKey, secret, passphrase)) {
     return { balanceUsd: 0, status: "missing_keys" };
   }
@@ -31,7 +33,7 @@ export async function fetchOkxBalance(): Promise<CexResult> {
       "OK-ACCESS-PASSPHRASE": passphrase!,
       "Content-Type": "application/json",
     };
-    if (process.env.OKX_SIMULATED === "1") headers["x-simulated-trading"] = "1";
+    if (keys.okx.simulated) headers["x-simulated-trading"] = "1";
     const res = await fetch("https://www.okx.com" + path, { headers, cache: "no-store" });
     const data = await res.json();
     if (!res.ok || data.code !== "0") {
@@ -50,10 +52,10 @@ export async function fetchOkxBalance(): Promise<CexResult> {
   }
 }
 
-/** Binance: GET /api/v3/account — signed server-side only */
-export async function fetchBinanceBalance(): Promise<CexResult> {
-  const apiKey = process.env.BINANCE_API_KEY;
-  const secret = process.env.BINANCE_API_SECRET;
+export async function fetchBinanceBalance(blob?: EncryptedSecretsBlob | null): Promise<CexResult> {
+  const keys = resolveCexKeys(blob);
+  const apiKey = keys.binance.apiKey;
+  const secret = keys.binance.secret;
   if (missing(apiKey, secret)) return { balanceUsd: 0, status: "missing_keys" };
   try {
     const ts = Date.now();
@@ -68,7 +70,6 @@ export async function fetchBinanceBalance(): Promise<CexResult> {
     if (!res.ok) {
       return { balanceUsd: 0, status: "error", error: data.msg || res.statusText };
     }
-    // Approximate USD via free+locked USDT/USDC/FDUSD + BTC*price skip for MVP: sum stablecoins + try ticker
     const balances: Array<{ asset: string; free: string; locked: string }> = data.balances || [];
     const stables = new Set(["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "DAI"]);
     let total = 0;
@@ -79,16 +80,19 @@ export async function fetchBinanceBalance(): Promise<CexResult> {
       if (stables.has(b.asset)) total += qty;
       else nonStable.push({ asset: b.asset, qty });
     }
-    // Best-effort price for top non-stables via bookTicker (public)
     for (const { asset, qty } of nonStable.slice(0, 30)) {
       try {
         const sym = asset + "USDT";
-        const pr = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`, { cache: "no-store" });
+        const pr = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`, {
+          cache: "no-store",
+        });
         if (!pr.ok) continue;
         const pj = await pr.json();
         const price = parseFloat(pj.price);
         if (price) total += qty * price;
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     }
     return { balanceUsd: Math.round(total * 100) / 100, status: "ok" };
   } catch (e) {
@@ -96,10 +100,10 @@ export async function fetchBinanceBalance(): Promise<CexResult> {
   }
 }
 
-/** Gate.io: GET /api/v4/spot/accounts — signed server-side only */
-export async function fetchGateBalance(): Promise<CexResult> {
-  const apiKey = process.env.GATE_API_KEY;
-  const secret = process.env.GATE_API_SECRET;
+export async function fetchGateBalance(blob?: EncryptedSecretsBlob | null): Promise<CexResult> {
+  const keys = resolveCexKeys(blob);
+  const apiKey = keys.gate.apiKey;
+  const secret = keys.gate.secret;
   if (missing(apiKey, secret)) return { balanceUsd: 0, status: "missing_keys" };
   try {
     const method = "GET";
@@ -120,7 +124,11 @@ export async function fetchGateBalance(): Promise<CexResult> {
     });
     const data = await res.json();
     if (!res.ok) {
-      return { balanceUsd: 0, status: "error", error: typeof data === "object" ? JSON.stringify(data) : res.statusText };
+      return {
+        balanceUsd: 0,
+        status: "error",
+        error: typeof data === "object" ? JSON.stringify(data) : res.statusText,
+      };
     }
     const list = Array.isArray(data) ? data : [];
     let total = 0;
@@ -132,13 +140,18 @@ export async function fetchGateBalance(): Promise<CexResult> {
       if (stables.has(cur)) total += avail;
       else {
         try {
-          const pr = await fetch(`https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${cur}_USDT`, { cache: "no-store" });
+          const pr = await fetch(
+            `https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${cur}_USDT`,
+            { cache: "no-store" }
+          );
           if (pr.ok) {
             const pj = await pr.json();
             const price = parseFloat(pj?.[0]?.last || "0");
             if (price) total += avail * price;
           }
-        } catch { /* skip */ }
+        } catch {
+          /* skip */
+        }
       }
     }
     return { balanceUsd: Math.round(total * 100) / 100, status: "ok" };

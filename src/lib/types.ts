@@ -28,6 +28,19 @@ export interface ExchangeBalance {
 export interface SnapshotPoint {
   ts: string;
   totalUsd: number;
+  onchain?: number;
+  cex?: number;
+  manual?: number;
+  exchanges?: Record<string, number>;
+  wallets?: Record<string, number>;
+}
+
+/** Encrypted AES-256-GCM payload for optional CEX key material — never returned to client */
+export interface EncryptedSecretsBlob {
+  ciphertext: string;
+  iv: string;
+  tag: string;
+  updatedAt: string;
 }
 
 export interface PortfolioState {
@@ -38,4 +51,12 @@ export interface PortfolioState {
   onchainCacheUsd: number;
   lastRefresh: string | null;
   usdCnyRate: number;
+  /** Optional encrypted CEX keys at rest (server-only) */
+  encryptedSecrets?: EncryptedSecretsBlob | null;
+}
+
+export interface CexKeyMaterial {
+  okx?: { apiKey?: string; apiSecret?: string; passphrase?: string; simulated?: boolean };
+  binance?: { apiKey?: string; apiSecret?: string };
+  gate?: { apiKey?: string; apiSecret?: string };
 }
