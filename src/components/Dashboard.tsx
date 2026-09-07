@@ -195,9 +195,11 @@ export function Dashboard() {
       <header className="sticky top-0 z-20 bg-[#f5f6f8]/90 backdrop-blur border-b border-gray-100/80">
         <div className="page-shell py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 shrink-0 rounded-full bg-gray-900 text-white flex items-center justify-center text-xs font-bold">
-              0x
-            </div>
+            <img
+              src="/avatar.jpg"
+              alt="0xStudy"
+              className="w-9 h-9 shrink-0 rounded-full object-cover ring-1 ring-black/5"
+            />
             <div className="min-w-0">
               <div className="font-semibold text-[15px] sm:text-base truncate">0xStudy Checker</div>
               <div className="text-[11px] sm:text-xs text-gray-400 flex items-center gap-1.5 truncate">

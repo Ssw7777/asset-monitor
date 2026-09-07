@@ -8,7 +8,7 @@ export default async function LoginPage() {
     <main className="min-h-screen flex items-center justify-center px-4">
       <div className="card w-full max-w-md p-8">
         <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 rounded-full bg-gray-900 text-white flex items-center justify-center text-sm font-bold">0x</div>
+          <img src="/avatar.jpg" alt="0xStudy" className="w-10 h-10 shrink-0 rounded-full object-cover ring-1 ring-black/5" />
           <div>
             <h1 className="text-lg font-semibold">0xStudy Checker</h1>
             <p className="text-sm text-gray-400">请输入仪表盘密码</p>

@@ -4,6 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "0xStudy Checker",
   description: "Security-first crypto portfolio monitor",
+  icons: { icon: "/avatar.jpg", apple: "/avatar.jpg" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
