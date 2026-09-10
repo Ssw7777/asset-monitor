@@ -17,10 +17,10 @@ const DATA_DIR = path.join(process.cwd(), "data");
 const LOCAL_STORE = path.join(DATA_DIR, "store.json");
 const TMP_STORE = "/tmp/asset-monitor-store.json";
 const TURSO_ROW_KEY = "portfolio";
-/** 1 分钟一张快照 × 10080 ≈ 7 天历史，够做分钟级曲线。 */
-export const SNAPSHOT_LIMIT = 10080;
-/** 只有最近 1440 条（分钟级 ≈ 24 小时）保留逐钱包 / 逐 DApp 明细，其余只留总额，控制体积。 */
-const SNAPSHOT_DETAIL_KEEP = 1440;
+/** 5 分钟一张快照 × 2016 ≈ 7 天历史。 */
+export const SNAPSHOT_LIMIT = 2016;
+/** 只有最近 288 条（5 分钟级 ≈ 24 小时）保留逐钱包 / 逐 DApp 明细，其余只留总额，控制体积。 */
+const SNAPSHOT_DETAIL_KEEP = 288;
 
 function trimSnapshots(list: SnapshotPoint[]): SnapshotPoint[] {
   const sliced = list.length > SNAPSHOT_LIMIT ? list.slice(-SNAPSHOT_LIMIT) : list;

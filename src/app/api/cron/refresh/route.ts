@@ -14,7 +14,9 @@ export const maxDuration = 60;
 async function handle(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   const header = req.headers.get("authorization") || "";
-  const headerOk = !!secret && header === `Bearer ${secret}`;
+  // 支持两种带法：Header（Vercel Cron / cron-job.org）或 ?token=（GitHub Actions 之类不方便设头的场景）
+  const queryToken = new URL(req.url).searchParams.get("token") || "";
+  const headerOk = !!secret && (header === `Bearer ${secret}` || queryToken === secret);
 
   if (!headerOk) {
     const denied = await requireAuth();
