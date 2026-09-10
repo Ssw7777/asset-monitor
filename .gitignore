@@ -13,3 +13,4 @@ data/*.json
 !data/.gitkeep
 .vercel
 *.tsbuildinfo
+.tmp-*

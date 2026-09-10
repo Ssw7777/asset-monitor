@@ -6,6 +6,7 @@ import { shortAddr, timeAgo, usd } from "./format";
 
 type Filter = "all" | "EVM" | "ABSTRACT";
 
+/** 地址管理：DeBank 风格表格 + 行内编辑，最多 50 条，删除需确认。 */
 export function WalletsTable({
   wallets,
   onChange,
@@ -15,36 +16,30 @@ export function WalletsTable({
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
-  const [sortDesc, setSortDesc] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [showAdd, setShowAdd] = useState(false);
-  const [showBatch, setShowBatch] = useState(false);
+  const [panel, setPanel] = useState<"none" | "add" | "batch">("none");
   const [form, setForm] = useState({ name: "", address: "", chain: "EVM" as ChainType });
+  const [editId, setEditId] = useState<string | null>(null);
   const [batchText, setBatchText] = useState("");
   const [batchChain, setBatchChain] = useState<ChainType>("EVM");
   const [msg, setMsg] = useState("");
-  const [editId, setEditId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     let list = wallets;
-    if (filter !== "all") list = list.filter((w) => w.chain === filter);
+    if (filter !== "all") list = list.filter((wallet) => wallet.chain === filter);
     if (q.trim()) {
-      const s = q.trim().toLowerCase();
+      const keyword = q.trim().toLowerCase();
       list = list.filter(
-        (w) => w.name.toLowerCase().includes(s) || w.address.toLowerCase().includes(s)
+        (wallet) =>
+          wallet.name.toLowerCase().includes(keyword) ||
+          wallet.address.toLowerCase().includes(keyword)
       );
     }
-    list = [...list].sort((a, b) =>
-      sortDesc ? b.balanceUsd - a.balanceUsd : a.balanceUsd - b.balanceUsd
-    );
-    return list;
-  }, [wallets, filter, q, sortDesc]);
+    return [...list].sort((left, right) => right.balanceUsd - left.balanceUsd);
+  }, [wallets, filter, q]);
 
-  const evmCount = wallets.filter((w) => w.chain === "EVM").length;
-  const absCount = wallets.filter((w) => w.chain === "ABSTRACT").length;
-  const okCount = wallets.filter(
-    (w) => w.status === "ok" || w.status === "cached" || w.status === "stale" || w.status === "baseline"
-  ).length;
+  const evmCount = wallets.filter((wallet) => wallet.chain === "EVM").length;
+  const absCount = wallets.filter((wallet) => wallet.chain === "ABSTRACT").length;
 
   async function api(body: Record<string, unknown>) {
     setBusy(true);
@@ -77,16 +72,16 @@ export function WalletsTable({
     if (editId) payload.id = editId;
     const data = await api(payload);
     if (data) {
-      setShowAdd(false);
+      setPanel("none");
       setEditId(null);
       setForm({ name: "", address: "", chain: "EVM" });
-      setMsg(editId ? "已更新" : "已添加");
+      setMsg(editId ? "已更新地址" : "已添加地址");
     }
   }
 
-  async function removeWallet(id: string) {
-    if (!confirm("确认删除该钱包？")) return;
-    await api({ action: "delete", id });
+  async function removeWallet(wallet: Wallet) {
+    if (!confirm(`确认删除「${wallet.name}」？该地址的余额会立即从总资产中移除。`)) return;
+    await api({ action: "delete", id: wallet.id });
   }
 
   async function batchImport() {
@@ -97,302 +92,292 @@ export function WalletsTable({
       namePrefix: "Import",
     });
     if (data) {
-      setShowBatch(false);
+      setPanel("none");
       setBatchText("");
       setMsg(`导入完成：新增 ${data.added || 0}，跳过重复 ${data.skipped || 0}`);
     }
   }
 
-  function exportCsv() {
-    const header = ["name", "address", "balance"];
-    const rows = filtered.map((w) => [w.name, w.address, String(w.balanceUsd)]);
-    const csv = [header, ...rows]
-      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
-      .join("\r\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "wallets.csv";
-    a.click();
-    URL.revokeObjectURL(url);
+  async function exportCsv() {
+    setBusy(true);
+    setMsg("");
+    try {
+      const res = await fetch("/api/export?type=wallets");
+      if (!res.ok) {
+        setMsg("导出失败");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `0xstudy-wallets-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setMsg("已导出当前地址与余额");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function startEdit(w: Wallet) {
-    setEditId(w.id);
-    setForm({ name: w.name, address: w.address, chain: w.chain });
-    setShowAdd(true);
-    setShowBatch(false);
-  }
-
-  function statusText(w: Wallet) {
-    if (w.status === "ok") return `最新 · ${timeAgo(w.lastUpdated)}`;
-    if (w.status === "cached" || w.status === "stale") return `缓存 · ${timeAgo(w.lastUpdated)}`;
-    if (w.status === "baseline") return `基线 · ${timeAgo(w.lastUpdated)}`;
-    return "同步失败（保留上次）";
+  function statusText(wallet: Wallet) {
+    if (wallet.status === "ok") return { text: `最新 · ${timeAgo(wallet.lastUpdated)}`, cls: "pos" };
+    if (wallet.status === "cached" || wallet.status === "stale")
+      return { text: `上次成功数据 · ${timeAgo(wallet.lastUpdated)}`, cls: "" };
+    if (wallet.status === "baseline") return { text: "基线数据", cls: "" };
+    return {
+      text: wallet.balanceUsd > 0 ? "读取失败 · 保留上次" : "读取失败 · 暂无历史数据",
+      cls: "neg",
+    };
   }
 
   return (
-    <section className="card p-4 sm:p-5 md:p-6">
-      <div className="mb-4 flex flex-col gap-3">
-        <div className="flex flex-col sm:flex-row sm:flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="section-kicker">Onchain</div>
-            <h2 className="text-base sm:text-lg font-semibold mt-0.5">链上钱包</h2>
-            <p className="text-sm text-gray-400 mt-1 leading-relaxed">
-              最多 50 个地址；当前 {wallets.length} 个 · 同步成功/可用 {okCount}/{wallets.length}
-            </p>
-          </div>
-          <div className="grid grid-cols-3 sm:flex sm:flex-wrap gap-2 w-full sm:w-auto">
-            <button
-              onClick={() => {
-                setShowAdd((v) => !v);
-                setShowBatch(false);
-                setEditId(null);
-                setForm({ name: "", address: "", chain: "EVM" });
-              }}
-              className="btn-soft !min-h-[40px]"
-              disabled={busy || wallets.length >= 50}
-            >
-              + 添加
-            </button>
-            <button
-              onClick={() => {
-                setShowBatch((v) => !v);
-                setShowAdd(false);
-              }}
-              className="btn-soft !min-h-[40px]"
-              disabled={busy}
-            >
-              批量导入
-            </button>
-            <button onClick={exportCsv} className="btn bg-blue-500 text-white hover:bg-blue-600 !min-h-[40px]">
-              导出 CSV
-            </button>
-          </div>
+    <section className="section" id="addresses">
+      <div className="section-head">
+        <div className="section-title">
+          <h2>地址管理</h2>
+          <span className="hint">
+            {wallets.length} / 50 个地址 · EVM {evmCount} · Abstract {absCount}
+          </span>
+        </div>
+        <div className="inline">
+          <button
+            type="button"
+            className="btn btn-accent"
+            disabled={busy || wallets.length >= 50}
+            onClick={() => {
+              setPanel(panel === "add" ? "none" : "add");
+              setEditId(null);
+              setForm({ name: "", address: "", chain: "EVM" });
+            }}
+          >
+            + 添加地址
+          </button>
+          <button
+            type="button"
+            className="btn btn-outline"
+            disabled={busy}
+            onClick={() => setPanel(panel === "batch" ? "none" : "batch")}
+          >
+            批量导入
+          </button>
+          <button type="button" className="btn btn-outline" disabled={busy} onClick={exportCsv}>
+            导出 CSV
+          </button>
         </div>
       </div>
 
-      {msg && <div className="text-sm text-gray-500 mb-3">{msg}</div>}
+      {msg && (
+        <div className="notice" style={{ marginBottom: 10 }}>
+          {msg}
+        </div>
+      )}
 
-      {showAdd && (
-        <div className="mb-4 rounded-xl border border-gray-100 p-3.5 sm:p-4 space-y-3 bg-gray-50/50">
-          <div className="text-sm font-medium">{editId ? "编辑钱包" : "添加钱包"}</div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <input
-              className="rounded-lg border border-gray-200 px-3 py-2.5 text-sm"
-              placeholder="名称"
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            />
-            <input
-              className="rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-mono"
-              placeholder="0x…"
-              value={form.address}
-              onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
-            />
-            <select
-              className="rounded-lg border border-gray-200 px-3 py-2.5 text-sm"
-              value={form.chain}
-              onChange={(e) => setForm((f) => ({ ...f, chain: e.target.value as ChainType }))}
-            >
-              <option value="EVM">EVM</option>
-              <option value="ABSTRACT">ABSTRACT（自动加后缀）</option>
-            </select>
+      {panel === "add" && (
+        <div className="form-panel" style={{ borderRadius: "var(--radius-sm)", marginBottom: 10 }}>
+          <div className="form-grid">
+            <div>
+              <label className="label" htmlFor="wallet-name">
+                名称
+              </label>
+              <input
+                id="wallet-name"
+                className="field"
+                value={form.name}
+                onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+                placeholder="例如：币安钱包"
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="wallet-address">
+                地址（0x + 40 位）
+              </label>
+              <input
+                id="wallet-address"
+                className="field mono"
+                value={form.address}
+                onChange={(event) => setForm((prev) => ({ ...prev, address: event.target.value }))}
+                placeholder="0x…"
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="wallet-chain">
+                链类型
+              </label>
+              <select
+                id="wallet-chain"
+                className="field"
+                value={form.chain}
+                onChange={(event) =>
+                  setForm((prev) => ({ ...prev, chain: event.target.value as ChainType }))
+                }
+              >
+                <option value="EVM">EVM</option>
+                <option value="ABSTRACT">ABSTRACT（自动加后缀）</option>
+              </select>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="inline">
             <button
+              type="button"
+              className="btn btn-accent"
               onClick={saveWallet}
               disabled={busy || !form.address}
-              className="btn-primary flex-1 sm:flex-none"
             >
-              {busy ? "保存中…" : "保存"}
+              {busy ? "保存中…" : editId ? "保存修改" : "添加"}
             </button>
-            <button
-              onClick={() => {
-                setShowAdd(false);
-                setEditId(null);
-              }}
-              className="btn-ghost flex-1 sm:flex-none"
-            >
+            <button type="button" className="btn btn-outline" onClick={() => setPanel("none")}>
               取消
             </button>
+            <span className="small">
+              地址不区分大小写去重，重复地址会被拒绝；只保存公开地址，永远不收集私钥。
+            </span>
           </div>
         </div>
       )}
 
-      {showBatch && (
-        <div className="mb-4 rounded-xl border border-gray-100 p-3.5 sm:p-4 space-y-3 bg-gray-50/50">
-          <div className="text-sm font-medium">批量导入地址</div>
-          <p className="text-xs text-gray-400">每行一个 0x 地址，或逗号/空格分隔；自动去重，跳过已存在。</p>
-          <textarea
-            className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-mono h-28"
-            placeholder={"0xabc...\n0xdef..."}
-            value={batchText}
-            onChange={(e) => setBatchText(e.target.value)}
-          />
-          <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2">
+      {panel === "batch" && (
+        <div className="form-panel" style={{ borderRadius: "var(--radius-sm)", marginBottom: 10 }}>
+          <div>
+            <label className="label" htmlFor="batch-text">
+              批量粘贴地址（每行一个，或逗号 / 空格分隔）
+            </label>
+            <textarea
+              id="batch-text"
+              className="field mono"
+              rows={4}
+              value={batchText}
+              onChange={(event) => setBatchText(event.target.value)}
+              placeholder={"0xabc…\n0xdef…"}
+            />
+          </div>
+          <div className="inline">
             <select
-              className="rounded-lg border border-gray-200 px-3 py-2.5 text-sm"
+              className="field"
+              style={{ width: 180 }}
               value={batchChain}
-              onChange={(e) => setBatchChain(e.target.value as ChainType)}
+              onChange={(event) => setBatchChain(event.target.value as ChainType)}
             >
               <option value="EVM">EVM</option>
               <option value="ABSTRACT">ABSTRACT</option>
             </select>
             <button
+              type="button"
+              className="btn btn-accent"
               onClick={batchImport}
               disabled={busy || !batchText.trim()}
-              className="btn-primary"
             >
               {busy ? "导入中…" : "开始导入"}
             </button>
-            <button onClick={() => setShowBatch(false)} className="btn-ghost">
+            <button type="button" className="btn btn-outline" onClick={() => setPanel("none")}>
               取消
             </button>
           </div>
         </div>
       )}
 
-      <div className="flex flex-col gap-3 mb-4">
-        <div className="seg self-start max-w-full">
+      <div className="inline" style={{ marginBottom: 10 }}>
+        <span className="seg">
           {(
             [
               ["all", `全部 ${wallets.length}`],
               ["EVM", `EVM ${evmCount}`],
               ["ABSTRACT", `Abstract ${absCount}`],
             ] as const
-          ).map(([k, label]) => (
+          ).map(([key, label]) => (
             <button
-              key={k}
+              key={key}
               type="button"
-              onClick={() => setFilter(k)}
-              className={filter === k ? "seg-item-active" : "seg-item"}
+              className={filter === key ? "active" : ""}
+              onClick={() => setFilter(key)}
             >
               {label}
             </button>
           ))}
-        </div>
-        <div className="flex items-center gap-2">
+        </span>
+        <span className="search" style={{ height: 34, minWidth: 200 }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.2-3.2" />
+          </svg>
           <input
             value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="搜索钱包名称/地址"
-            className="rounded-xl border border-gray-200 px-3 py-2.5 text-sm flex-1 min-w-0 sm:w-52 sm:flex-none"
+            onChange={(event) => setQ(event.target.value)}
+            placeholder="搜索名称或地址"
+            aria-label="搜索钱包"
           />
-          <button onClick={() => setSortDesc((v) => !v)} className="btn-soft shrink-0 !min-h-[40px]">
-            金额 {sortDesc ? "↓" : "↑"}
-          </button>
-        </div>
+        </span>
       </div>
 
-      <div className="space-y-2.5 md:hidden">
-        {filtered.map((w) => (
-          <div key={w.id} className="rounded-xl border border-gray-100 p-3.5 space-y-2.5">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <div className="font-medium text-sm truncate">{w.name}</div>
-                <div className="text-xs text-gray-400 font-mono truncate">{shortAddr(w.address)}</div>
-              </div>
-              <span
-                className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold text-white shrink-0 ${
-                  w.chain === "EVM" ? "bg-sky-400" : "bg-violet-400"
-                }`}
-              >
-                {w.chain}
-              </span>
-            </div>
-            <div className="flex items-end justify-between gap-2">
-              <div>
-                <div className="text-lg font-semibold tabular-nums">{usd(w.balanceUsd)}</div>
-                <div className="text-[11px] text-gray-400">{statusText(w)}</div>
-              </div>
-              <a
-                href={`https://debank.com/profile/${w.address}`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs text-blue-500 hover:underline py-1"
-              >
-                DeBank
-              </a>
-            </div>
-            <div className="grid grid-cols-2 gap-2 pt-1">
-              <button onClick={() => startEdit(w)} className="btn-soft !min-h-[40px]">
-                编辑
-              </button>
-              <button
-                onClick={() => removeWallet(w.id)}
-                className="rounded-xl border border-red-100 text-red-500 text-sm min-h-[40px] hover:bg-red-50"
-              >
-                删除
-              </button>
-            </div>
-          </div>
-        ))}
-        {!filtered.length && (
-          <div className="text-sm text-gray-400 text-center py-8 border border-dashed border-gray-200 rounded-xl">
-            无匹配钱包
-          </div>
-        )}
-      </div>
-
-      <div className="hidden md:block rounded-xl border border-gray-100 divide-y divide-gray-50 overflow-x-auto">
-        <div className="grid grid-cols-[1.4fr_80px_1fr_70px_90px] gap-2 px-4 py-2 text-xs text-gray-400 bg-gray-50 min-w-[560px]">
+      <div className="table">
+        <div className="thead grid-wallet">
           <div>钱包</div>
-          <div>类型</div>
-          <div className="text-right">总资产 / 状态</div>
-          <div className="text-right">DeBank</div>
-          <div className="text-right">操作</div>
+          <div className="hide-lg">类型</div>
+          <div className="right">余额</div>
+          <div className="right hide-md">状态</div>
+          <div className="right hide-lg">DeBank</div>
+          <div className="right">操作</div>
         </div>
-        {filtered.map((w) => (
-          <div
-            key={w.id}
-            className="grid grid-cols-[1.4fr_80px_1fr_70px_90px] gap-2 px-4 py-3 items-center min-w-[560px]"
-          >
-            <div>
-              <div className="font-medium text-sm">{w.name}</div>
-              <div className="text-xs text-gray-400 font-mono">{shortAddr(w.address)}</div>
+        {filtered.map((wallet) => {
+          const status = statusText(wallet);
+          return (
+            <div className="trow grid-wallet" key={wallet.id}>
+              <div className="cell-token-text">
+                <b>{wallet.name}</b>
+                <span className="num">{shortAddr(wallet.address)}</span>
+              </div>
+              <div className="hide-lg">
+                <span className={`tag ${wallet.chain === "EVM" ? "line" : "accent"}`}>
+                  {wallet.chain === "EVM" ? "EVM" : "Abstract"}
+                </span>
+              </div>
+              <div className={`right cell-main num ${wallet.balanceUsd <= 0 ? "muted" : ""}`}>
+                {usd(wallet.balanceUsd)}
+              </div>
+              <div className={`right cell-sub hide-md ${status.cls}`}>{status.text}</div>
+              <div className="right hide-lg">
+                <a
+                  href={`https://debank.com/profile/${wallet.address}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="small"
+                  style={{ color: "var(--blue)" }}
+                >
+                  打开
+                </a>
+              </div>
+              <div className="right inline" style={{ justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  className="btn-mini plain"
+                  onClick={() => {
+                    setEditId(wallet.id);
+                    setForm({ name: wallet.name, address: wallet.address, chain: wallet.chain });
+                    setPanel("add");
+                  }}
+                >
+                  编辑
+                </button>
+                <button type="button" className="btn-mini danger" onClick={() => removeWallet(wallet)}>
+                  删除
+                </button>
+              </div>
             </div>
-            <div>
-              <span
-                className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold text-white ${
-                  w.chain === "EVM" ? "bg-sky-400" : "bg-violet-400"
-                }`}
-              >
-                {w.chain}
-              </span>
-            </div>
-            <div className="text-right">
-              <div className="font-semibold tabular-nums">{usd(w.balanceUsd)}</div>
-              <div className="text-[11px] text-gray-400">{statusText(w)}</div>
-            </div>
-            <div className="text-right">
-              <a
-                href={`https://debank.com/profile/${w.address}`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs text-blue-500 hover:underline"
-              >
-                打开
-              </a>
-            </div>
-            <div className="text-right space-x-2">
-              <button onClick={() => startEdit(w)} className="text-xs text-gray-500 hover:underline">
-                编辑
-              </button>
-              <button onClick={() => removeWallet(w.id)} className="text-xs text-red-500 hover:underline">
-                删
-              </button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
         {!filtered.length && (
-          <div className="px-4 py-8 text-sm text-gray-400 text-center">无匹配钱包</div>
+          <div className="trow" style={{ gridTemplateColumns: "1fr" }}>
+            <div className="empty">没有匹配的地址</div>
+          </div>
         )}
       </div>
-
-      <div className="text-xs text-gray-400 mt-3 leading-relaxed">
-        {filtered.length} / 50 已显示 · 链上数据来自 DeBank（并发 3 · 重试 2 · 失败不归零）
+      <div className="table-foot">
+        <span>
+          显示 {filtered.length} / {wallets.length} 个地址 · 上限 50
+        </span>
+        <span>链上数据来自 DeBank（并发 4 · 错峰 320ms · 失败不归零）</span>
       </div>
     </section>
   );

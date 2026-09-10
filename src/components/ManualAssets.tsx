@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import type { ManualAsset } from "@/lib/types";
-import { usd } from "./format";
+import { timeAgo, usd } from "./format";
 
+/** 手动资产：直接可编辑，改动即时并入总额、CNY 与历史快照。 */
 export function ManualAssets({
   items,
   onChange,
@@ -12,7 +13,7 @@ export function ManualAssets({
   onChange: (manual: ManualAsset[]) => void;
 }) {
   const [saving, setSaving] = useState(false);
-  const total = items.reduce((a, m) => a + (Number(m.amountUsd) || 0), 0);
+  const total = items.reduce((sum, item) => sum + (Number(item.amountUsd) || 0), 0);
 
   async function save(item: ManualAsset) {
     setSaving(true);
@@ -30,6 +31,7 @@ export function ManualAssets({
   }
 
   async function remove(id: string) {
+    if (!confirm("确认删除这条手动资产？删除后立即重新计算总额。")) return;
     setSaving(true);
     try {
       const res = await fetch(`/api/manual?id=${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -40,115 +42,76 @@ export function ManualAssets({
     }
   }
 
-  async function add() {
-    const item: ManualAsset = {
+  function add() {
+    void save({
       id: `m_${Date.now()}`,
       name: "新资产",
       amountUsd: 0,
       updatedAt: new Date().toISOString(),
-    };
-    await save(item);
+    });
   }
 
   function patchLocal(id: string, patch: Partial<ManualAsset>) {
-    onChange(items.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+    onChange(items.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }
 
   return (
-    <section className="card p-4 sm:p-5 md:p-6">
-      <div className="flex flex-col sm:flex-row sm:flex-wrap items-start justify-between gap-3 mb-4">
-        <div className="min-w-0">
-          <div className="section-kicker">Manual</div>
-          <h2 className="text-base sm:text-lg font-semibold mt-0.5">手动资产</h2>
-          <p className="text-sm text-gray-400 mt-1 leading-relaxed">
-            记录不方便接入 API 或钱包地址的小额资产，自动计入总余额。
-          </p>
+    <section className="section" id="manual">
+      <div className="section-head">
+        <div className="section-title">
+          <h2>手动资产</h2>
+          <span className="hint">不方便接 API 的小额账户，自动计入总额</span>
         </div>
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <span className="rounded-full bg-orange-100 text-orange-800 px-3 py-1.5 text-sm font-semibold tabular-nums">
-            {usd(total)}
-          </span>
-          <button onClick={add} className="btn-soft flex-1 sm:flex-none !min-h-[40px]">
-            + 继续添加
+        <div className="inline">
+          <span className="section-total num">{usd(total)}</span>
+          <button type="button" className="btn btn-accent" onClick={add} disabled={saving}>
+            + 添加
           </button>
         </div>
       </div>
 
-      {/* Mobile: stacked cards */}
-      <div className="space-y-2.5 sm:hidden">
-        {items.map((m) => (
-          <div key={m.id} className="rounded-xl border border-gray-100 p-3 space-y-2.5">
-            <div>
-              <div className="text-[11px] text-gray-400 mb-1">用途</div>
-              <input
-                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm"
-                value={m.name}
-                onChange={(e) => patchLocal(m.id, { name: e.target.value })}
-                onBlur={() => save({ ...m, updatedAt: new Date().toISOString() })}
-              />
-            </div>
-            <div>
-              <div className="text-[11px] text-gray-400 mb-1">金额 (U / USD)</div>
-              <input
-                type="number"
-                inputMode="decimal"
-                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm tabular-nums"
-                value={m.amountUsd}
-                onChange={(e) => patchLocal(m.id, { amountUsd: Number(e.target.value) })}
-                onBlur={() => save({ ...m, updatedAt: new Date().toISOString() })}
-              />
-            </div>
-            <button
-              onClick={() => remove(m.id)}
-              className="w-full rounded-xl border border-red-100 text-red-500 text-sm py-2.5 min-h-[40px] hover:bg-red-50"
-            >
-              删除
-            </button>
-          </div>
-        ))}
-        {!items.length && (
-          <div className="text-sm text-gray-400 text-center py-6 border border-dashed border-gray-200 rounded-xl">
-            暂无手动资产
-          </div>
-        )}
-      </div>
-
-      {/* Desktop / tablet table */}
-      <div className="hidden sm:block rounded-xl border border-gray-100 overflow-hidden">
-        <div className="grid grid-cols-[1fr_140px_72px] gap-2 px-4 py-2 text-xs text-gray-400 bg-gray-50">
+      <div className="table">
+        <div className="thead grid-manual">
           <div>用途</div>
-          <div className="text-right">金额 (U / USD)</div>
-          <div className="text-right">操作</div>
+          <div className="right">金额（U）</div>
+          <div className="right">操作</div>
         </div>
-        {items.map((m) => (
-          <div
-            key={m.id}
-            className="grid grid-cols-[1fr_140px_72px] gap-2 px-4 py-2.5 border-t border-gray-50 items-center"
-          >
+        {items.map((item) => (
+          <div className="trow grid-manual" key={item.id}>
             <input
-              className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
-              value={m.name}
-              onChange={(e) => patchLocal(m.id, { name: e.target.value })}
-              onBlur={() => save({ ...m, updatedAt: new Date().toISOString() })}
+              className="field"
+              aria-label="用途"
+              value={item.name}
+              onChange={(event) => patchLocal(item.id, { name: event.target.value })}
+              onBlur={() => save({ ...item, updatedAt: new Date().toISOString() })}
             />
             <input
+              className="field num"
+              style={{ textAlign: "right" }}
               type="number"
-              className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-right tabular-nums"
-              value={m.amountUsd}
-              onChange={(e) => patchLocal(m.id, { amountUsd: Number(e.target.value) })}
-              onBlur={() => save({ ...m, updatedAt: new Date().toISOString() })}
+              inputMode="decimal"
+              aria-label="金额（U / USD）"
+              value={item.amountUsd}
+              onChange={(event) => patchLocal(item.id, { amountUsd: Number(event.target.value) })}
+              onBlur={() => save({ ...item, updatedAt: new Date().toISOString() })}
             />
-            <button onClick={() => remove(m.id)} className="text-sm text-red-500 text-right hover:underline min-h-[36px]">
-              删除
-            </button>
+            <div className="right">
+              <button type="button" className="btn-mini danger" onClick={() => remove(item.id)}>
+                删除
+              </button>
+            </div>
+            <div className="cell-sub" style={{ gridColumn: "1 / -1" }}>
+              更新于 {timeAgo(item.updatedAt)}
+            </div>
           </div>
         ))}
         {!items.length && (
-          <div className="px-4 py-8 text-sm text-gray-400 text-center border-t border-gray-50">暂无手动资产</div>
+          <div className="trow" style={{ gridTemplateColumns: "1fr" }}>
+            <div className="empty">暂无手动资产，点击「+ 添加」记录</div>
+          </div>
         )}
       </div>
-
-      <div className="flex justify-between text-xs text-gray-400 mt-3">
+      <div className="table-foot">
         <span>{saving ? "保存中…" : "修改后自动保存"}</span>
         <span>{items.length} 条记录</span>
       </div>

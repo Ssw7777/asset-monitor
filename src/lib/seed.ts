@@ -67,3 +67,13 @@ export function seedWallets(): Wallet[] {
   }));
   return [...evm, ...abs];
 }
+
+/**
+ * 后续新增、且必须出现在已有地址库里的钱包。
+ * 通过 store 的迁移合并（按地址小写去重）加入，绝不覆盖或清空用户已有地址。
+ */
+export const MIGRATION_WALLETS: Array<{ name: string; address: string; chain: "EVM" | "ABSTRACT" }> = [
+  { name: "币安钱包", address: "0x55Df444C20B0f570F72Ebb766CfC916A84D93368", chain: "EVM" },
+  { name: "Trust 钱包美股活动", address: "0xf48d3f1ad016e3b75f3e8c343074a93f236e6bfa", chain: "EVM" },
+  { name: "Bitget 本机钱包", address: "0x95866FeA70aa403F2D6e22D76a8627CC2368Cd11", chain: "EVM" },
+];

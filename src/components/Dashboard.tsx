@@ -1,10 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
-import type { ExchangeBalance, ManualAsset, SnapshotPoint, Wallet } from "@/lib/types";
-import { PortfolioChart } from "./PortfolioChart";
+import type { ChangeRangeKey, ChangeSummary } from "@/lib/changes";
+import type { FlowRangeKey, FlowSummary } from "@/lib/flows";
+import type {
+  ExchangeBalance,
+  ManualAsset,
+  OnchainBreakdown,
+  SnapshotPoint,
+  Wallet,
+} from "@/lib/types";
+import { ChangeSection } from "./ChangeSection";
+import { ExchangeSection } from "./ExchangeSection";
+import { FlowSection } from "./FlowSection";
 import { ManualAssets } from "./ManualAssets";
+import { PortfolioChart } from "./PortfolioChart";
+import { ProtocolSections } from "./ProtocolSections";
+import { TokenTable } from "./TokenTable";
+import { TokenIcon } from "./TokenIcon";
 import { WalletsTable } from "./WalletsTable";
 import { cny, timeAgo, usd } from "./format";
 
@@ -25,29 +40,47 @@ interface PortfolioPayload {
   lastRefresh: string | null;
   usdCnyRate: number;
   totals: Totals;
-  serverConnected?: boolean;
-  hasEncryptedSecrets?: boolean;
-  encryptionReady?: boolean;
+  onchainBreakdown?: OnchainBreakdown | null;
+  snapshotCount?: number;
+  snapshotLimit?: number;
+  refreshStatus?: "ok" | "failed";
 }
 
-const EX_LABEL: Record<string, string> = { okx: "OKX", binance: "Binance", gate: "Gate" };
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
 const BACKOFF_BASE_MS = 30_000;
 const BACKOFF_MAX_MS = 10 * 60 * 1000;
 
-function formatClock(iso: string | null) {
-  if (!iso) return "—";
-  try {
-    return new Date(iso).toLocaleString("zh-CN", {
-      month: "numeric",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-  } catch {
-    return "—";
-  }
+/** DeBank 链色，用于链卡片左侧色条；没有映射的链回退为中性色。 */
+const CHAIN_COLOR: Record<string, string> = {
+  eth: "#627eea",
+  bsc: "#f0b90b",
+  xlayer: "#1a1a1a",
+  abs: "#63d2ff",
+  base: "#0052ff",
+  arb: "#28a0f0",
+  op: "#ff0420",
+  matic: "#8247e5",
+  hood: "#00c087",
+  monad: "#836ef9",
+  avax: "#e84142",
+  zora: "#5b5bd6",
+  scrl: "#ffd54f",
+  linea: "#61dfff",
+  bera: "#b76a1a",
+  plasma: "#1a1a1a",
+  solana: "#9945ff",
+};
+
+function ChainIcon({ chain }: { chain: OnchainBreakdown["chains"][number] }) {
+  return (
+    <TokenIcon
+      symbol={chain.name || chain.id}
+      localSrc={`/icons/chains/${chain.id}.png`}
+      logoUrl={chain.logoUrl}
+      size={26}
+      shape="square"
+    />
+  );
 }
 
 export function Dashboard() {
@@ -58,18 +91,28 @@ export function Dashboard() {
   const [error, setError] = useState("");
   const [rateDraft, setRateDraft] = useState("");
   const [rateSaving, setRateSaving] = useState(false);
-  const [lastUpdateAt, setLastUpdateAt] = useState<string | null>(null);
-  const [autoHint, setAutoHint] = useState("每 5 分钟自动刷新");
+  const [range, setRange] = useState<ChangeRangeKey>("24h");
+  const [changes, setChanges] = useState<ChangeSummary | null>(null);
+  const [changesLoading, setChangesLoading] = useState(false);
+  const [chainFilter, setChainFilter] = useState("all");
+  const [allChainsShown, setAllChainsShown] = useState(false);
+  const [exporting, setExporting] = useState("");
+  const [flows, setFlows] = useState<FlowSummary | null>(null);
+  const [flowsLoading, setFlowsLoading] = useState(false);
+  const [flowRange, setFlowRange] = useState<FlowRangeKey>("24h");
+  const [flowMin, setFlowMin] = useState(100);
 
   const refreshingRef = useRef(false);
   const failStreakRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  const rangeRef = useRef<ChangeRangeKey>("24h");
+  const flowRangeRef = useRef<FlowRangeKey>("24h");
+  const flowMinRef = useRef(100);
 
   const applyPayload = useCallback((json: PortfolioPayload) => {
     setData(json);
     if (json.usdCnyRate != null) setRateDraft(String(json.usdCnyRate));
-    setLastUpdateAt(json.lastRefresh || new Date().toISOString());
     setError("");
   }, []);
 
@@ -80,14 +123,57 @@ export function Dashboard() {
         router.replace("/login");
         return;
       }
-      const json = await res.json();
-      applyPayload(json);
+      applyPayload(await res.json());
     } catch {
       setError("加载失败");
     } finally {
       setLoading(false);
     }
   }, [router, applyPayload]);
+
+  const loadChanges = useCallback(
+    async (nextRange: ChangeRangeKey) => {
+      setChangesLoading(true);
+      try {
+        const res = await fetch(`/api/changes?range=${nextRange}`);
+        if (res.status === 401) {
+          router.replace("/login");
+          return;
+        }
+        if (res.ok) {
+          const json = (await res.json()) as ChangeSummary;
+          if (mountedRef.current) setChanges(json);
+        }
+      } catch {
+        /* 保留上一次结果，不显示伪造的 0 */
+      } finally {
+        if (mountedRef.current) setChangesLoading(false);
+      }
+    },
+    [router]
+  );
+
+  const loadFlows = useCallback(
+    async (nextRange: FlowRangeKey, nextMin: number) => {
+      setFlowsLoading(true);
+      try {
+        const res = await fetch(`/api/flows?range=${nextRange}&min=${nextMin}`);
+        if (res.status === 401) {
+          router.replace("/login");
+          return;
+        }
+        if (res.ok) {
+          const json = (await res.json()) as FlowSummary;
+          if (mountedRef.current) setFlows(json);
+        }
+      } catch {
+        /* 保留上一次结果 */
+      } finally {
+        if (mountedRef.current) setFlowsLoading(false);
+      }
+    },
+    [router]
+  );
 
   const quietRefresh = useCallback(
     async (manual = false) => {
@@ -101,32 +187,41 @@ export function Dashboard() {
           return;
         }
         if (!res.ok) throw new Error("refresh_failed");
-        const json = await res.json();
+        const json = (await res.json()) as PortfolioPayload;
         if (!mountedRef.current) return;
         applyPayload(json);
         failStreakRef.current = 0;
-        setAutoHint(manual ? "已手动刷新" : "自动刷新成功");
+        void loadChanges(rangeRef.current);
+        void loadFlows(flowRangeRef.current, flowMinRef.current);
       } catch {
         if (!mountedRef.current) return;
         failStreakRef.current += 1;
-        if (manual) setError("刷新失败");
-        else setAutoHint("自动刷新失败，稍后重试");
+        if (manual) setError("刷新失败，界面保留上次成功数据");
       } finally {
         refreshingRef.current = false;
         if (manual) setRefreshing(false);
       }
     },
-    [router, applyPayload]
+    [router, applyPayload, loadChanges, loadFlows]
   );
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
-  // Frontend-only auto refresh every 5 minutes with exponential backoff on errors
+  useEffect(() => {
+    rangeRef.current = range;
+    void loadChanges(range);
+  }, [range, loadChanges]);
+
+  useEffect(() => {
+    flowRangeRef.current = flowRange;
+    flowMinRef.current = flowMin;
+    void loadFlows(flowRange, flowMin);
+  }, [flowRange, flowMin, loadFlows]);
+
   useEffect(() => {
     mountedRef.current = true;
-
     const schedule = () => {
       if (timerRef.current) clearTimeout(timerRef.current);
       const streak = failStreakRef.current;
@@ -139,18 +234,12 @@ export function Dashboard() {
         if (mountedRef.current) schedule();
       }, delay);
     };
-
     schedule();
-
     return () => {
       mountedRef.current = false;
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, [quietRefresh]);
-
-  async function refreshAll() {
-    await quietRefresh(true);
-  }
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -158,8 +247,7 @@ export function Dashboard() {
   }
 
   async function saveRate(value?: string) {
-    const raw = value ?? rateDraft;
-    const rateNum = Number(raw);
+    const rateNum = Number(value ?? rateDraft);
     if (!Number.isFinite(rateNum) || rateNum <= 0) return;
     setRateSaving(true);
     try {
@@ -170,7 +258,7 @@ export function Dashboard() {
       });
       const json = await res.json();
       if (res.ok) {
-        setData((d) => (d ? { ...d, usdCnyRate: json.usdCnyRate } : d));
+        setData((prev) => (prev ? { ...prev, usdCnyRate: json.usdCnyRate } : prev));
         setRateDraft(String(json.usdCnyRate));
       }
     } finally {
@@ -178,210 +266,341 @@ export function Dashboard() {
     }
   }
 
+  async function exportCsv(type: "wallets" | "dapps") {
+    setExporting(type);
+    try {
+      const res = await fetch(`/api/export?type=${type}`);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `0xstudy-${type}-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting("");
+    }
+  }
+
+  const breakdown = data?.onchainBreakdown ?? null;
+  const chains = useMemo(() => breakdown?.chains ?? [], [breakdown]);
+
   if (loading || !data) {
     return (
-      <main className="min-h-screen flex items-center justify-center text-gray-400 px-4">
-        {error || "加载中…"}
+      <main className="page">
+        <div className="container" style={{ paddingTop: 80 }}>
+          <div className="skeleton" style={{ height: 40, width: 260 }} />
+          <div className="skeleton" style={{ height: 160, marginTop: 20 }} />
+          <div className="skeleton" style={{ height: 220, marginTop: 20 }} />
+          <div className="muted" style={{ marginTop: 16 }}>
+            {error || "加载中…"}
+          </div>
+        </div>
       </main>
     );
   }
 
   const { totals, exchanges, wallets, manual, snapshots, usdCnyRate, lastRefresh } = data;
   const rate = usdCnyRate || 6.66;
-  const shownUpdate = lastUpdateAt || lastRefresh;
+  const partial = breakdown?.partial === true;
+  const dapps = breakdown?.dapps ?? [];
+  const onchainUsd = totals.onchainUsd || chains.reduce((sum, chain) => sum + chain.valueUsd, 0);
 
   return (
-    <main className="min-h-screen pb-20 overflow-x-hidden">
-      <header className="sticky top-0 z-20 bg-[#f5f6f8]/90 backdrop-blur border-b border-gray-100/80">
-        <div className="page-shell py-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <img
-              src="/avatar.jpg"
-              alt="0xStudy"
-              className="w-9 h-9 shrink-0 rounded-full object-cover ring-1 ring-black/5"
-            />
-            <div className="min-w-0">
-              <div className="font-semibold text-[15px] sm:text-base truncate">0xStudy Checker</div>
-              <div className="text-[11px] sm:text-xs text-gray-400 flex items-center gap-1.5 truncate">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block shrink-0" />
-                <span className="truncate">
-                  服务器已连接
-                  {shownUpdate ? ` · 更新于 ${timeAgo(shownUpdate)}` : " · 使用基线数据"}
-                </span>
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button onClick={logout} className="btn-ghost !min-h-[40px] !px-3 hidden xs:inline-flex sm:inline-flex">
-              退出
-            </button>
-            <button onClick={logout} className="btn-ghost !min-h-[40px] !px-2.5 sm:hidden text-xs">
-              退出
-            </button>
-            <button onClick={refreshAll} disabled={refreshing} className="btn-primary !min-h-[40px]">
+    <main className="page">
+      <header className="topbar">
+        <div className="container topbar-inner">
+          <a className="brand" href="#top">
+            <Image src="/avatar.jpg" alt="0xStudy" width={26} height={26} className="brand-mark" />
+            <span className="brand-name">0xStudy Checker</span>
+          </a>
+          <nav className="topnav">
+            <a href="#trend" className="active">
+              总览
+            </a>
+            <a href="#tokens">代币</a>
+            <a href="#flows">流水</a>
+            <a href="#defi">DeFi</a>
+            <a href="#exchanges">交易所</a>
+            <a href="#changes">变动</a>
+            <a href="#addresses">地址</a>
+          </nav>
+          <div className="topbar-actions">
+            <span className="small">更新于 {timeAgo(lastRefresh)}</span>
+            <button type="button" className="btn btn-accent" onClick={() => quietRefresh(true)} disabled={refreshing}>
               {refreshing ? "刷新中…" : "刷新全部"}
+            </button>
+            <button type="button" className="btn btn-outline" onClick={logout}>
+              退出
             </button>
           </div>
         </div>
       </header>
 
-      <div className="page-shell mt-4 sm:mt-6 space-y-4 sm:space-y-5">
-        {error && <div className="text-sm text-red-500 px-0.5">{error}</div>}
-
-        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] sm:text-xs text-gray-400 px-0.5">
-          <span>
-            上次更新：{formatClock(shownUpdate)}
-            {shownUpdate ? `（${timeAgo(shownUpdate)}）` : ""}
-          </span>
-          <span className="text-gray-400/90">{autoHint} · 不阻塞界面</span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
-          <section className="card p-4 sm:p-5 md:col-span-1">
-            <div className="text-sm text-gray-500 mb-1.5">资产总览</div>
-            <div className="stat-value">{usd(totals.totalUsd)}</div>
-            <div className="text-gray-400 mt-1 text-sm">{cny(totals.totalUsd * rate)}</div>
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-gray-500">
-              <span>汇率</span>
+      <div className="container" id="top">
+        <section className="profile">
+          <div className="profile-left">
+            <Image src="/avatar.jpg" alt="0xStudy" width={68} height={68} className="avatar" />
+            <div>
+              <div className="profile-name">多钱包总览</div>
+            </div>
+          </div>
+          <div className="profile-right">
+            <div className="networth-value num">{usd(totals.totalUsd)}</div>
+            <div className="networth-cny num">{cny(totals.totalUsd * rate)}</div>
+            <div className="networth-rate">
+              <label htmlFor="usd-cny-rate">USD/CNY</label>
               <input
+                id="usd-cny-rate"
                 type="number"
                 step="0.01"
                 inputMode="decimal"
                 value={rateDraft}
-                onChange={(e) => setRateDraft(e.target.value)}
+                onChange={(event) => setRateDraft(event.target.value)}
                 onBlur={() => saveRate()}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") e.currentTarget.blur();
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
                 }}
-                className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 bg-gray-50 text-sm"
               />
-              <span className="text-xs text-gray-400">{rateSaving ? "保存中…" : "自动保存"}</span>
+              <span>{rateSaving ? "保存中…" : "自动保存"}</span>
             </div>
-            <div className="mt-3 text-xs text-gray-400 leading-relaxed">
-              手动 {usd(totals.manualUsd)} · 链上{" "}
-              {wallets.filter((w) => w.status !== "error").length}/{wallets.length}
-            </div>
-          </section>
-
-          <section className="card p-4 sm:p-5">
-            <div className="flex items-center justify-between mb-1.5 gap-2">
-              <div className="text-sm text-gray-500">链上资产</div>
-              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-sky-50 text-sky-600 shrink-0">
-                EVM/ABSTRACT
-              </span>
-            </div>
-            <div className="stat-value">{usd(totals.onchainUsd)}</div>
-            <div className="mt-3 sm:mt-4 flex justify-between gap-3 text-sm text-gray-500">
-              <span>EVM {usd(totals.evmUsd)}</span>
-              <span>Abstract {usd(totals.abstractUsd)}</span>
-            </div>
-          </section>
-
-          <section className="card p-4 sm:p-5">
-            <div className="text-sm text-gray-500 mb-1.5">交易所资产</div>
-            <div className="stat-value">{usd(totals.cexUsd)}</div>
-            <div className="mt-3 sm:mt-4 text-sm text-gray-500 leading-relaxed">
-              {exchanges.filter((e) => e.status === "ok").length} / {exchanges.length} 实时 · 其余保留上次/基线
-              {data.hasEncryptedSecrets ? " · 已存加密密钥" : ""}
-            </div>
-          </section>
-        </div>
-
-        <PortfolioChart snapshots={snapshots} usdCnyRate={rate} />
-
-        <section className="card p-4 sm:p-5 md:p-6">
-          <div className="mb-3 sm:mb-4">
-            <div className="section-kicker">Exchanges</div>
-            <h2 className="text-base sm:text-lg font-semibold mt-0.5">交易所资产</h2>
-            <p className="text-sm text-gray-400 mt-1 leading-relaxed">
-              OKX / Binance / Gate · 密钥仅服务端，只读余额
-            </p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {exchanges.map((ex) => (
-              <div key={ex.exchange} className="rounded-xl border border-gray-100 p-3.5 sm:p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="font-medium">{EX_LABEL[ex.exchange] || ex.exchange}</div>
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      ex.status === "ok"
-                        ? "bg-emerald-500"
-                        : ex.status === "baseline"
-                          ? "bg-emerald-500"
-                          : ex.status === "error" || ex.status === "missing_passphrase"
-                            ? "bg-red-400"
-                            : "bg-amber-400"
-                    }`}
-                  />
-                </div>
-                <div className="text-xl sm:text-2xl font-semibold tabular-nums">{usd(ex.balanceUsd)}</div>
-                <div className="text-xs text-gray-400 mt-2 leading-relaxed break-words">
-                  {ex.status === "missing_passphrase"
-                    ? `缺少 passphrase · ${ex.error || "请配置 OKX_API_PASSPHRASE"}`
-                    : ex.status === "missing_keys"
-                      ? `未配置 API · ${ex.error || "显示上次/基线余额"}`
-                      : ex.status === "error"
-                        ? `错误，保留上次 · ${ex.error || ""}`
-                        : ex.status === "baseline"
-                          ? `基线数据 · ${timeAgo(ex.lastUpdated)}`
-                          : `最新数据 · ${timeAgo(ex.lastUpdated)}`}
-                </div>
-              </div>
-            ))}
           </div>
         </section>
 
+        <div className="stats">
+          <div>
+            <div className="stat-label">链上资产</div>
+            <div className="stat-value num">{usd(totals.onchainUsd)}</div>
+          </div>
+          <div>
+            <div className="stat-label">交易所资产</div>
+            <div className="stat-value num">{usd(totals.cexUsd)}</div>
+          </div>
+          <div>
+            <div className="stat-label">手动资产</div>
+            <div className="stat-value num">{usd(totals.manualUsd)}</div>
+          </div>
+          <div>
+            <div className="stat-label">DApp 协议</div>
+            <div className="stat-value num">{dapps.length}</div>
+          </div>
+          <div>
+            <div className="stat-label">地址上限</div>
+            <div className="stat-value num">
+              {wallets.length}/50
+            </div>
+          </div>
+        </div>
+
+        {error && (
+          <div className="notice warn" style={{ marginTop: 18 }}>
+            {error}
+          </div>
+        )}
+
+        {(error || data.refreshStatus === "failed") && (
+          <div className="notice warn" style={{ marginTop: 18 }}>
+            数据获取失败
+          </div>
+        )}
+
+        {!error && data.refreshStatus !== "failed" && (
+          <div className="notice" style={{ marginTop: 18 }}>
+            数据刷新成功
+          </div>
+        )}
+
+        <PortfolioChart
+          snapshots={snapshots}
+          usdCnyRate={rate}
+          range={range}
+          summary={changes}
+          onRangeChange={setRange}
+        />
+
+        <section className="section" id="chains">
+          <div className="section-head">
+            <div className="section-title">
+              <h2>链上分布</h2>
+              <span className="hint">
+                {chains.length} 条链 · 点击链卡片可筛选下方代币
+              </span>
+            </div>
+            <span className="section-total num">{usd(onchainUsd)}</span>
+          </div>
+          {chains.length ? (
+            <div className="chain-strip">
+              <button
+                type="button"
+                className={`chain-card${chainFilter === "all" ? " active" : ""}`}
+                style={{ ["--chain-color" as string]: "#b3bcd2" }}
+                onClick={() => setChainFilter("all")}
+              >
+                <span className="icon-fallback">ALL</span>
+                <span style={{ minWidth: 0, flex: 1 }}>
+                  <span className="name" style={{ display: "block" }}>
+                    全部链
+                  </span>
+                  <span className="value num" style={{ display: "block" }}>
+                    {usd(onchainUsd)}
+                  </span>
+                </span>
+              </button>
+              {(allChainsShown ? chains : chains.slice(0, 8)).map((chain) => (
+                <button
+                  key={chain.id}
+                  type="button"
+                  className={`chain-card${chainFilter === chain.id ? " active" : ""}`}
+                  style={{ ["--chain-color" as string]: CHAIN_COLOR[chain.id] || "#b3bcd2" }}
+                  onClick={() => setChainFilter(chainFilter === chain.id ? "all" : chain.id)}
+                >
+                  <ChainIcon chain={chain} />
+                  <span style={{ minWidth: 0, flex: 1 }}>
+                    <span className="name" style={{ display: "block" }}>
+                      {chain.name}
+                    </span>
+                    <span className="value num" style={{ display: "block" }}>
+                      {usd(chain.valueUsd)}
+                    </span>
+                  </span>
+                  <span className="pct num">
+                    {onchainUsd > 0 ? `${((chain.valueUsd / onchainUsd) * 100).toFixed(1)}%` : "—"}
+                  </span>
+                </button>
+              ))}
+              {chains.length > 8 && (
+                <button
+                  type="button"
+                  className="chain-card"
+                  style={{ ["--chain-color" as string]: "transparent", justifyContent: "center" }}
+                  onClick={() => setAllChainsShown((value) => !value)}
+                >
+                  <span className="name" style={{ color: "var(--ink-2)" }}>
+                    {allChainsShown ? "收起链列表" : `展开全部 ${chains.length} 条链`}
+                  </span>
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="empty">还没有链上明细：点击右上角刷新获取</div>
+          )}
+        </section>
+
+        <TokenTable
+          tokens={breakdown?.tokens ?? []}
+          onchainUsd={onchainUsd}
+          chainFilter={chainFilter}
+          partial={partial}
+          tokenSource={breakdown?.tokenSource}
+        />
+
+        <FlowSection
+          summary={flows}
+          loading={flowsLoading}
+          range={flowRange}
+          minUsd={flowMin}
+          onRangeChange={setFlowRange}
+          onMinChange={setFlowMin}
+        />
+
+        <ProtocolSections dapps={dapps} />
+
+        <ExchangeSection exchanges={exchanges} totalUsd={totals.cexUsd} />
+
         <ManualAssets
           items={manual}
-          onChange={(m) =>
-            setData((d) =>
-              d
+          onChange={(next) =>
+            setData((prev) =>
+              prev
                 ? {
-                    ...d,
-                    manual: m,
+                    ...prev,
+                    manual: next,
                     totals: {
-                      ...d.totals,
-                      manualUsd: m.reduce((a, x) => a + x.amountUsd, 0),
+                      ...prev.totals,
+                      manualUsd: next.reduce((sum, item) => sum + item.amountUsd, 0),
                       totalUsd:
-                        m.reduce((a, x) => a + x.amountUsd, 0) + d.totals.onchainUsd + d.totals.cexUsd,
+                        next.reduce((sum, item) => sum + item.amountUsd, 0) +
+                        prev.totals.onchainUsd +
+                        prev.totals.cexUsd,
                     },
                   }
-                : d
+                : prev
             )
           }
         />
 
+        <ChangeSection
+          range={range}
+          summary={changes}
+          loading={changesLoading}
+          onRangeChange={setRange}
+        />
+
         <WalletsTable
           wallets={wallets}
-          onChange={(w) =>
-            setData((d) => {
-              if (!d) return d;
-              const onchainUsd = Math.round(w.reduce((a, x) => a + x.balanceUsd, 0) * 100) / 100;
-              const evmUsd =
-                Math.round(w.filter((x) => x.chain === "EVM").reduce((a, x) => a + x.balanceUsd, 0) * 100) /
-                100;
-              const abstractUsd =
-                Math.round(
-                  w.filter((x) => x.chain === "ABSTRACT").reduce((a, x) => a + x.balanceUsd, 0) * 100
-                ) / 100;
+          onChange={(next) =>
+            setData((prev) => {
+              if (!prev) return prev;
+              const round2 = (value: number) => Math.round(value * 100) / 100;
+              const onchain = round2(next.reduce((sum, wallet) => sum + wallet.balanceUsd, 0));
               return {
-                ...d,
-                wallets: w,
+                ...prev,
+                wallets: next,
                 totals: {
-                  ...d.totals,
-                  onchainUsd,
-                  evmUsd,
-                  abstractUsd,
-                  totalUsd: Math.round((d.totals.manualUsd + onchainUsd + d.totals.cexUsd) * 100) / 100,
+                  ...prev.totals,
+                  onchainUsd: onchain,
+                  evmUsd: round2(
+                    next.filter((wallet) => wallet.chain === "EVM").reduce((sum, wallet) => sum + wallet.balanceUsd, 0)
+                  ),
+                  abstractUsd: round2(
+                    next
+                      .filter((wallet) => wallet.chain === "ABSTRACT")
+                      .reduce((sum, wallet) => sum + wallet.balanceUsd, 0)
+                  ),
+                  totalUsd: round2(prev.totals.manualUsd + onchain + prev.totals.cexUsd),
                 },
               };
             })
           }
         />
 
-        <footer className="text-xs text-gray-400 flex flex-col sm:flex-row sm:flex-wrap justify-between gap-1.5 pt-1 pb-2">
+        <section className="section" id="export">
+          <div className="section-head">
+            <div className="section-title">
+              <h2>导出</h2>
+              <span className="hint">导出当前展示的数据，不含任何密钥、密码或会话信息</span>
+            </div>
+            <div className="inline">
+              <button
+                type="button"
+                className="btn btn-outline"
+                disabled={exporting !== ""}
+                onClick={() => exportCsv("wallets")}
+              >
+                {exporting === "wallets" ? "导出中…" : "钱包 CSV"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-outline"
+                disabled={exporting !== ""}
+                onClick={() => exportCsv("dapps")}
+              >
+                {exporting === "dapps" ? "导出中…" : "DApp 明细 CSV"}
+              </button>
+            </div>
+          </div>
+          <div className="notice">
+            DApp 明细单独一个文件，避免与钱包余额相加造成重复统计；历史快照
+            {data.snapshotCount ?? snapshots.length}/700 条。
+          </div>
+        </section>
+
+        <footer className="table-foot" style={{ paddingLeft: 0, paddingRight: 0 }}>
           <span>链上：DeBank（服务端缓存）· 交易所：官方只读 API</span>
-          <span>密钥不下发浏览器 · 可选 AES-256-GCM 加密入库</span>
+          <span>密钥不下发浏览器 · 失败保留上次成功数据，绝不归零</span>
         </footer>
       </div>
     </main>

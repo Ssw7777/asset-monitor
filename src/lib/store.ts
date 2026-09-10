@@ -4,16 +4,21 @@ import type {
   EncryptedSecretsBlob,
   ExchangeBalance,
   ManualAsset,
+  OnchainBreakdown,
   PortfolioState,
   SnapshotPoint,
+  WalletTokenCacheEntry,
   Wallet,
 } from "./types";
-import { BASELINE, SEED_MANUAL, seedWallets } from "./seed";
+import { BASELINE, MIGRATION_WALLETS, SEED_MANUAL, seedWallets } from "./seed";
+import { WALLET_LIMIT, normalizeAddress } from "./wallets";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const LOCAL_STORE = path.join(DATA_DIR, "store.json");
 const TMP_STORE = "/tmp/asset-monitor-store.json";
 const TURSO_ROW_KEY = "portfolio";
+/** 5 分钟一张快照 × 2016 ≈ 7 天历史，够 7 天曲线和大额流水回溯。 */
+export const SNAPSHOT_LIMIT = 2016;
 
 type GlobalCache = { __amStore?: PortfolioState; __amStoreLock?: Promise<void> };
 const g = globalThis as unknown as GlobalCache;
@@ -53,6 +58,7 @@ function seedSnapshots(): SnapshotPoint[] {
       cex: BASELINE.cexUsd,
       manual: BASELINE.manualUsd,
       exchanges: { okx: BASELINE.okx, binance: BASELINE.binance, gate: BASELINE.gate },
+      seeded: true,
     });
   }
   points[points.length - 1].totalUsd = base;
@@ -63,27 +69,120 @@ export function defaultState(): PortfolioState {
   const rate = Number(process.env.USD_CNY_RATE || "6.66") || 6.66;
   return {
     manual: SEED_MANUAL.map((m) => ({ ...m })),
-    wallets: seedWallets(),
+    wallets: applyWalletMigrations(seedWallets()),
     exchanges: defaultExchanges(),
     snapshots: seedSnapshots(),
     onchainCacheUsd: BASELINE.onchainUsd,
     lastRefresh: null,
     usdCnyRate: rate,
+    onchainBreakdown: null,
     encryptedSecrets: null,
+  };
+}
+
+/**
+ * 把后续新增的地址合并进已有地址库。
+ * 规则：按地址（忽略大小写）去重；绝不删除、绝不覆盖用户已有条目；最多 50 条。
+ */
+export function applyWalletMigrations(wallets: Wallet[]): Wallet[] {
+  const out = [...wallets];
+  const seen = new Set(out.map((wallet) => normalizeAddress(String(wallet.address || ""))));
+  const now = new Date().toISOString();
+  for (const entry of MIGRATION_WALLETS) {
+    const key = normalizeAddress(entry.address);
+    if (seen.has(key)) continue;
+    if (out.length >= WALLET_LIMIT) break;
+    seen.add(key);
+    out.push({
+      id: `mig_${key.slice(2, 10)}`,
+      name: entry.name,
+      address: entry.address,
+      chain: entry.chain,
+      balanceUsd: 0,
+      lastUpdated: null,
+      status: "baseline",
+      createdAt: now,
+      updatedAt: now,
+      lastSuccess: null,
+    });
+  }
+  return out;
+}
+
+function normalizeSnapshot(raw: unknown): SnapshotPoint | null {
+  if (!raw || typeof raw !== "object") return null;
+  const point = raw as Record<string, unknown>;
+  const ts = typeof point.ts === "string" ? point.ts : null;
+  const totalUsd = Number(point.totalUsd);
+  if (!ts || !Number.isFinite(totalUsd)) return null;
+  const num = (value: unknown) => (Number.isFinite(Number(value)) ? Number(value) : undefined);
+  return {
+    ts,
+    totalUsd,
+    onchain: num(point.onchain),
+    cex: num(point.cex),
+    manual: num(point.manual),
+    exchanges:
+      point.exchanges && typeof point.exchanges === "object"
+        ? (point.exchanges as Record<string, number>)
+        : undefined,
+    wallets:
+      point.wallets && typeof point.wallets === "object"
+        ? (point.wallets as Record<string, number>)
+        : undefined,
+    manualItems:
+      point.manualItems && typeof point.manualItems === "object"
+        ? (point.manualItems as Record<string, number>)
+        : undefined,
+    dapps:
+      point.dapps && typeof point.dapps === "object"
+        ? (point.dapps as Record<string, number>)
+        : undefined,
+    partial: point.partial === true ? true : undefined,
+    seeded: point.seeded === true ? true : undefined,
   };
 }
 
 function normalizeState(raw: Partial<PortfolioState> | null | undefined): PortfolioState {
   const d = defaultState();
   if (!raw || typeof raw !== "object") return d;
+  const storedWallets = Array.isArray(raw.wallets)
+    ? (raw.wallets as Wallet[]).map((wallet) => ({
+        ...wallet,
+        createdAt: wallet?.createdAt ?? null,
+        updatedAt: wallet?.updatedAt ?? wallet?.lastUpdated ?? null,
+        lastSuccess: wallet?.lastSuccess ?? null,
+      }))
+    : d.wallets;
+  const rawSnapshots = Array.isArray(raw.snapshots)
+    ? raw.snapshots.map(normalizeSnapshot).filter((point): point is SnapshotPoint => point !== null)
+    : [];
   return {
     manual: Array.isArray(raw.manual) ? raw.manual : d.manual,
-    wallets: Array.isArray(raw.wallets) ? raw.wallets : d.wallets,
+    // Migration runs on every read: newly required addresses appear without touching existing rows.
+    wallets: applyWalletMigrations(storedWallets),
     exchanges: Array.isArray(raw.exchanges) ? raw.exchanges : d.exchanges,
-    snapshots: Array.isArray(raw.snapshots) ? raw.snapshots : d.snapshots,
+    snapshots: rawSnapshots.length
+      ? rawSnapshots.length > SNAPSHOT_LIMIT
+        ? rawSnapshots.slice(-SNAPSHOT_LIMIT)
+        : rawSnapshots
+      : d.snapshots,
     onchainCacheUsd: Number(raw.onchainCacheUsd) || d.onchainCacheUsd,
     lastRefresh: raw.lastRefresh ?? null,
     usdCnyRate: Number(raw.usdCnyRate) || d.usdCnyRate,
+    onchainBreakdown:
+      raw.onchainBreakdown && Array.isArray(raw.onchainBreakdown.chains) && Array.isArray(raw.onchainBreakdown.dapps)
+        ? {
+            ...raw.onchainBreakdown,
+            // 旧版本快照没有代币聚合：补成空数组，避免前端直接崩掉
+            tokens: Array.isArray(raw.onchainBreakdown.tokens) ? raw.onchainBreakdown.tokens : [],
+            tokensTotalUsd: Number(raw.onchainBreakdown.tokensTotalUsd) || 0,
+          }
+        : null,
+    tokenCache:
+      raw.tokenCache && typeof raw.tokenCache === "object"
+        ? (raw.tokenCache as Record<string, WalletTokenCacheEntry>)
+        : {},
     encryptedSecrets: raw.encryptedSecrets ?? null,
   };
 }
@@ -253,6 +352,13 @@ export async function updateWallets(wallets: Wallet[]) {
   return s;
 }
 
+export async function updateOnchainBreakdown(onchainBreakdown: OnchainBreakdown) {
+  const s = await readStore();
+  s.onchainBreakdown = onchainBreakdown;
+  await writeStore(s);
+  return s;
+}
+
 export async function updateExchanges(exchanges: ExchangeBalance[]) {
   const s = await readStore();
   s.exchanges = exchanges;
@@ -274,6 +380,13 @@ export async function setEncryptedSecrets(blob: EncryptedSecretsBlob | null) {
   return s;
 }
 
+export async function updateTokenCache(cache: Record<string, WalletTokenCacheEntry>) {
+  const s = await readStore();
+  s.tokenCache = cache;
+  await writeStore(s);
+  return s;
+}
+
 export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: string }) {
   const s = await readStore();
   const snap: SnapshotPoint = {
@@ -284,9 +397,12 @@ export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: str
     manual: point.manual,
     exchanges: point.exchanges,
     wallets: point.wallets,
+    manualItems: point.manualItems,
+    dapps: point.dapps,
+    partial: point.partial === true ? true : undefined,
   };
   s.snapshots.push(snap);
-  if (s.snapshots.length > 700) s.snapshots = s.snapshots.slice(-700);
+  if (s.snapshots.length > SNAPSHOT_LIMIT) s.snapshots = s.snapshots.slice(-SNAPSHOT_LIMIT);
   s.lastRefresh = snap.ts;
   await writeStore(s);
   return s;
@@ -311,12 +427,31 @@ export function computeTotals(s: PortfolioState) {
   };
 }
 
-/** Strip secrets before sending state to client */
+/**
+ * Strip secrets before sending state to client.
+ * Snapshot points keep only totals + per-exchange values: the per-wallet / per-DApp
+ * attribution maps stay on the server and are served through `/api/changes`.
+ */
 export function publicState(s: PortfolioState) {
-  const { encryptedSecrets: _omit, ...rest } = s;
-  void _omit;
+  const { encryptedSecrets: _omitSecrets, tokenCache: _omitTokenCache, ...rest } = s;
+  void _omitSecrets;
+  void _omitTokenCache;
+  const snapshots = s.snapshots.map((point) => ({
+    ts: point.ts,
+    totalUsd: point.totalUsd,
+    onchain: point.onchain,
+    cex: point.cex,
+    manual: point.manual,
+    exchanges: point.exchanges,
+    partial: point.partial,
+    seeded: point.seeded,
+  }));
   return {
     ...rest,
+    snapshots,
+    snapshotCount: s.snapshots.length,
+    snapshotLimit: SNAPSHOT_LIMIT,
+    firstSnapshotTs: s.snapshots.length ? s.snapshots[0].ts : null,
     hasEncryptedSecrets: !!s.encryptedSecrets,
     encryptionReady: !!(process.env.ENCRYPTION_KEY && process.env.ENCRYPTION_KEY.trim()),
   };
