@@ -447,21 +447,32 @@ export async function refreshWallets(wallets: Wallet[], tokenStore: TokenCache):
   const now = new Date().toISOString();
   const originalOrder = new Map(wallets.map((wallet, index) => [wallet.id, index]));
   const prioritized = [...wallets].sort((left, right) => right.balanceUsd - left.balanceUsd);
-  let tokenBudget = TOKEN_WALLET_BUDGET;
+  /**
+   * 本轮要补代币明细的地址：优先“从来没取过”的地址（例如余额抓取失败的币安钱包，
+   * 里面的 PONS / stonks 只能靠代币明细补出来），其次按余额从大到小。
+   */
+  const tokenTargets = new Set(
+    [...wallets]
+      .filter((wallet) => tokenCacheStale(wallet.address, tokenStore))
+      .sort((left, right) => {
+        const leftCached = tokenStore[left.address.toLowerCase()] ? 1 : 0;
+        const rightCached = tokenStore[right.address.toLowerCase()] ? 1 : 0;
+        if (leftCached !== rightCached) return leftCached - rightCached;
+        return right.balanceUsd - left.balanceUsd;
+      })
+      .slice(0, TOKEN_WALLET_BUDGET)
+      .map((wallet) => wallet.address.toLowerCase())
+  );
   const refreshed = await mapPool(prioritized, CONCURRENCY, async (wallet) => {
     const previous = wallet.balanceUsd;
     const { usd, status } = await fetchWalletUsd(wallet.address, { force: true });
-    // 不再用“余额必须大于 10 USDT”来筛选地址：余额抓取失败（显示 0）的钱包
-    // 恰恰最需要代币明细来补数据，例如币安钱包里的 PONS / stonks。
-    // 额度靠“每轮 8 个地址 + 单地址 6 小时缓存”控制。
-    const wantsTokenDetail = tokenBudget > 0 && tokenCacheStale(wallet.address, tokenStore);
+    const wantsTokenDetail = tokenTargets.has(wallet.address.toLowerCase());
     if (status === "ok") {
       if (usd >= 0.01) {
         // Same task, right after the total: avoids a second request storm and keeps
         // the total request from eating the rate limit before DApp/token detail loads.
         await fetchComplexProtocols(wallet.address);
         if (wantsTokenDetail) {
-          tokenBudget -= 1;
           await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
         }
       }
@@ -479,7 +490,6 @@ export async function refreshWallets(wallets: Wallet[], tokenStore: TokenCache):
       if (usd >= 0.01) await fetchComplexProtocols(wallet.address);
       // 公共 DeBank 接口失败时，代币明细仍可能从 Zerion 拿到，所以这里也尝试补一次
       if (wantsTokenDetail) {
-        tokenBudget -= 1;
         await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
       }
       return {
