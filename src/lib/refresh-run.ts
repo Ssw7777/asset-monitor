@@ -6,6 +6,7 @@ import {
   publicState,
   pushSnapshot,
   readStore,
+  setLastFullRefresh,
   updateExchanges,
   updateOnchainBreakdown,
   updateTokenCache,
@@ -66,9 +67,16 @@ export interface RefreshResult {
  *   链上 / DApp / 代币沿用上一次结果 —— 这样曲线可以做到分钟级，又不烧 API 额度。
  * - full：交易所 + 链上总额 + DApp + 代币明细，页面上的「刷新全部」和 15 分钟一次的定时任务用这个。
  */
-export async function runRefresh(opts: { fast?: boolean } = {}): Promise<RefreshResult> {
-  const fast = opts.fast === true;
+export async function runRefresh(
+  opts: { fast?: boolean; auto?: boolean; walletBudget?: number } = {}
+): Promise<RefreshResult> {
   const state = await readStore();
+  // auto：距上次全量超过 15 分钟就跑全量，否则只跑快速（交易所 + 快照）
+  const fullIntervalMs = 15 * 60 * 1000;
+  const sinceFull = state.lastFullRefreshAt
+    ? Date.now() - new Date(state.lastFullRefreshAt).getTime()
+    : Number.MAX_SAFE_INTEGER;
+  const fast = opts.fast === true ? true : opts.auto === true ? sinceFull < fullIntervalMs : false;
   const now = new Date().toISOString();
   const blob = state.encryptedSecrets;
 
@@ -94,9 +102,10 @@ export async function runRefresh(opts: { fast?: boolean } = {}): Promise<Refresh
 
   if (!fast) {
     const tokenCache = { ...(state.tokenCache || {}) };
-    const wallets = await refreshWallets(state.wallets, tokenCache);
+    const wallets = await refreshWallets(state.wallets, tokenCache, { budget: opts.walletBudget });
     await updateWallets(wallets);
     await updateTokenCache(tokenCache);
+    await setLastFullRefresh(now);
     partial = wallets.some((wallet) => wallet.status !== "ok");
 
     try {

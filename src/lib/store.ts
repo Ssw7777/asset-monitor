@@ -19,8 +19,8 @@ const TMP_STORE = "/tmp/asset-monitor-store.json";
 const TURSO_ROW_KEY = "portfolio";
 /** 5 分钟一张快照 × 2016 ≈ 7 天历史。 */
 export const SNAPSHOT_LIMIT = 2016;
-/** 只有最近 288 条（5 分钟级 ≈ 24 小时）保留逐钱包 / 逐 DApp 明细，其余只留总额，控制体积。 */
-const SNAPSHOT_DETAIL_KEEP = 288;
+/** 保留全部快照的逐钱包 / 逐 DApp 明细（2016 条 ≈ 7 天），这样 7 天窗口也能按钱包归因。 */
+const SNAPSHOT_DETAIL_KEEP = SNAPSHOT_LIMIT;
 
 function trimSnapshots(list: SnapshotPoint[]): SnapshotPoint[] {
   const sliced = list.length > SNAPSHOT_LIMIT ? list.slice(-SNAPSHOT_LIMIT) : list;
@@ -204,6 +204,7 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
         ? (raw.tokenCache as Record<string, WalletTokenCacheEntry>)
         : {},
     encryptedSecrets: raw.encryptedSecrets ?? null,
+    lastFullRefreshAt: typeof raw.lastFullRefreshAt === "string" ? raw.lastFullRefreshAt : null,
   };
 }
 
@@ -396,6 +397,13 @@ export async function setUsdCnyRate(rate: number) {
 export async function setEncryptedSecrets(blob: EncryptedSecretsBlob | null) {
   const s = await readStore();
   s.encryptedSecrets = blob;
+  await writeStore(s);
+  return s;
+}
+
+export async function setLastFullRefresh(at: string) {
+  const s = await readStore();
+  s.lastFullRefreshAt = at;
   await writeStore(s);
   return s;
 }

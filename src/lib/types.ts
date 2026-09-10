@@ -200,6 +200,8 @@ export interface PortfolioState {
   snapshots: SnapshotPoint[];
   onchainCacheUsd: number;
   lastRefresh: string | null;
+  /** 最近一次「全量刷新」（链上 + DApp + 代币）的时间，用于自动判断该跑 fast 还是 full */
+  lastFullRefreshAt?: string | null;
   usdCnyRate: number;
   onchainBreakdown?: OnchainBreakdown | null;
   /** 逐地址的代币明细缓存（服务端专用，不下发浏览器） */

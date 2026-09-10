@@ -442,17 +442,34 @@ async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: num
   return results;
 }
 
-export async function refreshWallets(wallets: Wallet[], tokenStore: TokenCache): Promise<Wallet[]> {
+export async function refreshWallets(
+  wallets: Wallet[],
+  tokenStore: TokenCache,
+  opts: { budget?: number } = {}
+): Promise<Wallet[]> {
   if (!wallets.length) return [];
   const now = new Date().toISOString();
   const originalOrder = new Map(wallets.map((wallet, index) => [wallet.id, index]));
-  const prioritized = [...wallets].sort((left, right) => right.balanceUsd - left.balanceUsd);
+  /**
+   * 公共接口对同一 IP 限流很凶，一次全量扫 20+ 地址必然大部分失败、数据就一直是旧的。
+   * 所以每轮只刷「最久没成功」的一批（budget），轮着来，保证每个地址都能被更新到。
+   */
+  const staleness = (wallet: Wallet) =>
+    wallet.lastSuccess?.at ? Date.now() - new Date(wallet.lastSuccess.at).getTime() : Number.MAX_SAFE_INTEGER;
+  const ordered = [...wallets].sort((left, right) => {
+    const gap = staleness(right) - staleness(left);
+    if (gap !== 0) return gap;
+    return right.balanceUsd - left.balanceUsd;
+  });
+  const budget = Math.max(1, Math.min(opts.budget ?? wallets.length, wallets.length));
+  const targets = ordered.slice(0, budget);
+  const targetIds = new Set(targets.map((wallet) => wallet.id));
   /**
    * 本轮要补代币明细的地址：优先“从来没取过”的地址（例如余额抓取失败的币安钱包，
    * 里面的 PONS / stonks 只能靠代币明细补出来），其次按余额从大到小。
    */
   const tokenTargets = new Set(
-    [...wallets]
+    [...targets]
       .filter((wallet) => tokenCacheStale(wallet.address, tokenStore))
       .sort((left, right) => {
         const leftCached = tokenStore[left.address.toLowerCase()] ? 1 : 0;
@@ -463,7 +480,7 @@ export async function refreshWallets(wallets: Wallet[], tokenStore: TokenCache):
       .slice(0, TOKEN_WALLET_BUDGET)
       .map((wallet) => wallet.address.toLowerCase())
   );
-  const refreshed = await mapPool(prioritized, CONCURRENCY, async (wallet) => {
+  const refreshed = await mapPool(targets, CONCURRENCY, async (wallet) => {
     const previous = wallet.balanceUsd;
     const { usd, status } = await fetchWalletUsd(wallet.address, { force: true });
     const wantsTokenDetail = tokenTargets.has(wallet.address.toLowerCase());
@@ -507,7 +524,11 @@ export async function refreshWallets(wallets: Wallet[], tokenStore: TokenCache):
       status: previous > 0 ? ("cached" as const) : ("error" as const),
     };
   });
-  return refreshed.sort((left, right) => (originalOrder.get(left.id) ?? 0) - (originalOrder.get(right.id) ?? 0));
+  // 没被选中的地址原样返回（保留上次成功的余额与状态）
+  const untouched = wallets.filter((wallet) => !targetIds.has(wallet.id));
+  return [...refreshed, ...untouched].sort(
+    (left, right) => (originalOrder.get(left.id) ?? 0) - (originalOrder.get(right.id) ?? 0)
+  );
 }
 
 function canonicalDappName(value: string) {

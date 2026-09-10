@@ -23,12 +23,21 @@ async function handle(req: NextRequest) {
     if (denied) return denied;
   }
 
-  // 默认 fast：1 分钟级定时器用这个（只读交易所 + 记快照，几百毫秒完成）
-  const mode = new URL(req.url).searchParams.get("mode") === "full" ? "full" : "fast";
-  const result = await runRefresh({ fast: mode === "fast" });
+  /**
+   * mode=auto（默认）：服务端自己判断 —— 距上次全量超过 15 分钟就跑全量，否则只读交易所 + 记快照。
+   * 定时器只要无脑 5 分钟调一次即可，节奏完全由服务端掌握。
+   */
+  const mode = new URL(req.url).searchParams.get("mode") || "auto";
+  const result =
+    mode === "fast"
+      ? await runRefresh({ fast: true })
+      : mode === "full"
+        ? await runRefresh({ walletBudget: 8 })
+        : await runRefresh({ auto: true, walletBudget: 8 });
   return NextResponse.json({
     ok: true,
     mode,
+    ran: result.payload.refreshMode,
     refreshedAt: new Date().toISOString(),
     walletOk: result.walletOk,
     walletTotal: result.walletTotal,

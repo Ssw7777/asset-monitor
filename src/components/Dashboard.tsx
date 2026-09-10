@@ -5,6 +5,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import type { ChangeRangeKey, ChangeSummary } from "@/lib/changes";
 import type { FlowRangeKey, FlowSummary } from "@/lib/flows";
+import type { ProtocolPerformanceSummary } from "@/lib/protocols";
 import type {
   ExchangeBalance,
   ManualAsset,
@@ -100,6 +101,7 @@ export function Dashboard() {
   const [allChainsShown, setAllChainsShown] = useState(false);
   const [exporting, setExporting] = useState("");
   const [flows, setFlows] = useState<FlowSummary | null>(null);
+  const [protocolPerf, setProtocolPerf] = useState<ProtocolPerformanceSummary | null>(null);
   const [flowsLoading, setFlowsLoading] = useState(false);
   const [flowRange, setFlowRange] = useState<FlowRangeKey>("24h");
   const [flowMin, setFlowMin] = useState(50);
@@ -138,7 +140,10 @@ export function Dashboard() {
     async (nextRange: ChangeRangeKey) => {
       setChangesLoading(true);
       try {
-        const res = await fetch(`/api/changes?range=${nextRange}`);
+        const [res, perfRes] = await Promise.all([
+          fetch(`/api/changes?range=${nextRange}`),
+          fetch(`/api/protocols?range=${nextRange}`),
+        ]);
         if (res.status === 401) {
           router.replace("/login");
           return;
@@ -146,6 +151,10 @@ export function Dashboard() {
         if (res.ok) {
           const json = (await res.json()) as ChangeSummary;
           if (mountedRef.current) setChanges(json);
+        }
+        if (perfRes.ok) {
+          const perf = (await perfRes.json()) as ProtocolPerformanceSummary;
+          if (mountedRef.current) setProtocolPerf(perf);
         }
       } catch {
         /* 保留上一次结果，不显示伪造的 0 */
@@ -502,7 +511,12 @@ export function Dashboard() {
           onMinChange={setFlowMin}
         />
 
-        <ProtocolSections dapps={dapps} />
+        <ProtocolSections
+          dapps={dapps}
+          perf={protocolPerf}
+          range={range}
+          onRangeChange={setRange}
+        />
 
         <ExchangeSection exchanges={exchanges} totalUsd={totals.cexUsd} />
 
@@ -589,8 +603,9 @@ export function Dashboard() {
             </div>
           </div>
           <div className="notice">
-            DApp 明细单独一个文件，避免与钱包余额相加造成重复统计；历史快照
-            {data.snapshotCount ?? snapshots.length}/700 条。
+            DApp 明细单独导出一个文件，是为了避免你把「钱包余额」和「协议仓位」再相加（协议仓位本来就包含在钱包余额里）。
+            历史快照目前 {data.snapshotCount ?? snapshots.length} / {data.snapshotLimit ?? 2016} 条：
+            每 5 分钟记一条，上限 2016 条正好覆盖 7 天，超过就自动丢掉最老的。
           </div>
         </section>
 

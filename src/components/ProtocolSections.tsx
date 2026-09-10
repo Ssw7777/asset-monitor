@@ -2,7 +2,10 @@
 
 import { useMemo, useState } from "react";
 import type { DappAllocation, DappWalletShare } from "@/lib/types";
-import { shortAddr, usd } from "./format";
+import type { ProtocolPerformanceSummary } from "@/lib/protocols";
+import type { ChangeRangeKey } from "@/lib/changes";
+import { CHANGE_RANGES } from "@/lib/changes";
+import { deltaClass, shortAddr, signedPct, signedUsd, usd } from "./format";
 import { TokenIcon, iconSlug } from "./TokenIcon";
 
 function safeSiteUrl(value: string) {
@@ -45,8 +48,23 @@ function symbolsOf(wallet: DappWalletShare, role: "asset" | "debt") {
 }
 
 /** DeBank 的协议区块：协议头 + 各钱包份额表；小于 1 USDT 的协议默认折叠成一行。 */
-export function ProtocolSections({ dapps }: { dapps: DappAllocation[] }) {
+export function ProtocolSections({
+  dapps,
+  perf,
+  range,
+  onRangeChange,
+}: {
+  dapps: DappAllocation[];
+  perf?: ProtocolPerformanceSummary | null;
+  range: ChangeRangeKey;
+  onRangeChange: (range: ChangeRangeKey) => void;
+}) {
   const [showDust, setShowDust] = useState(false);
+  const perfByName = useMemo(() => {
+    const map = new Map<string, ProtocolPerformanceSummary["items"][number]>();
+    for (const item of perf?.items ?? []) map.set(item.name, item);
+    return map;
+  }, [perf]);
 
   const { major, dust, dustTotal } = useMemo(() => {
     const majorList = dapps.filter((dapp) => Math.abs(dapp.netUsd) >= 1);
@@ -75,6 +93,7 @@ export function ProtocolSections({ dapps }: { dapps: DappAllocation[] }) {
     const site = safeSiteUrl(dapp.siteUrl);
     const host = hostOf(dapp.siteUrl);
     const debt = dapp.debtUsd > 0.01;
+    const stat = perfByName.get(dapp.name);
     return (
       <div className="protocol" key={`${dapp.id}-${dapp.name}`}>
         <div className="protocol-head">
@@ -104,7 +123,15 @@ export function ProtocolSections({ dapps }: { dapps: DappAllocation[] }) {
               {debt ? ` · 负债 ${usd(dapp.debtUsd)}` : ""}
             </span>
           </div>
-          <span className="section-total num">{usd(dapp.netUsd)}</span>
+          <span className="inline" style={{ justifyContent: "flex-end" }}>
+            {stat && stat.changeUsd !== 0 && (
+              <span className={`small num ${deltaClass(stat.changeUsd)}`}>
+                {signedUsd(stat.changeUsd)}（{signedPct(stat.changePct)}）
+                {stat.apy != null ? ` · 年化 ${stat.apy.toFixed(1)}%` : ""}
+              </span>
+            )}
+            <span className="section-total num">{usd(dapp.netUsd)}</span>
+          </span>
         </div>
 
         <div className="table">
@@ -164,8 +191,27 @@ export function ProtocolSections({ dapps }: { dapps: DappAllocation[] }) {
           <h2>DeFi 仓位</h2>
           <span className="hint">{dapps.length} 个协议 · 只解释组成，不重复计入总额</span>
         </div>
-        <span className="section-total num">
-          {usd(dapps.reduce((sum, dapp) => sum + dapp.netUsd, 0))}
+        <span className="inline">
+          {perf?.available ? (
+            <span className="small">较 {perf.rangeLabel} · 年化为该区间线性推算</span>
+          ) : (
+            <span className="small">{perf?.reason ?? ""}</span>
+          )}
+          <span className="seg">
+            {CHANGE_RANGES.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={range === item.key ? "active" : ""}
+                onClick={() => onRangeChange(item.key)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </span>
+          <span className="section-total num">
+            {usd(dapps.reduce((sum, dapp) => sum + dapp.netUsd, 0))}
+          </span>
         </span>
       </div>
 
