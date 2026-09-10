@@ -112,6 +112,7 @@ export function ChangeSection({
           <div className="table-foot">
             <span>
               {summary.upCount} 个上涨 · {summary.downCount} 个下降 · 共 {summary.rows.length} 条变化
+              {summary.dustCount > 0 ? `（${summary.dustCount} 条低于 ${summary.minUsd} USDT 的小额变动已折叠）` : ""}
             </span>
             <span>
               波动包含链上 + 三家交易所 + 手动资产

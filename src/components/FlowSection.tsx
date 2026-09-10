@@ -69,7 +69,7 @@ export function FlowSection({
             ))}
           </span>
           <span className="seg">
-            {[100, 500, 1000].map((value) => (
+            {[50, 100, 500].map((value) => (
               <button
                 key={value}
                 type="button"

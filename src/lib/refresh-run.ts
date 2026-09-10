@@ -61,10 +61,13 @@ export interface RefreshResult {
 }
 
 /**
- * 一次完整刷新：三家交易所并发只读、链上钱包按余额优先刷新、DApp / 代币明细随后取，
- * 最后写入一条快照。浏览器按钮与云端定时任务共用同一段逻辑。
+ * 刷新：
+ * - fast（默认给 1 分钟级定时器）：只读三家交易所余额 + 写一条快照，几百毫秒完成，
+ *   链上 / DApp / 代币沿用上一次结果 —— 这样曲线可以做到分钟级，又不烧 API 额度。
+ * - full：交易所 + 链上总额 + DApp + 代币明细，页面上的「刷新全部」和 15 分钟一次的定时任务用这个。
  */
-export async function runRefresh(): Promise<RefreshResult> {
+export async function runRefresh(opts: { fast?: boolean } = {}): Promise<RefreshResult> {
+  const fast = opts.fast === true;
   const state = await readStore();
   const now = new Date().toISOString();
   const blob = state.encryptedSecrets;
@@ -86,40 +89,46 @@ export async function runRefresh(): Promise<RefreshResult> {
   ];
   await updateExchanges(exchanges);
 
-  const tokenCache = { ...(state.tokenCache || {}) };
-  const wallets = await refreshWallets(state.wallets, tokenCache);
-  await updateWallets(wallets);
-  await updateTokenCache(tokenCache);
-
-  let partial = wallets.some((wallet) => wallet.status !== "ok");
+  let partial = state.wallets.some((wallet) => wallet.status !== "ok");
   let breakdown = state.onchainBreakdown ?? null;
-  try {
-    const onchainBreakdown = await refreshOnchainBreakdown(wallets, tokenCache);
-    const previous = state.onchainBreakdown ?? null;
-    // 限流时不要用“更少的成功地址”覆盖上一轮完整明细：保留旧明细，只更新限流状态。
-    const richer = !previous || onchainBreakdown.successfulWallets >= previous.successfulWallets;
-    const effective = richer
-      ? onchainBreakdown
-      : {
-          ...previous,
-          partial: true,
-          // 保留上一轮更完整的链 / 协议明细，但代币明细只要新拿到就一定要用上
-          tokens: onchainBreakdown.tokens.length ? onchainBreakdown.tokens : previous.tokens,
-          tokensTotalUsd: onchainBreakdown.tokens.length
-            ? onchainBreakdown.tokensTotalUsd
-            : previous.tokensTotalUsd,
-          tokenSource: onchainBreakdown.tokenSource || previous.tokenSource,
-          cachedWallets: onchainBreakdown.cachedWallets,
-          rateLimitedUntil: onchainBreakdown.rateLimitedUntil ?? null,
-        };
-    if (effective.successfulWallets > 0 || !previous) {
-      await updateOnchainBreakdown(effective);
-      breakdown = effective;
-      partial = partial || effective.partial === true;
+
+  if (!fast) {
+    const tokenCache = { ...(state.tokenCache || {}) };
+    const wallets = await refreshWallets(state.wallets, tokenCache);
+    await updateWallets(wallets);
+    await updateTokenCache(tokenCache);
+    partial = wallets.some((wallet) => wallet.status !== "ok");
+
+    try {
+      const onchainBreakdown = await refreshOnchainBreakdown(wallets, tokenCache);
+      const previous = state.onchainBreakdown ?? null;
+      // 限流时不要用“更少的成功地址”覆盖上一轮完整明细：保留旧明细，只更新限流状态。
+      const richer = !previous || onchainBreakdown.successfulWallets >= previous.successfulWallets;
+      const effective = richer
+        ? onchainBreakdown
+        : {
+            ...previous,
+            partial: true,
+            // 保留上一轮更完整的链 / 协议明细，但代币明细只要新拿到就一定要用上
+            tokens: onchainBreakdown.tokens.length ? onchainBreakdown.tokens : previous.tokens,
+            tokensTotalUsd: onchainBreakdown.tokens.length
+              ? onchainBreakdown.tokensTotalUsd
+              : previous.tokensTotalUsd,
+            tokenSource: onchainBreakdown.tokenSource || previous.tokenSource,
+            cachedWallets: onchainBreakdown.cachedWallets,
+            rateLimitedUntil: onchainBreakdown.rateLimitedUntil ?? null,
+          };
+      if (effective.successfulWallets > 0 || !previous) {
+        await updateOnchainBreakdown(effective);
+        breakdown = effective;
+        partial = partial || effective.partial === true;
+      }
+    } catch (error) {
+      // 明细接口失败时保留上一轮结果，绝不把总额清空。
+      console.error("[refresh] on-chain breakdown failed", error);
     }
-  } catch (error) {
-    // 明细接口失败时保留上一轮结果，绝不把总额清空。
-    console.error("[refresh] on-chain breakdown failed", error);
+  } else if (breakdown?.partial) {
+    partial = true;
   }
 
   const latest = await readStore();
@@ -155,6 +164,7 @@ export async function runRefresh(): Promise<RefreshResult> {
       ...publicState(finalState),
       totals: computeTotals(finalState),
       refreshed: true,
+      refreshMode: fast ? "fast" : "full",
       /** 只有“一个地址、一个交易所都没读到”才算整体失败；部分成功仍算成功 */
       refreshStatus: walletUsable > 0 || exchangeOk ? "ok" : "failed",
     },

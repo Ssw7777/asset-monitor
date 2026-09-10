@@ -17,8 +17,32 @@ const DATA_DIR = path.join(process.cwd(), "data");
 const LOCAL_STORE = path.join(DATA_DIR, "store.json");
 const TMP_STORE = "/tmp/asset-monitor-store.json";
 const TURSO_ROW_KEY = "portfolio";
-/** 5 分钟一张快照 × 2016 ≈ 7 天历史，够 7 天曲线和大额流水回溯。 */
-export const SNAPSHOT_LIMIT = 2016;
+/** 1 分钟一张快照 × 10080 ≈ 7 天历史，够做分钟级曲线。 */
+export const SNAPSHOT_LIMIT = 10080;
+/** 只有最近 1440 条（分钟级 ≈ 24 小时）保留逐钱包 / 逐 DApp 明细，其余只留总额，控制体积。 */
+const SNAPSHOT_DETAIL_KEEP = 1440;
+
+function trimSnapshots(list: SnapshotPoint[]): SnapshotPoint[] {
+  const sliced = list.length > SNAPSHOT_LIMIT ? list.slice(-SNAPSHOT_LIMIT) : list;
+  const cutoff = sliced.length - SNAPSHOT_DETAIL_KEEP;
+  if (cutoff <= 0) return sliced;
+  let changed = false;
+  const out = sliced.map((point, index) => {
+    if (index >= cutoff || (!point.wallets && !point.dapps && !point.manualItems)) return point;
+    changed = true;
+    return {
+      ts: point.ts,
+      totalUsd: point.totalUsd,
+      onchain: point.onchain,
+      cex: point.cex,
+      manual: point.manual,
+      exchanges: point.exchanges,
+      partial: point.partial,
+      seeded: point.seeded,
+    };
+  });
+  return changed ? out : sliced;
+}
 
 type GlobalCache = { __amStore?: PortfolioState; __amStoreLock?: Promise<void> };
 const g = globalThis as unknown as GlobalCache;
@@ -162,11 +186,7 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
     // Migration runs on every read: newly required addresses appear without touching existing rows.
     wallets: applyWalletMigrations(storedWallets),
     exchanges: Array.isArray(raw.exchanges) ? raw.exchanges : d.exchanges,
-    snapshots: rawSnapshots.length
-      ? rawSnapshots.length > SNAPSHOT_LIMIT
-        ? rawSnapshots.slice(-SNAPSHOT_LIMIT)
-        : rawSnapshots
-      : d.snapshots,
+    snapshots: rawSnapshots.length ? trimSnapshots(rawSnapshots) : d.snapshots,
     onchainCacheUsd: Number(raw.onchainCacheUsd) || d.onchainCacheUsd,
     lastRefresh: raw.lastRefresh ?? null,
     usdCnyRate: Number(raw.usdCnyRate) || d.usdCnyRate,
@@ -402,7 +422,7 @@ export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: str
     partial: point.partial === true ? true : undefined,
   };
   s.snapshots.push(snap);
-  if (s.snapshots.length > SNAPSHOT_LIMIT) s.snapshots = s.snapshots.slice(-SNAPSHOT_LIMIT);
+  s.snapshots = trimSnapshots(s.snapshots);
   s.lastRefresh = snap.ts;
   await writeStore(s);
   return s;

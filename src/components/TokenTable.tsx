@@ -10,10 +10,59 @@ function percent(value: number, total: number) {
   return Math.max(0, Math.min(100, (value / total) * 100));
 }
 
-/**
- * DeBank 的 Wallet 版式：代币 / 价格 / 数量 / USD 价值，价值带占比条。
- * 多钱包综合体多一列“钱包数”，点开可以看到这个币分别来自哪些钱包。
- */
+interface TokenGroup {
+  symbol: string;
+  chains: TokenHolding[];
+  amount: number;
+  valueUsd: number;
+  price: number;
+  logoUrl?: string;
+  kind: TokenHolding["kind"];
+  wallets: Array<{ walletId: string; walletName: string; address: string; amount: number; valueUsd: number }>;
+}
+
+/** 同名代币跨链合并成一个组（图1：ETH 在不同链上只占一行，点开才看各链明细）。 */
+function groupTokens(tokens: TokenHolding[]): TokenGroup[] {
+  const map = new Map<string, TokenGroup>();
+  for (const token of tokens) {
+    const key = token.symbol.toUpperCase();
+    const group =
+      map.get(key) ||
+      ({
+        symbol: token.symbol,
+        chains: [],
+        amount: 0,
+        valueUsd: 0,
+        price: 0,
+        logoUrl: token.logoUrl,
+        kind: token.kind,
+        wallets: [],
+      } satisfies TokenGroup);
+    group.chains.push(token);
+    group.amount += token.amount;
+    group.valueUsd += token.valueUsd;
+    if (!group.logoUrl && token.logoUrl) group.logoUrl = token.logoUrl;
+    for (const wallet of token.wallets) {
+      const existing = group.wallets.find((item) => item.walletId === wallet.walletId);
+      if (existing) {
+        existing.amount += wallet.amount;
+        existing.valueUsd += wallet.valueUsd;
+      } else {
+        group.wallets.push({ ...wallet });
+      }
+    }
+    map.set(key, group);
+  }
+  const list = [...map.values()];
+  for (const group of list) {
+    group.chains.sort((left, right) => right.valueUsd - left.valueUsd);
+    group.wallets.sort((left, right) => right.valueUsd - left.valueUsd);
+    group.price = group.amount > 0 ? group.valueUsd / group.amount : 0;
+  }
+  return list.sort((left, right) => right.valueUsd - left.valueUsd);
+}
+
+/** DeBank 的 Wallet 版式 + 多钱包/多链合并：同名代币一行，点开看链与钱包明细。 */
 export function TokenTable({
   tokens,
   onchainUsd,
@@ -28,7 +77,7 @@ export function TokenTable({
   tokenSource?: string;
 }) {
   const [query, setQuery] = useState("");
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openKey, setOpenKey] = useState<string | null>(null);
   const [dustOpen, setDustOpen] = useState(false);
 
   const filtered = useMemo(() => {
@@ -40,24 +89,133 @@ export function TokenTable({
     );
   }, [tokens, chainFilter, query]);
 
+  const groups = useMemo(() => groupTokens(filtered), [filtered]);
   const shownTotal = useMemo(
-    () => filtered.reduce((sum, token) => sum + token.valueUsd, 0),
-    [filtered]
+    () => groups.reduce((sum, group) => sum + group.valueUsd, 0),
+    [groups]
   );
   /** 小于 10 USDT 的一律折叠成一行，避免一堆小额代币把主列表冲散。 */
-  const mainTokens = useMemo(
-    () => filtered.filter((token) => token.valueUsd >= 10),
-    [filtered]
-  );
-  const dustTokens = useMemo(
-    () => filtered.filter((token) => token.valueUsd < 10),
-    [filtered]
-  );
+  const mainGroups = useMemo(() => groups.filter((group) => group.valueUsd >= 10), [groups]);
+  const dustGroups = useMemo(() => groups.filter((group) => group.valueUsd < 10), [groups]);
   const dustTotal = useMemo(
-    () => dustTokens.reduce((sum, token) => sum + token.valueUsd, 0),
-    [dustTokens]
+    () => dustGroups.reduce((sum, group) => sum + group.valueUsd, 0),
+    [dustGroups]
   );
+  const dustWallets = useMemo(() => {
+    const set = new Set<string>();
+    for (const group of dustGroups) for (const wallet of group.wallets) set.add(wallet.walletId);
+    return set.size;
+  }, [dustGroups]);
   const coverage = onchainUsd > 0 ? (shownTotal / onchainUsd) * 100 : 0;
+
+  const renderRow = (group: TokenGroup, index: number) => {
+    const key = group.symbol.toUpperCase();
+    const open = openKey === key;
+    const share = percent(group.valueUsd, shownTotal);
+    const topChain = group.chains[0];
+    return (
+      <div
+        key={key}
+        className={`trow grid-token clickable${open ? " open" : ""}`}
+        onClick={() => setOpenKey(open ? null : key)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setOpenKey(open ? null : key);
+          }
+        }}
+      >
+        <div className="cell-token">
+          <TokenIcon symbol={group.symbol} logoUrl={group.logoUrl} />
+          <span className="cell-token-text">
+            <b>{group.symbol}</b>
+            <span>
+              {group.kind === "stable" ? "稳定币" : group.kind === "native" ? "主链币" : "现货"}
+              {group.chains.length > 1
+                ? ` · ${group.chains.length} 条链`
+                : group.wallets.length > 1
+                  ? ` · ${group.wallets.length} 个钱包`
+                  : ""}
+            </span>
+          </span>
+        </div>
+        <div className="right cell-main num hide-md">{priceUsd(group.price)}</div>
+        <div className="right num hide-md">
+          <div className="cell-main">{amountNum(group.amount)}</div>
+          <div className="cell-sub">{group.symbol}</div>
+        </div>
+        <div className="value-cell num">
+          <div className="cell-main">{usd(group.valueUsd)}</div>
+          <div className="value-bar" aria-hidden="true">
+            <i style={{ width: `${share}%` }} />
+          </div>
+          <div className="cell-sub">{share.toFixed(2)}%</div>
+        </div>
+        <div className="right hide-lg">
+          {group.chains.length === 1 ? (
+            <span className="chain-chip" style={{ justifyContent: "flex-end" }}>
+              <TokenIcon
+                symbol={topChain.chainName}
+                localSrc={`/icons/chains/${topChain.chain}.png`}
+                size={16}
+                shape="square"
+              />
+              {topChain.chainName}
+            </span>
+          ) : (
+            <span className="cell-sub">{group.chains.length} 条链</span>
+          )}
+        </div>
+        <div className="right cell-main num hide-lg">{group.wallets.length}</div>
+
+        {open && (
+          <div className="row-detail">
+            <div className="small" style={{ marginBottom: 8 }}>
+              各链明细（{group.chains.length} 条链 · {group.wallets.length} 个钱包）
+            </div>
+            <div className="detail-grid">
+              {group.chains.map((chain) => (
+                <div className="detail-item" key={chain.id} style={{ alignItems: "flex-start" }}>
+                  <span className="name" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <TokenIcon
+                      symbol={chain.chainName}
+                      localSrc={`/icons/chains/${chain.chain}.png`}
+                      size={16}
+                      shape="square"
+                    />
+                    {chain.chainName}
+                  </span>
+                  <span className="amount">
+                    {amountNum(chain.amount)} · {usd(chain.valueUsd)}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="small" style={{ margin: "10px 0 8px" }}>
+              各钱包持仓
+            </div>
+            <div className="detail-grid">
+              {group.wallets.map((wallet) => (
+                <div className="detail-item" key={wallet.walletId}>
+                  <span className="name">
+                    {wallet.walletName}
+                    <span className="small" style={{ marginLeft: 6 }}>
+                      {shortAddr(wallet.address)}
+                    </span>
+                  </span>
+                  <span className="amount">
+                    {amountNum(wallet.amount)} · {usd(wallet.valueUsd)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <section className="section" id="tokens">
@@ -65,8 +223,8 @@ export function TokenTable({
         <div className="section-title">
           <h2>代币</h2>
           <span className="hint">
-            {filtered.length} / {tokens.length} 个
-            {chainFilter !== "all" ? "（已按链筛选）" : ""}
+            {groups.length} 个币种
+            {chainFilter !== "all" ? "（已按链筛选）" : " · 同名代币已跨链合并"}
           </span>
         </div>
         <div className="inline">
@@ -86,94 +244,18 @@ export function TokenTable({
         </div>
       </div>
 
-      {filtered.length ? (
+      {groups.length ? (
         <div className="table">
           <div className="thead grid-token">
             <div>代币</div>
             <div className="right hide-md">价格</div>
             <div className="right hide-md">数量</div>
-            <div className="right">价值 (U)</div>
+            <div className="right">价值</div>
             <div className="right hide-lg">链</div>
             <div className="right hide-lg">钱包</div>
           </div>
-          {(dustOpen ? filtered : mainTokens).map((token) => {
-            const open = openId === token.id;
-            const share = percent(token.valueUsd, shownTotal);
-            return (
-              <div
-                key={token.id}
-                className={`trow grid-token clickable${open ? " open" : ""}`}
-                onClick={() => setOpenId(open ? null : token.id)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setOpenId(open ? null : token.id);
-                  }
-                }}
-              >
-                <div className="cell-token">
-                  <TokenIcon symbol={token.symbol} logoUrl={token.logoUrl} />
-                  <span className="cell-token-text">
-                    <b>{token.symbol}</b>
-                    <span>
-                      {token.kind === "stable" ? "稳定币" : token.kind === "native" ? "主链币" : "现货"}
-                      {token.walletCount > 1 ? ` · ${token.walletCount} 个钱包` : ""}
-                    </span>
-                  </span>
-                </div>
-                <div className="right cell-main num hide-md">{priceUsd(token.price)}</div>
-                <div className="right num hide-md">
-                  <div className="cell-main">{amountNum(token.amount)}</div>
-                  <div className="cell-sub">{token.symbol}</div>
-                </div>
-                <div className="value-cell num">
-                  <div className="cell-main">{usd(token.valueUsd)}</div>
-                  <div className="value-bar" aria-hidden="true">
-                    <i style={{ width: `${share}%` }} />
-                  </div>
-                  <div className="cell-sub">{share.toFixed(2)}%</div>
-                </div>
-                <div className="right hide-lg">
-                  <span className="chain-chip" style={{ justifyContent: "flex-end" }}>
-                    <TokenIcon
-                      symbol={token.chainName}
-                      localSrc={`/icons/chains/${token.chain}.png`}
-                      size={16}
-                      shape="square"
-                    />
-                    {token.chainName}
-                  </span>
-                </div>
-                <div className="right cell-main num hide-lg">{token.walletCount}</div>
-
-                {open && (
-                  <div className="row-detail">
-                    <div className="small" style={{ marginBottom: 8 }}>
-                      该代币在各钱包的持仓（{token.wallets.length}）
-                    </div>
-                    <div className="detail-grid">
-                      {token.wallets.map((wallet) => (
-                        <div className="detail-item" key={wallet.walletId}>
-                          <span className="name">
-                            {wallet.walletName}
-                            <span className="small" style={{ marginLeft: 6 }}>
-                              {shortAddr(wallet.address)}
-                            </span>
-                          </span>
-                          <span className="amount">
-                            {amountNum(wallet.amount)} · {usd(wallet.valueUsd)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          {dustTokens.length > 0 && (
+          {(dustOpen ? groups : mainGroups).map((group, index) => renderRow(group, index))}
+          {dustGroups.length > 0 && (
             <div
               className="trow grid-token clickable"
               onClick={() => setDustOpen((value) => !value)}
@@ -191,7 +273,7 @@ export function TokenTable({
                   ⋯
                 </span>
                 <span className="cell-token-text">
-                  <b>小额资产 {dustTokens.length} 项</b>
+                  <b>小额资产 {dustGroups.length} 项</b>
                   <span>每项低于 10 USDT · {dustOpen ? "点击收起" : "点击展开"}</span>
                 </span>
               </div>
@@ -204,13 +286,8 @@ export function TokenTable({
                 </div>
                 <div className="cell-sub">{percent(dustTotal, shownTotal).toFixed(2)}%</div>
               </div>
-              <div className="right chain-chip hide-lg">
-                <i />
-                多链
-              </div>
-              <div className="right cell-main num hide-lg">
-                {dustTokens.length}
-              </div>
+              <div className="right cell-sub hide-lg">多链</div>
+              <div className="right cell-main num hide-lg">{dustWallets}</div>
             </div>
           )}
           <div className="table-foot">
@@ -227,16 +304,9 @@ export function TokenTable({
         </div>
       ) : (
         <div className="empty">
-          {tokens.length ? (
-            "没有匹配当前筛选条件的代币"
-          ) : (
-            <>
-              还没有代币明细。
-              {tokenSource === "zerion" || tokenSource === "debank"
-                ? "点击右上角刷新即可获取。"
-                : "公共接口对脚本请求限流很严，建议配置免费的 ZERION_API_KEY（Zerion 免费版一个请求即可拿到全链代币），或等待公共接口放行后自动补齐。"}
-            </>
-          )}
+          {tokens.length
+            ? "没有匹配当前筛选条件的代币"
+            : "还没有代币明细，点击右上角刷新即可获取"}
         </div>
       )}
     </section>

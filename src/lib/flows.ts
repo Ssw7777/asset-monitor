@@ -146,7 +146,7 @@ export function buildFlowSummary(
 ): FlowSummary {
   const rangeKey = opts.range ?? "24h";
   const range = FLOW_RANGES.find((item) => item.key === rangeKey) ?? FLOW_RANGES[0];
-  const minUsd = Math.max(0, opts.minUsd ?? 100);
+  const minUsd = Math.max(0, opts.minUsd ?? 50);
   const limit = Math.max(1, opts.limit ?? 120);
   const now = Date.now();
 

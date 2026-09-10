@@ -46,12 +46,18 @@ export function ExchangeSection({
         </div>
         {exchanges.map((exchange) => {
           const status = statusText(exchange);
+          const label = LABEL[exchange.exchange] || exchange.exchange;
           return (
             <div className="trow grid-token" key={exchange.exchange}>
               <div className="cell-token">
-                <TokenIcon symbol={LABEL[exchange.exchange] || exchange.exchange} />
+                <TokenIcon
+                  symbol={label}
+                  localSrc={`/icons/exchanges/${exchange.exchange}.png`}
+                  size={28}
+                  shape="square"
+                />
                 <span className="cell-token-text">
-                  <b>{LABEL[exchange.exchange] || exchange.exchange}</b>
+                  <b>{label}</b>
                   <span>仅读取余额，无下单 / 提现权限</span>
                 </span>
               </div>

@@ -546,6 +546,26 @@ textarea.field {
   font-weight: 600;
 }
 
+/* 刷新状态：贴在统计行末尾，不单独占一行 */
+.stat-status {
+  display: flex;
+  margin-left: auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  align-self: center;
+}
+
+.stat-status .tag.pos {
+  background: #e8f8f1;
+  color: #07835a;
+}
+
+.stat-status .tag.neg {
+  background: #fdeceb;
+  color: #c8372c;
+}
+
 /* ── 卡片 / 面板 ────────────────────────────────────────────────────── */
 .card {
   border: 1px solid var(--line);

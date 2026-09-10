@@ -46,7 +46,9 @@ interface PortfolioPayload {
   refreshStatus?: "ok" | "failed";
 }
 
-const AUTO_REFRESH_MS = 5 * 60 * 1000;
+/** 交易所余额 + 快照：60 秒一次；链上 / DApp / 代币：15 分钟一次（省额度）。 */
+const AUTO_TICK_MS = 60 * 1000;
+const AUTO_FULL_EVERY_MS = 15 * 60 * 1000;
 const BACKOFF_BASE_MS = 30_000;
 const BACKOFF_MAX_MS = 10 * 60 * 1000;
 
@@ -100,7 +102,7 @@ export function Dashboard() {
   const [flows, setFlows] = useState<FlowSummary | null>(null);
   const [flowsLoading, setFlowsLoading] = useState(false);
   const [flowRange, setFlowRange] = useState<FlowRangeKey>("24h");
-  const [flowMin, setFlowMin] = useState(100);
+  const [flowMin, setFlowMin] = useState(50);
 
   const refreshingRef = useRef(false);
   const failStreakRef = useRef(0);
@@ -108,7 +110,8 @@ export function Dashboard() {
   const mountedRef = useRef(true);
   const rangeRef = useRef<ChangeRangeKey>("24h");
   const flowRangeRef = useRef<FlowRangeKey>("24h");
-  const flowMinRef = useRef(100);
+  const flowMinRef = useRef(50);
+  const lastFullRef = useRef(Date.now());
 
   const applyPayload = useCallback((json: PortfolioPayload) => {
     setData(json);
@@ -176,12 +179,12 @@ export function Dashboard() {
   );
 
   const quietRefresh = useCallback(
-    async (manual = false) => {
+    async (mode: "fast" | "full" = "fast", manual = false) => {
       if (refreshingRef.current) return;
       refreshingRef.current = true;
       if (manual) setRefreshing(true);
       try {
-        const res = await fetch("/api/refresh", { method: "POST" });
+        const res = await fetch(`/api/refresh?mode=${mode}`, { method: "POST" });
         if (res.status === 401) {
           router.replace("/login");
           return;
@@ -191,6 +194,7 @@ export function Dashboard() {
         if (!mountedRef.current) return;
         applyPayload(json);
         failStreakRef.current = 0;
+        if (mode === "full") lastFullRef.current = Date.now();
         void loadChanges(rangeRef.current);
         void loadFlows(flowRangeRef.current, flowMinRef.current);
       } catch {
@@ -226,11 +230,10 @@ export function Dashboard() {
       if (timerRef.current) clearTimeout(timerRef.current);
       const streak = failStreakRef.current;
       const delay =
-        streak === 0
-          ? AUTO_REFRESH_MS
-          : Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * Math.pow(2, streak - 1));
+        streak === 0 ? AUTO_TICK_MS : Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * Math.pow(2, streak - 1));
       timerRef.current = setTimeout(async () => {
-        await quietRefresh(false);
+        const full = Date.now() - lastFullRef.current >= AUTO_FULL_EVERY_MS;
+        await quietRefresh(full ? "full" : "fast", false);
         if (mountedRef.current) schedule();
       }, delay);
     };
@@ -330,7 +333,12 @@ export function Dashboard() {
           </nav>
           <div className="topbar-actions">
             <span className="small">更新于 {timeAgo(lastRefresh)}</span>
-            <button type="button" className="btn btn-accent" onClick={() => quietRefresh(true)} disabled={refreshing}>
+            <button
+              type="button"
+              className="btn btn-accent"
+              onClick={() => quietRefresh("full", true)}
+              disabled={refreshing}
+            >
               {refreshing ? "刷新中…" : "刷新全部"}
             </button>
             <button type="button" className="btn btn-outline" onClick={logout}>
@@ -393,25 +401,13 @@ export function Dashboard() {
               {wallets.length}/50
             </div>
           </div>
+          <div className="stat-status">
+            <span className={`tag ${error || data.refreshStatus === "failed" ? "neg" : "pos"}`}>
+              {error || data.refreshStatus === "failed" ? "数据获取失败" : "数据刷新成功"}
+            </span>
+            <span className="small">交易所 1 分钟 · 链上 15 分钟</span>
+          </div>
         </div>
-
-        {error && (
-          <div className="notice warn" style={{ marginTop: 18 }}>
-            {error}
-          </div>
-        )}
-
-        {(error || data.refreshStatus === "failed") && (
-          <div className="notice warn" style={{ marginTop: 18 }}>
-            数据获取失败
-          </div>
-        )}
-
-        {!error && data.refreshStatus !== "failed" && (
-          <div className="notice" style={{ marginTop: 18 }}>
-            数据刷新成功
-          </div>
-        )}
 
         <PortfolioChart
           snapshots={snapshots}

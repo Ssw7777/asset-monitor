@@ -39,6 +39,9 @@ export interface ChangeSummary {
   rows: ChangeRow[];
   upCount: number;
   downCount: number;
+  /** 低于阈值被折叠的变动条数（默认 1 USDT 以下折叠） */
+  dustCount: number;
+  minUsd: number;
   partial: boolean;
   snapshotCount: number;
   /** 实际覆盖的时间跨度（毫秒） */
@@ -89,7 +92,15 @@ function shortAddress(address: string) {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
-export function buildChangeSummary(state: PortfolioState, rangeKey: ChangeRangeKey, now = Date.now()): ChangeSummary {
+export function buildChangeSummary(
+  state: PortfolioState,
+  rangeKey: ChangeRangeKey,
+  opts: { minUsd?: number; includeDapps?: boolean; now?: number } = {}
+): ChangeSummary {
+  /** 小于 1 USDT 的变动默认折叠，不占列表（用户要求：只看钱包，且小额不显示） */
+  const minUsd = Math.max(0, opts.minUsd ?? 1);
+  const includeDapps = opts.includeDapps === true;
+  const now = opts.now ?? Date.now();
   const range = CHANGE_RANGES.find((item) => item.key === rangeKey) ?? CHANGE_RANGES[2];
   const snapshots = state.snapshots;
   const latest = snapshots.length ? snapshots[snapshots.length - 1] : null;
@@ -107,6 +118,8 @@ export function buildChangeSummary(state: PortfolioState, rangeKey: ChangeRangeK
     rows: [],
     upCount: 0,
     downCount: 0,
+    dustCount: 0,
+    minUsd,
     partial: false,
     snapshotCount: snapshots.length,
     coverageMs: 0,
@@ -188,9 +201,11 @@ export function buildChangeSummary(state: PortfolioState, rangeKey: ChangeRangeK
   }
 
   // 2) DApp 协议仓位变化（仅解释来源，不改变总额口径）
-  const dappKeys = detailAvailable
-    ? new Set<string>([...Object.keys(past.dapps || {}), ...Object.keys(latest.dapps || {})])
-    : new Set<string>();
+  // DApp 仓位是钱包总额的组成部分，默认不参与变动归因（用户要求：只记录钱包）
+  const dappKeys =
+    detailAvailable && includeDapps
+      ? new Set<string>([...Object.keys(past.dapps || {}), ...Object.keys(latest.dapps || {})])
+      : new Set<string>();
   for (const name of dappKeys) {
     push({
       key: `dapp:${name}`,
@@ -226,8 +241,10 @@ export function buildChangeSummary(state: PortfolioState, rangeKey: ChangeRangeK
   }
 
   rows.sort((left, right) => Math.abs(right.change) - Math.abs(left.change));
-  const upCount = rows.filter((row) => row.change > 0).length;
-  const downCount = rows.filter((row) => row.change < 0).length;
+  const kept = rows.filter((row) => Math.abs(row.change) >= minUsd);
+  const dustCount = rows.length - kept.length;
+  const upCount = kept.filter((row) => row.change > 0).length;
+  const downCount = kept.filter((row) => row.change < 0).length;
 
   const before = past.totalUsd;
   const after = latest.totalUsd;
@@ -248,9 +265,11 @@ export function buildChangeSummary(state: PortfolioState, rangeKey: ChangeRangeK
       pct: changePct(before, after) ?? 0,
       partial: !picked.complete,
     },
-    rows,
+    rows: kept,
     upCount,
     downCount,
+    dustCount,
+    minUsd,
     partial: past.partial === true || latest.partial === true,
     snapshotCount: snapshots.length,
     coverageMs,

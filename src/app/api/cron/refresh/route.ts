@@ -21,9 +21,12 @@ async function handle(req: NextRequest) {
     if (denied) return denied;
   }
 
-  const result = await runRefresh();
+  // 默认 fast：1 分钟级定时器用这个（只读交易所 + 记快照，几百毫秒完成）
+  const mode = new URL(req.url).searchParams.get("mode") === "full" ? "full" : "fast";
+  const result = await runRefresh({ fast: mode === "fast" });
   return NextResponse.json({
     ok: true,
+    mode,
     refreshedAt: new Date().toISOString(),
     walletOk: result.walletOk,
     walletTotal: result.walletTotal,
