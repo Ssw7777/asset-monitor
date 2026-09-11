@@ -347,8 +347,9 @@ export function Dashboard() {
               className="btn btn-accent"
               onClick={() => quietRefresh("full", true)}
               disabled={refreshing}
+              title="每轮轮换刷新最久没更新的 8 个地址，几轮之内所有地址都会被更新"
             >
-              {refreshing ? "刷新中…" : "刷新全部"}
+              {refreshing ? "刷新中…" : "刷新数据"}
             </button>
             <button type="button" className="btn btn-outline" onClick={logout}>
               退出

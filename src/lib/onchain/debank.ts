@@ -37,7 +37,11 @@ const cache = new Map<string, { detail: TotalBalanceDetail; at: number }>();
 const protocolCache = new Map<string, { protocols: Record<string, unknown>[]; at: number }>();
 const TTL = 5 * 60 * 1000;
 const CONCURRENCY = 4;
-const PUBLIC_REQUEST_INTERVAL_MS = 320;
+/**
+ * 公共接口的请求间隔。实测：同一个 IP 按 450ms 间隔逐个请求 10 个地址全部 200，
+ * 而并发 4 + 320ms 错峰会被判定为突发流量直接 429。所以这里放慢到 700ms。
+ */
+const PUBLIC_REQUEST_INTERVAL_MS = 1200;
 /**
  * 代币明细额度控制：Zerion 免费版是 300 次/天，所以
  * 每轮最多补 8 个地址、单地址结果缓存 6 小时（持久化到数据库，冷启动也不重复消耗）。
@@ -65,6 +69,8 @@ let nextPublicRequestAt = 0;
  * 冷却期内不再发新请求，直接沿用上次成功数据，避免把 429 变成请求轰炸。
  */
 let publicBlockedUntil = 0;
+/** 连续 429 计数：偶发一两次不该把整轮刷新锁死，连续多次才进入全局冷却。 */
+let publicConsecutive429 = 0;
 
 export type WalletFetchStatus = "ok" | "cached" | "error";
 
@@ -77,7 +83,7 @@ function publicBlocked(): boolean {
 }
 
 function markPublicBlocked(ms: number) {
-  const wait = Math.min(10 * 60_000, Math.max(60_000, ms));
+  const wait = Math.min(2 * 60_000, Math.max(15_000, ms));
   publicBlockedUntil = Math.max(publicBlockedUntil, Date.now() + wait);
 }
 
@@ -183,12 +189,20 @@ async function fetchJson(
         cache: "no-store",
         signal: AbortSignal.timeout(18_000),
       });
-      if (response.ok) return { data: await response.json(), status: response.status };
+      if (response.ok) {
+        if (publicEndpoint) publicConsecutive429 = 0;
+        return { data: await response.json(), status: response.status };
+      }
       if (response.status === 429) {
         const wait = retryDelay(response, attempt);
         if (publicEndpoint) {
-          markPublicBlocked(wait);
-          // 已进入冷却：立即失败，交给上层保留上次成功数据。
+          publicConsecutive429 += 1;
+          // 偶发 429：先自己退避重试同一请求；只有连续多次才进入全局冷却
+          if (publicConsecutive429 >= 3) markPublicBlocked(wait);
+          if (attempt < retries) {
+            await sleep(wait);
+            continue;
+          }
           return { data: null, status: 429 };
         }
         if (attempt < retries) {
@@ -462,7 +476,19 @@ export async function refreshWallets(
     return right.balanceUsd - left.balanceUsd;
   });
   const budget = Math.max(1, Math.min(opts.budget ?? wallets.length, wallets.length));
-  const targets = ordered.slice(0, budget);
+  /**
+   * 轮换策略：先保大额地址（余额 ≥ 500 USDT 且超过 45 分钟没更新），
+   * 再用「最久没成功」的地址把这一轮填满。这样重要的钱包不会被小额地址挤到队尾。
+   */
+  const bigStale = wallets
+    .filter((wallet) => wallet.balanceUsd >= 500 && staleness(wallet) > 45 * 60 * 1000)
+    .sort((left, right) => right.balanceUsd - left.balanceUsd);
+  const picked = new Map<string, Wallet>();
+  for (const wallet of [...bigStale, ...ordered]) {
+    if (picked.size >= budget) break;
+    picked.set(wallet.id, wallet);
+  }
+  const targets = [...picked.values()];
   const targetIds = new Set(targets.map((wallet) => wallet.id));
   /**
    * 本轮要补代币明细的地址：优先“从来没取过”的地址（例如余额抓取失败的币安钱包，

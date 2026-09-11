@@ -12,6 +12,8 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   const mode = new URL(req.url).searchParams.get("mode") === "fast" ? "fast" : "full";
-  const result = await runRefresh({ fast: mode === "fast" });
+  // 手动刷新同样走轮换（每轮 8 个地址）：一次性请求 20+ 地址会把这个 IP 的额度打光，
+  // 结果反而是所有地址都失败、数据更旧。
+  const result = await runRefresh({ fast: mode === "fast", walletBudget: 8 });
   return NextResponse.json(result.payload);
 }
