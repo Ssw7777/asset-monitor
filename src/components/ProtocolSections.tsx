@@ -6,7 +6,7 @@ import type { ProtocolPerformanceSummary } from "@/lib/protocols";
 import type { ChangeRangeKey } from "@/lib/changes";
 import { CHANGE_RANGES } from "@/lib/changes";
 import { deltaClass, shortAddr, signedPct, signedUsd, usd } from "./format";
-import { TokenIcon, iconSlug } from "./TokenIcon";
+import { localChainIcon, TokenIcon } from "./TokenIcon";
 
 function safeSiteUrl(value: string) {
   try {
@@ -30,7 +30,7 @@ function ChainIcon({ id, name, size = 16 }: { id: string; name: string; size?: n
   return (
     <TokenIcon
       symbol={name || id}
-      localSrc={`/icons/chains/${id}.png`}
+      localSrc={localChainIcon(id)}
       size={size}
       shape="square"
     />
@@ -100,7 +100,6 @@ export function ProtocolSections({
           <div className="protocol-id">
             <TokenIcon
               symbol={dapp.name}
-              localSrc={`/icons/protocols/${iconSlug(dapp.name)}.png`}
               logoUrl={dapp.logoUrl}
               extraSources={
                 host

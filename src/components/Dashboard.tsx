@@ -20,7 +20,7 @@ import { ManualAssets } from "./ManualAssets";
 import { PortfolioChart } from "./PortfolioChart";
 import { ProtocolSections } from "./ProtocolSections";
 import { TokenTable } from "./TokenTable";
-import { TokenIcon } from "./TokenIcon";
+import { localChainIcon, TokenIcon } from "./TokenIcon";
 import { WalletsTable } from "./WalletsTable";
 import { cny, timeAgo, usd } from "./format";
 
@@ -78,7 +78,7 @@ function ChainIcon({ chain }: { chain: OnchainBreakdown["chains"][number] }) {
   return (
     <TokenIcon
       symbol={chain.name || chain.id}
-      localSrc={`/icons/chains/${chain.id}.png`}
+      localSrc={localChainIcon(chain.id)}
       logoUrl={chain.logoUrl}
       size={26}
       shape="square"
@@ -333,8 +333,8 @@ export function Dashboard() {
             <a href="#trend" className="active">
               总览
             </a>
-            <a href="#tokens">代币</a>
             <a href="#flows">流水</a>
+            <a href="#tokens">代币</a>
             <a href="#defi">DeFi</a>
             <a href="#exchanges">交易所</a>
             <a href="#changes">变动</a>
@@ -495,14 +495,6 @@ export function Dashboard() {
           )}
         </section>
 
-        <TokenTable
-          tokens={breakdown?.tokens ?? []}
-          onchainUsd={onchainUsd}
-          chainFilter={chainFilter}
-          partial={partial}
-          tokenSource={breakdown?.tokenSource}
-        />
-
         <FlowSection
           summary={flows}
           loading={flowsLoading}
@@ -512,6 +504,14 @@ export function Dashboard() {
           onMinChange={setFlowMin}
         />
 
+        <TokenTable
+          tokens={breakdown?.tokens ?? []}
+          onchainUsd={onchainUsd}
+          chainFilter={chainFilter}
+          partial={partial}
+          tokenSource={breakdown?.tokenSource}
+        />
+
         <ProtocolSections
           dapps={dapps}
           perf={protocolPerf}
@@ -519,7 +519,13 @@ export function Dashboard() {
           onRangeChange={setRange}
         />
 
-        <ExchangeSection exchanges={exchanges} totalUsd={totals.cexUsd} />
+        <ExchangeSection
+          exchanges={exchanges}
+          totalUsd={totals.cexUsd}
+          range={range}
+          changes={changes}
+          onRangeChange={setRange}
+        />
 
         <ManualAssets
           items={manual}

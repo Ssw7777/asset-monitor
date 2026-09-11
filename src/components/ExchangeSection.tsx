@@ -1,7 +1,9 @@
 "use client";
 
 import type { ExchangeBalance } from "@/lib/types";
-import { timeAgo, usd } from "./format";
+import type { ChangeRangeKey, ChangeSummary } from "@/lib/changes";
+import { CHANGE_RANGES } from "@/lib/changes";
+import { deltaClass, signedPct, signedUsd, timeAgo, usd } from "./format";
 import { TokenIcon } from "./TokenIcon";
 
 const LABEL: Record<string, string> = { okx: "OKX", binance: "Binance", gate: "Gate" };
@@ -25,12 +27,25 @@ function statusText(exchange: ExchangeBalance) {
 export function ExchangeSection({
   exchanges,
   totalUsd,
+  range,
+  changes,
+  onRangeChange,
 }: {
   exchanges: ExchangeBalance[];
   totalUsd: number;
+  range: ChangeRangeKey;
+  changes: ChangeSummary | null;
+  onRangeChange: (range: ChangeRangeKey) => void;
 }) {
+  const exchangeChanges = new Map(
+    (changes?.rows ?? [])
+      .filter((row) => row.type === "exchange")
+      .map((row) => [row.key.replace("exchange:", ""), row])
+  );
+  const totalChange = [...exchangeChanges.values()].reduce((sum, row) => sum + row.change, 0);
+
   return (
-    <section className="section" id="exchanges">
+    <section className="section section-surface section-exchanges" id="exchanges">
       <div className="section-head">
         <div className="section-title">
           <h2>交易所</h2>
@@ -38,34 +53,72 @@ export function ExchangeSection({
         </div>
         <span className="section-total num">{usd(totalUsd)}</span>
       </div>
-      <div className="table">
-        <div className="thead grid-token">
-          <div>平台</div>
-          <div className="right">余额</div>
-          <div className="right hide-md">状态</div>
-        </div>
-        {exchanges.map((exchange) => {
-          const status = statusText(exchange);
-          const label = LABEL[exchange.exchange] || exchange.exchange;
-          return (
-            <div className="trow grid-token" key={exchange.exchange}>
-              <div className="cell-token">
-                <TokenIcon
-                  symbol={label}
-                  localSrc={`/icons/exchanges/${exchange.exchange}.png`}
-                  size={28}
-                  shape="square"
-                />
-                <span className="cell-token-text">
-                  <b>{label}</b>
-                  <span>仅读取余额，无下单 / 提现权限</span>
-                </span>
+      <div className="exchange-layout">
+        <div className="table exchange-balance-table">
+          <div className="thead exchange-balance-grid">
+            <div>平台</div>
+            <div className="right">余额</div>
+            <div className="right hide-md">状态</div>
+          </div>
+          {exchanges.map((exchange) => {
+            const status = statusText(exchange);
+            const label = LABEL[exchange.exchange] || exchange.exchange;
+            return (
+              <div className="trow exchange-balance-grid" key={exchange.exchange}>
+                <div className="cell-token">
+                  <TokenIcon
+                    symbol={label}
+                    localSrc={`/icons/exchanges/${exchange.exchange}.png`}
+                    size={28}
+                    shape="square"
+                  />
+                  <span className="cell-token-text">
+                    <b>{label}</b>
+                    <span>仅读取余额，无下单 / 提现权限</span>
+                  </span>
+                </div>
+                <div className="right cell-main num">{usd(exchange.balanceUsd)}</div>
+                <div className={`right cell-sub hide-md ${status.cls}`}>{status.text}</div>
               </div>
-              <div className="right cell-main num">{usd(exchange.balanceUsd)}</div>
-              <div className={`right cell-sub hide-md ${status.cls}`}>{status.text}</div>
+            );
+          })}
+        </div>
+
+        <aside className="exchange-change-panel" aria-label="交易所资产变动">
+          <div className="exchange-change-head">
+            <div>
+              <b>交易所资产变动</b>
+              <span>{changes?.enoughData ? `对比 ${changes.rangeLabel}` : "历史积累中"}</span>
             </div>
-          );
-        })}
+            <strong className={`num ${deltaClass(totalChange)}`}>{signedUsd(totalChange)}</strong>
+          </div>
+          <div className="seg exchange-range">
+            {CHANGE_RANGES.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={range === item.key ? "active" : ""}
+                onClick={() => onRangeChange(item.key)}
+              >
+                {item.short}
+              </button>
+            ))}
+          </div>
+          <div className="exchange-change-list">
+            {exchanges.map((exchange) => {
+              const row = exchangeChanges.get(exchange.exchange);
+              return (
+                <div className="exchange-change-row" key={`change-${exchange.exchange}`}>
+                  <span>{LABEL[exchange.exchange]}</span>
+                  <span className="num">{row ? `${usd(row.before)} → ${usd(row.after)}` : usd(exchange.balanceUsd)}</span>
+                  <b className={`num ${deltaClass(row?.change ?? 0)}`}>
+                    {row ? `${signedUsd(row.change)} · ${signedPct(row.pct)}` : "—"}
+                  </b>
+                </div>
+              );
+            })}
+          </div>
+        </aside>
       </div>
     </section>
   );

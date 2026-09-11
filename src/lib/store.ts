@@ -7,6 +7,7 @@ import type {
   OnchainBreakdown,
   PortfolioState,
   SnapshotPoint,
+  WalletProtocolCacheEntry,
   WalletTokenCacheEntry,
   Wallet,
 } from "./types";
@@ -100,6 +101,8 @@ export function defaultState(): PortfolioState {
     lastRefresh: null,
     usdCnyRate: rate,
     onchainBreakdown: null,
+    tokenCache: {},
+    protocolCache: {},
     encryptedSecrets: null,
   };
 }
@@ -202,6 +205,10 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
     tokenCache:
       raw.tokenCache && typeof raw.tokenCache === "object"
         ? (raw.tokenCache as Record<string, WalletTokenCacheEntry>)
+        : {},
+    protocolCache:
+      raw.protocolCache && typeof raw.protocolCache === "object"
+        ? (raw.protocolCache as Record<string, WalletProtocolCacheEntry>)
         : {},
     encryptedSecrets: raw.encryptedSecrets ?? null,
     lastFullRefreshAt: typeof raw.lastFullRefreshAt === "string" ? raw.lastFullRefreshAt : null,
@@ -415,6 +422,13 @@ export async function updateTokenCache(cache: Record<string, WalletTokenCacheEnt
   return s;
 }
 
+export async function updateProtocolCache(cache: Record<string, WalletProtocolCacheEntry>) {
+  const s = await readStore();
+  s.protocolCache = cache;
+  await writeStore(s);
+  return s;
+}
+
 export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: string }) {
   const s = await readStore();
   const snap: SnapshotPoint = {
@@ -461,9 +475,15 @@ export function computeTotals(s: PortfolioState) {
  * attribution maps stay on the server and are served through `/api/changes`.
  */
 export function publicState(s: PortfolioState) {
-  const { encryptedSecrets: _omitSecrets, tokenCache: _omitTokenCache, ...rest } = s;
+  const {
+    encryptedSecrets: _omitSecrets,
+    tokenCache: _omitTokenCache,
+    protocolCache: _omitProtocolCache,
+    ...rest
+  } = s;
   void _omitSecrets;
   void _omitTokenCache;
+  void _omitProtocolCache;
   const snapshots = s.snapshots.map((point) => ({
     ts: point.ts,
     totalUsd: point.totalUsd,

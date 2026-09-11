@@ -41,7 +41,7 @@ export function FlowSection({
   const events = summary?.events ?? [];
 
   return (
-    <section className="section" id="flows">
+    <section className="section section-surface section-flows" id="flows">
       <div className="section-head">
         <div className="section-title">
           <h2>资金变动流水</h2>

@@ -1,7 +1,7 @@
 # 0xStudy Checker / Asset Monitor 完整需求规格
 
 > 本文是项目的唯一业务与交付规格，汇总 2026-09-08 至 2026-09-11 已明确的要求。  
-> 目标仓库：`Ssw7777/asset-monitor`；目标部署：Vercel `0x-study`。  
+> 目标仓库：`Ssw7777/asset-monitor`；目标部署：Vercel `0xstudybank`。
 > 产品名称：**0xStudy Checker**。  
 > 本文优先级高于临时 UI 假数据、演示基线和旧桌面版实现。
 
@@ -33,7 +33,7 @@
 ```text
 GitHub: Ssw7777/asset-monitor
         ↓ 自动构建 / Preview
-Vercel: 0x-study
+Vercel: 0xstudybank
         ↓
 0xStudy Checker 网页看板
 ```
@@ -482,7 +482,7 @@ Bybit 模块已明确删除，不显示占位卡、输入框、环境变量说�
 
 ### 12.1 项目
 
-- Vercel 团队 / 账户：`0x-study`
+- Vercel 项目：`0xstudybank`
 - 项目：与 `asset-monitor` GitHub 仓库关联的项目
 - 区域：优先 `hkg1`，有利于中国网络与 Binance 可用性；如实测失败再评估 `sin1`，不可静默切换。
 
@@ -589,7 +589,7 @@ node_modules
 
 1. 将完整改动提交到 `Ssw7777/asset-monitor` 对应分支。
 2. 将三条新增地址写入持久地址库，并确认当前实际地址总数 / 50 上限。
-3. 在 Vercel `0x-study` 配置生产环境变量；尤其是 DeBank Access Key 与 Turso。
+3. 在 Vercel `0xstudybank` 配置生产环境变量；尤其是 DeBank Access Key 与 Turso。
 4. 部署 Preview，真实刷新验证：链总额、DApp 明细、三家交易所和手动资产。
 5. 解决真实环境中公共 Rabby 接口 429 的最后验证：有 `DEBANK_ACCESS_KEY` 时必须走官方接口；无 Key 时页面显示“部分明细受限流影响，已保留最近成功数据”，而不是空白或错误总额。
 6. 验收通过后发布 Production。

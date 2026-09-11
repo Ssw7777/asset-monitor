@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { TokenHolding } from "@/lib/types";
 import { amountNum, priceUsd, shortAddr, usd } from "./format";
-import { TokenIcon } from "./TokenIcon";
+import { localChainIcon, TokenIcon } from "./TokenIcon";
 
 function percent(value: number, total: number) {
   if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return 0;
@@ -94,9 +94,9 @@ export function TokenTable({
     () => groups.reduce((sum, group) => sum + group.valueUsd, 0),
     [groups]
   );
-  /** 小于 10 USDT 的一律折叠成一行，避免一堆小额代币把主列表冲散。 */
-  const mainGroups = useMemo(() => groups.filter((group) => group.valueUsd >= 10), [groups]);
-  const dustGroups = useMemo(() => groups.filter((group) => group.valueUsd < 10), [groups]);
+  /** 小于 50 USDT 的一律折叠成一行，避免一堆小额代币把主列表冲散。 */
+  const mainGroups = useMemo(() => groups.filter((group) => group.valueUsd >= 50), [groups]);
+  const dustGroups = useMemo(() => groups.filter((group) => group.valueUsd < 50), [groups]);
   const dustTotal = useMemo(
     () => dustGroups.reduce((sum, group) => sum + group.valueUsd, 0),
     [dustGroups]
@@ -158,7 +158,7 @@ export function TokenTable({
             <span className="chain-chip" style={{ justifyContent: "flex-end" }}>
               <TokenIcon
                 symbol={topChain.chainName}
-                localSrc={`/icons/chains/${topChain.chain}.png`}
+                localSrc={localChainIcon(topChain.chain)}
                 size={16}
                 shape="square"
               />
@@ -181,7 +181,7 @@ export function TokenTable({
                   <span className="name" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <TokenIcon
                       symbol={chain.chainName}
-                      localSrc={`/icons/chains/${chain.chain}.png`}
+                      localSrc={localChainIcon(chain.chain)}
                       size={16}
                       shape="square"
                     />
@@ -218,7 +218,7 @@ export function TokenTable({
   };
 
   return (
-    <section className="section" id="tokens">
+    <section className="section section-surface section-tokens" id="tokens">
       <div className="section-head">
         <div className="section-title">
           <h2>代币</h2>
@@ -274,7 +274,7 @@ export function TokenTable({
                 </span>
                 <span className="cell-token-text">
                   <b>小额资产 {dustGroups.length} 项</b>
-                  <span>每项低于 10 USDT · {dustOpen ? "点击收起" : "点击展开"}</span>
+                  <span>每项低于 50 USDT · {dustOpen ? "点击收起" : "点击展开"}</span>
                 </span>
               </div>
               <div className="right cell-main num hide-md">—</div>

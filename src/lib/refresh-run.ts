@@ -9,6 +9,7 @@ import {
   setLastFullRefresh,
   updateExchanges,
   updateOnchainBreakdown,
+  updateProtocolCache,
   updateTokenCache,
   updateWallets,
 } from "@/lib/store";
@@ -102,14 +103,16 @@ export async function runRefresh(
 
   if (!fast) {
     const tokenCache = { ...(state.tokenCache || {}) };
-    const wallets = await refreshWallets(state.wallets, tokenCache, { budget: opts.walletBudget });
+    const protocolCache = { ...(state.protocolCache || {}) };
+    const wallets = await refreshWallets(state.wallets, tokenCache, protocolCache, { budget: opts.walletBudget });
     await updateWallets(wallets);
     await updateTokenCache(tokenCache);
+    await updateProtocolCache(protocolCache);
     await setLastFullRefresh(now);
     partial = wallets.some((wallet) => wallet.status !== "ok");
 
     try {
-      const onchainBreakdown = await refreshOnchainBreakdown(wallets, tokenCache);
+      const onchainBreakdown = await refreshOnchainBreakdown(wallets, tokenCache, protocolCache);
       const previous = state.onchainBreakdown ?? null;
       // 限流时不要用“更少的成功地址”覆盖上一轮完整明细：保留旧明细，只更新限流状态。
       const richer = !previous || onchainBreakdown.successfulWallets >= previous.successfulWallets;

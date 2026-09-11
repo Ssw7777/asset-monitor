@@ -12,6 +12,17 @@ export function iconSlug(name: string) {
     .replace(/[^a-z0-9]/g, "");
 }
 
+const LOCAL_CHAIN_ICONS = new Set([
+  "abs", "ape", "arb", "avax", "base", "bsc", "eth", "gravity", "hood", "ink", "klay",
+  "linea", "matic", "megaeth", "merlin", "monad", "op", "opbnb", "plasma", "rsk", "scrl",
+  "xlayer", "zora",
+]);
+
+/** 只返回实际随项目发布的链图标，避免浏览器先请求不存在的本地文件。 */
+export function localChainIcon(id: string) {
+  return LOCAL_CHAIN_ICONS.has(id) ? `/icons/chains/${id}.png` : undefined;
+}
+
 export function TokenIcon({
   symbol,
   logoUrl,

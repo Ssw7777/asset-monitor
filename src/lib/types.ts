@@ -193,6 +193,12 @@ export interface WalletTokenCacheEntry {
   coveredChains: string[];
 }
 
+/** 某个地址的 DeFi 协议明细缓存（服务端持久化，避免 Vercel 冷启动后丢失多钱包仓位）。 */
+export interface WalletProtocolCacheEntry {
+  at: string;
+  protocols: Record<string, unknown>[];
+}
+
 export interface PortfolioState {
   manual: ManualAsset[];
   wallets: Wallet[];
@@ -206,6 +212,8 @@ export interface PortfolioState {
   onchainBreakdown?: OnchainBreakdown | null;
   /** 逐地址的代币明细缓存（服务端专用，不下发浏览器） */
   tokenCache?: Record<string, WalletTokenCacheEntry>;
+  /** 逐地址的协议明细缓存（服务端专用，不下发浏览器） */
+  protocolCache?: Record<string, WalletProtocolCacheEntry>;
   /** Optional encrypted CEX keys at rest (server-only) */
   encryptedSecrets?: EncryptedSecretsBlob | null;
 }

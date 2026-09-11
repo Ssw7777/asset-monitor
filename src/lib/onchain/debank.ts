@@ -7,6 +7,7 @@ import type {
   OnchainBreakdown,
   TokenLine,
   TokenHolding,
+  WalletProtocolCacheEntry,
   WalletTokenCacheEntry,
   Wallet,
 } from "../types";
@@ -34,7 +35,6 @@ interface WalletTokenDetail {
 }
 
 const cache = new Map<string, { detail: TotalBalanceDetail; at: number }>();
-const protocolCache = new Map<string, { protocols: Record<string, unknown>[]; at: number }>();
 const TTL = 5 * 60 * 1000;
 /** 协议明细变化慢，缓存 6 小时；每轮只补少数几个地址，避免把公共接口额度用光。 */
 const PROTOCOL_TTL = 6 * 60 * 60 * 1000;
@@ -273,10 +273,15 @@ async function fetchWalletDetail(address: string, force = false): Promise<{ deta
   return hit ? { detail: hit.detail, status: "cached" } : { detail: null, status: "error" };
 }
 
-async function fetchComplexProtocols(address: string): Promise<Record<string, unknown>[] | null> {
+type ProtocolCache = Record<string, WalletProtocolCacheEntry>;
+
+async function fetchComplexProtocols(
+  address: string,
+  store: ProtocolCache
+): Promise<Record<string, unknown>[] | null> {
   const normalized = address.toLowerCase();
-  const hit = protocolCache.get(normalized);
-  if (hit && Date.now() - hit.at < PROTOCOL_TTL) return hit.protocols;
+  const hit = store[normalized] || null;
+  if (hit && Date.now() - new Date(hit.at).getTime() < PROTOCOL_TTL) return hit.protocols;
   const key = process.env.DEBANK_ACCESS_KEY;
   const urls: Array<{ url: string; headers?: Record<string, string> }> = [];
   if (key) {
@@ -292,7 +297,7 @@ async function fetchComplexProtocols(address: string): Promise<Record<string, un
     const response = await fetchJson(candidate.url, candidate.headers);
     if (response.data !== null) {
       const protocols = unwrapArray(response.data);
-      protocolCache.set(normalized, { protocols, at: Date.now() });
+      store[normalized] = { protocols, at: new Date().toISOString() };
       return protocols;
     }
   }
@@ -464,6 +469,7 @@ async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: num
 export async function refreshWallets(
   wallets: Wallet[],
   tokenStore: TokenCache,
+  protocolStore: ProtocolCache,
   opts: { budget?: number } = {}
 ): Promise<Wallet[]> {
   if (!wallets.length) return [];
@@ -499,14 +505,14 @@ export async function refreshWallets(
   const targetIds = new Set(targets.map((wallet) => wallet.id));
   /** 本轮补协议明细的少数地址（6 小时缓存），优先最久没补过的。 */
   const protocolTargets = new Set(
-    [...wallets]
+    [...targets]
       .filter((wallet) => {
-        const hit = protocolCache.get(wallet.address.toLowerCase());
-        return !hit || Date.now() - hit.at >= PROTOCOL_TTL;
+        const hit = protocolStore[wallet.address.toLowerCase()];
+        return !hit || Date.now() - new Date(hit.at).getTime() >= PROTOCOL_TTL;
       })
       .sort((left, right) => {
-        const leftAt = protocolCache.get(left.address.toLowerCase())?.at ?? 0;
-        const rightAt = protocolCache.get(right.address.toLowerCase())?.at ?? 0;
+        const leftAt = new Date(protocolStore[left.address.toLowerCase()]?.at || 0).getTime();
+        const rightAt = new Date(protocolStore[right.address.toLowerCase()]?.at || 0).getTime();
         if (leftAt !== rightAt) return leftAt - rightAt;
         return right.balanceUsd - left.balanceUsd;
       })
@@ -538,7 +544,7 @@ export async function refreshWallets(
       if (usd >= 0.01 && wantsProtocolDetail) {
         // Same task, right after the total: avoids a second request storm and keeps
         // the total request from eating the rate limit before DApp/token detail loads.
-        await fetchComplexProtocols(wallet.address);
+        await fetchComplexProtocols(wallet.address, protocolStore);
         if (wantsTokenDetail) {
           await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
         }
@@ -554,7 +560,7 @@ export async function refreshWallets(
       };
     }
     if (status === "cached") {
-      if (usd >= 0.01 && wantsProtocolDetail) await fetchComplexProtocols(wallet.address);
+      if (usd >= 0.01 && wantsProtocolDetail) await fetchComplexProtocols(wallet.address, protocolStore);
       // 公共 DeBank 接口失败时，代币明细仍可能从 Zerion 拿到，所以这里也尝试补一次
       if (wantsTokenDetail) {
         await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
@@ -671,7 +677,8 @@ const rounded = (value: number) => Math.round(value * 100) / 100;
 
 export async function refreshOnchainBreakdown(
   wallets: Wallet[],
-  tokenStore: TokenCache
+  tokenStore: TokenCache,
+  protocolStore: ProtocolCache
 ): Promise<OnchainBreakdown> {
   const chainMap = new Map<string, {
     id: string;
@@ -702,7 +709,8 @@ export async function refreshOnchainBreakdown(
     // network storm for addresses whose total request just failed.
     const cachedDetail = cache.get(wallet.address.toLowerCase())?.detail ?? null;
     const detail = cachedDetail;
-    const protocols = detail ? protocolCache.get(wallet.address.toLowerCase())?.protocols ?? null : null;
+    // 协议缓存持久化后不再依赖本次函数实例里的余额缓存；冷启动也能聚合全部钱包。
+    const protocols = protocolStore[wallet.address.toLowerCase()]?.protocols ?? null;
     const tokenDetail = tokenStore[wallet.address.toLowerCase()] ?? null;
     if (wallet.status === "cached" || wallet.status === "error" || wallet.status === "stale") {
       cachedWallets += 1;

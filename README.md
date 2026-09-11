@@ -44,7 +44,7 @@ pnpm dev                       # 本地开发
 pnpm build && pnpm start       # 生产构建预览
 ```
 
-部署链路：`GitHub: Ssw7777/asset-monitor` → Vercel 项目 `0x-study`（`vercel.json` 固定 `hkg1`，
+部署链路：`GitHub: Ssw7777/asset-monitor` → Vercel 项目 `0xstudybank`（`vercel.json` 固定 `hkg1`，
 便于中国网络与 Binance 访问）。正式站点不需要本机常驻服务，也不创建 Chrome 启动器。
 
 ### 云端定时扫描
