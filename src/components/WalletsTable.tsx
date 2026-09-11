@@ -377,7 +377,9 @@ export function WalletsTable({
         <span>
           显示 {filtered.length} / {wallets.length} 个地址 · 上限 50
         </span>
-        <span>链上数据来自 DeBank（并发 4 · 错峰 320ms · 失败不归零）</span>
+        <span>
+          免费接口额度限制：余额前 3 的地址每 5 分钟更新，其余按 20 分钟 / 1 小时分级轮换，失败保留上次数据
+        </span>
       </div>
     </section>
   );

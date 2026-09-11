@@ -32,8 +32,8 @@ async function handle(req: NextRequest) {
     mode === "fast"
       ? await runRefresh({ fast: true })
       : mode === "full"
-        ? await runRefresh({ walletBudget: 8 })
-        : await runRefresh({ auto: true, walletBudget: 8 });
+        ? await runRefresh({})
+        : await runRefresh({ auto: true });
   return NextResponse.json({
     ok: true,
     mode,

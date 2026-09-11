@@ -71,8 +71,8 @@ export async function runRefresh(
   opts: { fast?: boolean; auto?: boolean; walletBudget?: number } = {}
 ): Promise<RefreshResult> {
   const state = await readStore();
-  // auto：距上次全量超过 15 分钟就跑全量，否则只跑快速（交易所 + 快照）
-  const fullIntervalMs = 15 * 60 * 1000;
+  // auto：距上次全量超过 5 分钟就跑全量（刷全部地址），否则只跑快速（交易所 + 快照）
+  const fullIntervalMs = 5 * 60 * 1000;
   const sinceFull = state.lastFullRefreshAt
     ? Date.now() - new Date(state.lastFullRefreshAt).getTime()
     : Number.MAX_SAFE_INTEGER;

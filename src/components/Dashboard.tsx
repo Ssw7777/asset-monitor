@@ -47,9 +47,9 @@ interface PortfolioPayload {
   refreshStatus?: "ok" | "failed";
 }
 
-/** 交易所余额 + 快照：5 分钟一次；链上 / DApp / 代币：15 分钟一次（省额度）。 */
+/** 每 5 分钟刷新全部地址余额 + 交易所；协议 / 代币明细各自 6 小时缓存轮换。 */
 const AUTO_TICK_MS = 5 * 60 * 1000;
-const AUTO_FULL_EVERY_MS = 15 * 60 * 1000;
+const AUTO_FULL_EVERY_MS = 5 * 60 * 1000;
 const BACKOFF_BASE_MS = 30_000;
 const BACKOFF_MAX_MS = 10 * 60 * 1000;
 
@@ -415,7 +415,7 @@ export function Dashboard() {
             <span className={`tag ${error || data.refreshStatus === "failed" ? "neg" : "pos"}`}>
               {error || data.refreshStatus === "failed" ? "数据获取失败" : "数据刷新成功"}
             </span>
-            <span className="small">交易所 5 分钟 · 链上 15 分钟</span>
+            <span className="small">每 5 分钟刷新全部地址 + 交易所</span>
           </div>
         </div>
 

@@ -36,18 +36,23 @@ interface WalletTokenDetail {
 const cache = new Map<string, { detail: TotalBalanceDetail; at: number }>();
 const protocolCache = new Map<string, { protocols: Record<string, unknown>[]; at: number }>();
 const TTL = 5 * 60 * 1000;
+/** 协议明细变化慢，缓存 6 小时；每轮只补少数几个地址，避免把公共接口额度用光。 */
+const PROTOCOL_TTL = 6 * 60 * 60 * 1000;
+const PROTOCOL_WALLET_BUDGET = 3;
+/** 单轮对公共接口的硬上限（地址数），避免一次把 IP 额度打光导致长时间 429。 */
+const MAX_PUBLIC_REQUESTS_PER_RUN = 10;
 const CONCURRENCY = 4;
 /**
  * 公共接口的请求间隔。实测：同一个 IP 按 450ms 间隔逐个请求 10 个地址全部 200，
  * 而并发 4 + 320ms 错峰会被判定为突发流量直接 429。所以这里放慢到 700ms。
  */
-const PUBLIC_REQUEST_INTERVAL_MS = 1200;
+const PUBLIC_REQUEST_INTERVAL_MS = 900;
 /**
  * 代币明细额度控制：Zerion 免费版是 300 次/天，所以
  * 每轮最多补 8 个地址、单地址结果缓存 6 小时（持久化到数据库，冷启动也不重复消耗）。
  */
 const TOKEN_TTL_MS = 6 * 60 * 60 * 1000;
-const TOKEN_WALLET_BUDGET = 8;
+const TOKEN_WALLET_BUDGET = 4;
 const TOKEN_CHAINS_PER_WALLET = 3;
 const TOKEN_MIN_WALLET_USD = 10;
 const TOKEN_MIN_CHAIN_USD = 5;
@@ -271,7 +276,7 @@ async function fetchWalletDetail(address: string, force = false): Promise<{ deta
 async function fetchComplexProtocols(address: string): Promise<Record<string, unknown>[] | null> {
   const normalized = address.toLowerCase();
   const hit = protocolCache.get(normalized);
-  if (hit && Date.now() - hit.at < TTL) return hit.protocols;
+  if (hit && Date.now() - hit.at < PROTOCOL_TTL) return hit.protocols;
   const key = process.env.DEBANK_ACCESS_KEY;
   const urls: Array<{ url: string; headers?: Record<string, string> }> = [];
   if (key) {
@@ -465,31 +470,49 @@ export async function refreshWallets(
   const now = new Date().toISOString();
   const originalOrder = new Map(wallets.map((wallet, index) => [wallet.id, index]));
   /**
-   * 公共接口对同一 IP 限流很凶，一次全量扫 20+ 地址必然大部分失败、数据就一直是旧的。
-   * 所以每轮只刷「最久没成功」的一批（budget），轮着来，保证每个地址都能被更新到。
+   * 余额每轮都刷（每个地址 1 个请求，错峰 900ms），保证「最新」时间戳一直是刚刚；
+   * 协议明细 / 代币明细变化慢，改成按各自 6 小时缓存轮换补，避免把公共接口额度一次用光。
    */
   const staleness = (wallet: Wallet) =>
     wallet.lastSuccess?.at ? Date.now() - new Date(wallet.lastSuccess.at).getTime() : Number.MAX_SAFE_INTEGER;
-  const ordered = [...wallets].sort((left, right) => {
-    const gap = staleness(right) - staleness(left);
-    if (gap !== 0) return gap;
-    return right.balanceUsd - left.balanceUsd;
-  });
-  const budget = Math.max(1, Math.min(opts.budget ?? wallets.length, wallets.length));
   /**
-   * 轮换策略：先保大额地址（余额 ≥ 500 USDT 且超过 45 分钟没更新），
-   * 再用「最久没成功」的地址把这一轮填满。这样重要的钱包不会被小额地址挤到队尾。
+   * 分级刷新（免费公共接口撑不住 25 个地址 × 每 5 分钟，必须分优先级）：
+   *   A 档（余额前 3）：超过 5 分钟就刷 —— 这些是真正的大钱
+   *   B 档（4~12 名）：超过 20 分钟刷
+   *   C 档（其余）  ：超过 60 分钟刷
+   * 每轮再有硬上限（MAX_PUBLIC_REQUESTS_PER_RUN），防止一次打光额度被长时间封 IP。
    */
-  const bigStale = wallets
-    .filter((wallet) => wallet.balanceUsd >= 500 && staleness(wallet) > 45 * 60 * 1000)
-    .sort((left, right) => right.balanceUsd - left.balanceUsd);
-  const picked = new Map<string, Wallet>();
-  for (const wallet of [...bigStale, ...ordered]) {
-    if (picked.size >= budget) break;
-    picked.set(wallet.id, wallet);
-  }
-  const targets = [...picked.values()];
+  const byValue = [...wallets].sort((left, right) => right.balanceUsd - left.balanceUsd);
+  const staleFor = (wallet: Wallet, minutes: number) =>
+    !wallet.lastSuccess?.at ||
+    Date.now() - new Date(wallet.lastSuccess.at).getTime() > minutes * 60 * 1000;
+  const tiered = [
+    ...byValue.slice(0, 3).filter((wallet) => staleFor(wallet, 5)),
+    ...byValue.slice(3, 12).filter((wallet) => staleFor(wallet, 20)),
+    ...byValue.slice(12).filter((wallet) => staleFor(wallet, 60)),
+  ];
+  const budget = Math.max(
+    1,
+    Math.min(opts.budget ?? MAX_PUBLIC_REQUESTS_PER_RUN, MAX_PUBLIC_REQUESTS_PER_RUN)
+  );
+  const targets = tiered.slice(0, budget);
   const targetIds = new Set(targets.map((wallet) => wallet.id));
+  /** 本轮补协议明细的少数地址（6 小时缓存），优先最久没补过的。 */
+  const protocolTargets = new Set(
+    [...wallets]
+      .filter((wallet) => {
+        const hit = protocolCache.get(wallet.address.toLowerCase());
+        return !hit || Date.now() - hit.at >= PROTOCOL_TTL;
+      })
+      .sort((left, right) => {
+        const leftAt = protocolCache.get(left.address.toLowerCase())?.at ?? 0;
+        const rightAt = protocolCache.get(right.address.toLowerCase())?.at ?? 0;
+        if (leftAt !== rightAt) return leftAt - rightAt;
+        return right.balanceUsd - left.balanceUsd;
+      })
+      .slice(0, PROTOCOL_WALLET_BUDGET)
+      .map((wallet) => wallet.address.toLowerCase())
+  );
   /**
    * 本轮要补代币明细的地址：优先“从来没取过”的地址（例如余额抓取失败的币安钱包，
    * 里面的 PONS / stonks 只能靠代币明细补出来），其次按余额从大到小。
@@ -510,8 +533,9 @@ export async function refreshWallets(
     const previous = wallet.balanceUsd;
     const { usd, status } = await fetchWalletUsd(wallet.address, { force: true });
     const wantsTokenDetail = tokenTargets.has(wallet.address.toLowerCase());
+    const wantsProtocolDetail = protocolTargets.has(wallet.address.toLowerCase());
     if (status === "ok") {
-      if (usd >= 0.01) {
+      if (usd >= 0.01 && wantsProtocolDetail) {
         // Same task, right after the total: avoids a second request storm and keeps
         // the total request from eating the rate limit before DApp/token detail loads.
         await fetchComplexProtocols(wallet.address);
@@ -530,7 +554,7 @@ export async function refreshWallets(
       };
     }
     if (status === "cached") {
-      if (usd >= 0.01) await fetchComplexProtocols(wallet.address);
+      if (usd >= 0.01 && wantsProtocolDetail) await fetchComplexProtocols(wallet.address);
       // 公共 DeBank 接口失败时，代币明细仍可能从 Zerion 拿到，所以这里也尝试补一次
       if (wantsTokenDetail) {
         await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
