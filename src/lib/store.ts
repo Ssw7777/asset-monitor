@@ -11,6 +11,7 @@ import type {
   WalletTokenCacheEntry,
   Wallet,
 } from "./types";
+import { detectFlowEventsBetween, PERSISTED_FLOW_LIMIT, PERSISTED_FLOW_MIN_USD } from "./flows";
 import { BASELINE, MIGRATION_WALLETS, SEED_MANUAL, seedWallets } from "./seed";
 import { WALLET_LIMIT, normalizeAddress } from "./wallets";
 
@@ -97,6 +98,7 @@ export function defaultState(): PortfolioState {
     wallets: applyWalletMigrations(seedWallets()),
     exchanges: defaultExchanges(),
     snapshots: seedSnapshots(),
+    flowEvents: [],
     onchainCacheUsd: BASELINE.onchainUsd,
     lastRefresh: null,
     usdCnyRate: rate,
@@ -190,6 +192,7 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
     wallets: applyWalletMigrations(storedWallets),
     exchanges: Array.isArray(raw.exchanges) ? raw.exchanges : d.exchanges,
     snapshots: rawSnapshots.length ? trimSnapshots(rawSnapshots) : d.snapshots,
+    flowEvents: Array.isArray(raw.flowEvents) ? raw.flowEvents : [],
     onchainCacheUsd: Number(raw.onchainCacheUsd) || d.onchainCacheUsd,
     lastRefresh: raw.lastRefresh ?? null,
     usdCnyRate: Number(raw.usdCnyRate) || d.usdCnyRate,
@@ -443,6 +446,17 @@ export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: str
     dapps: point.dapps,
     partial: point.partial === true ? true : undefined,
   };
+  const previous = s.snapshots.at(-1);
+  if (previous && !previous.seeded && previous.wallets && snap.wallets) {
+    const additions = detectFlowEventsBetween(s, previous, snap, PERSISTED_FLOW_MIN_USD);
+    if (additions.length) {
+      const existing = s.flowEvents ?? [];
+      const seen = new Set(existing.map((event) => event.id));
+      s.flowEvents = [...existing, ...additions.filter((event) => !seen.has(event.id))]
+        .sort((left, right) => new Date(left.ts).getTime() - new Date(right.ts).getTime())
+        .slice(-PERSISTED_FLOW_LIMIT);
+    }
+  }
   s.snapshots.push(snap);
   s.snapshots = trimSnapshots(s.snapshots);
   s.lastRefresh = snap.ts;
@@ -479,11 +493,13 @@ export function publicState(s: PortfolioState) {
     encryptedSecrets: _omitSecrets,
     tokenCache: _omitTokenCache,
     protocolCache: _omitProtocolCache,
+    flowEvents: _omitFlowEvents,
     ...rest
   } = s;
   void _omitSecrets;
   void _omitTokenCache;
   void _omitProtocolCache;
+  void _omitFlowEvents;
   const snapshots = s.snapshots.map((point) => ({
     ts: point.ts,
     totalUsd: point.totalUsd,

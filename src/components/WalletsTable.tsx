@@ -378,7 +378,7 @@ export function WalletsTable({
           显示 {filtered.length} / {wallets.length} 个地址 · 上限 50
         </span>
         <span>
-          免费接口额度限制：余额前 3 的地址每 5 分钟更新，其余按 20 分钟 / 1 小时分级轮换，失败保留上次数据
+          每 5 分钟轮询全部地址；单个接口失败时保留上次成功值，不用错误的 0 覆盖
         </span>
       </div>
     </section>

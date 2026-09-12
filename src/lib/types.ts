@@ -87,6 +87,29 @@ export interface SnapshotPoint {
   seeded?: boolean;
 }
 
+export type FlowDirection = "in" | "out" | "transfer";
+export type FlowEntityType = "wallet" | "exchange" | "manual";
+
+/** A durable balance-change alert captured when a snapshot is written. */
+export interface FlowEvent {
+  id: string;
+  ts: string;
+  direction: FlowDirection;
+  amountUsd: number;
+  before: number;
+  after: number;
+  changePct: number | null;
+  entityType: FlowEntityType;
+  entityKey: string;
+  entityLabel: string;
+  entityAddress: string | null;
+  from: string;
+  to: string;
+  matched: boolean;
+  counterparty: string | null;
+  status: "live" | "cached" | "partial";
+}
+
 export interface ChainWalletShare {
   walletId: string;
   walletName: string;
@@ -204,6 +227,8 @@ export interface PortfolioState {
   wallets: Wallet[];
   exchanges: ExchangeBalance[];
   snapshots: SnapshotPoint[];
+  /** Long-lived flow alerts. These survive the seven-day snapshot rotation. */
+  flowEvents?: FlowEvent[];
   onchainCacheUsd: number;
   lastRefresh: string | null;
   /** 最近一次「全量刷新」（链上 + DApp + 代币）的时间，用于自动判断该跑 fast 还是 full */

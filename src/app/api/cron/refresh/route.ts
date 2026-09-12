@@ -24,7 +24,7 @@ async function handle(req: NextRequest) {
   }
 
   /**
-   * mode=auto（默认）：服务端自己判断 —— 距上次全量超过 15 分钟就跑全量，否则只读交易所 + 记快照。
+   * mode=auto（默认）：服务端自己判断 —— 距上次全量超过 5 分钟就跑全量，否则只读交易所 + 记快照。
    * 定时器只要无脑 5 分钟调一次即可，节奏完全由服务端掌握。
    */
   const mode = new URL(req.url).searchParams.get("mode") || "auto";

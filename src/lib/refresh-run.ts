@@ -66,7 +66,7 @@ export interface RefreshResult {
  * 刷新：
  * - fast（默认给 1 分钟级定时器）：只读三家交易所余额 + 写一条快照，几百毫秒完成，
  *   链上 / DApp / 代币沿用上一次结果 —— 这样曲线可以做到分钟级，又不烧 API 额度。
- * - full：交易所 + 链上总额 + DApp + 代币明细，页面上的「刷新全部」和 15 分钟一次的定时任务用这个。
+ * - full：交易所 + 全部地址余额 + DApp / 代币缓存补齐；每 5 分钟定时任务使用这个。
  */
 export async function runRefresh(
   opts: { fast?: boolean; auto?: boolean; walletBudget?: number } = {}

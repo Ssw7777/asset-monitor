@@ -36,11 +36,12 @@ interface WalletTokenDetail {
 
 const cache = new Map<string, { detail: TotalBalanceDetail; at: number }>();
 const TTL = 5 * 60 * 1000;
-/** 协议明细变化慢，缓存 6 小时；每轮只补少数几个地址，避免把公共接口额度用光。 */
+/** 协议明细缓存 6 小时；过期时一轮尝试补齐全部地址，失败则继续保留上次成功值。 */
 const PROTOCOL_TTL = 6 * 60 * 60 * 1000;
-const PROTOCOL_WALLET_BUDGET = 3;
-/** 单轮对公共接口的硬上限（地址数），避免一次把 IP 额度打光导致长时间 429。 */
-const MAX_PUBLIC_REQUESTS_PER_RUN = 10;
+/** Fill every missing/stale wallet protocol record in one full cycle when the API allows it. */
+const PROTOCOL_WALLET_BUDGET = 25;
+/** One five-minute cycle attempts every configured wallet (the UI limit is 50). */
+const MAX_PUBLIC_REQUESTS_PER_RUN = 50;
 const CONCURRENCY = 4;
 /**
  * 公共接口的请求间隔。实测：同一个 IP 按 450ms 间隔逐个请求 10 个地址全部 200，
@@ -479,31 +480,14 @@ export async function refreshWallets(
    * 余额每轮都刷（每个地址 1 个请求，错峰 900ms），保证「最新」时间戳一直是刚刚；
    * 协议明细 / 代币明细变化慢，改成按各自 6 小时缓存轮换补，避免把公共接口额度一次用光。
    */
-  const staleness = (wallet: Wallet) =>
-    wallet.lastSuccess?.at ? Date.now() - new Date(wallet.lastSuccess.at).getTime() : Number.MAX_SAFE_INTEGER;
-  /**
-   * 分级刷新（免费公共接口撑不住 25 个地址 × 每 5 分钟，必须分优先级）：
-   *   A 档（余额前 3）：超过 5 分钟就刷 —— 这些是真正的大钱
-   *   B 档（4~12 名）：超过 20 分钟刷
-   *   C 档（其余）  ：超过 60 分钟刷
-   * 每轮再有硬上限（MAX_PUBLIC_REQUESTS_PER_RUN），防止一次打光额度被长时间封 IP。
-   */
-  const byValue = [...wallets].sort((left, right) => right.balanceUsd - left.balanceUsd);
-  const staleFor = (wallet: Wallet, minutes: number) =>
-    !wallet.lastSuccess?.at ||
-    Date.now() - new Date(wallet.lastSuccess.at).getTime() > minutes * 60 * 1000;
-  const tiered = [
-    ...byValue.slice(0, 3).filter((wallet) => staleFor(wallet, 5)),
-    ...byValue.slice(3, 12).filter((wallet) => staleFor(wallet, 20)),
-    ...byValue.slice(12).filter((wallet) => staleFor(wallet, 60)),
-  ];
+  /** Every scheduled full refresh polls every wallet once. Failed reads retain the last good value. */
   const budget = Math.max(
     1,
     Math.min(opts.budget ?? MAX_PUBLIC_REQUESTS_PER_RUN, MAX_PUBLIC_REQUESTS_PER_RUN)
   );
-  const targets = tiered.slice(0, budget);
+  const targets = wallets.slice(0, budget);
   const targetIds = new Set(targets.map((wallet) => wallet.id));
-  /** 本轮补协议明细的少数地址（6 小时缓存），优先最久没补过的。 */
+  /** 本轮补协议明细的地址（6 小时缓存），优先最久没补过的。 */
   const protocolTargets = new Set(
     [...targets]
       .filter((wallet) => {

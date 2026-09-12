@@ -126,13 +126,25 @@ a {
 
 .section {
   margin-top: 34px;
-}
-
-.section-surface {
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 18px;
+  background: #ffffff;
   box-shadow: 0 4px 16px rgba(25, 35, 60, 0.035);
+}
+
+.section-surface {
+  position: relative;
+}
+
+#trend {
+  border-color: #dce4f3;
+  background: #fafcff;
+}
+
+#chains {
+  border-color: #d9e9f1;
+  background: #f8fcfe;
 }
 
 .section-flows {
@@ -148,6 +160,31 @@ a {
 .section-exchanges {
   border-color: #dcebe6;
   background: #f8fcfa;
+}
+
+#defi {
+  border-color: #eadfd6;
+  background: #fffaf6;
+}
+
+#manual {
+  border-color: #e7e1cd;
+  background: #fffdf6;
+}
+
+#changes {
+  border-color: #e8dfe9;
+  background: #fffaff;
+}
+
+#addresses {
+  border-color: #dfe5e8;
+  background: #fbfcfd;
+}
+
+#export {
+  border-color: #e4e6ea;
+  background: #fcfcfd;
 }
 
 .section-head {
@@ -1286,29 +1323,29 @@ textarea.field {
 }
 
 @media (max-width: 760px) {
-  .section-surface {
+  .section {
     margin-left: -6px;
     margin-right: -6px;
     padding: 14px 6px;
   }
 
-  .section-surface > .section-head {
+  .section > .section-head {
     display: block;
     padding-left: 8px;
     padding-right: 8px;
   }
 
-  .section-surface > .section-head .section-title {
+  .section > .section-head .section-title {
     display: block;
   }
 
-  .section-surface > .section-head .section-title .hint {
+  .section > .section-head .section-title .hint {
     display: block;
     margin-top: 3px;
     line-height: 1.45;
   }
 
-  .section-surface > .section-head > .inline {
+  .section > .section-head > .inline {
     margin-top: 10px;
   }
 

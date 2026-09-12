@@ -347,7 +347,7 @@ export function Dashboard() {
               className="btn btn-accent"
               onClick={() => quietRefresh("full", true)}
               disabled={refreshing}
-              title="每轮轮换刷新最久没更新的 8 个地址，几轮之内所有地址都会被更新"
+              title="立即轮询全部地址和三家交易所，并写入一条持久快照"
             >
               {refreshing ? "刷新中…" : "刷新数据"}
             </button>
