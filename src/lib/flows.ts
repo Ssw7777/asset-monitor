@@ -234,6 +234,22 @@ export function detectFlowEventsBetween(
   return events;
 }
 
+/** Rebuild detectable records from retained snapshots (used once for storage migration and dedupe). */
+export function deriveFlowEventsFromSnapshots(
+  state: PortfolioState,
+  source: SnapshotPoint[] = state.snapshots,
+  minUsd = PERSISTED_FLOW_MIN_USD
+): FlowEvent[] {
+  const snapshots = source
+    .filter((point) => point.wallets)
+    .sort((left, right) => new Date(left.ts).getTime() - new Date(right.ts).getTime());
+  const events: FlowEvent[] = [];
+  for (let index = 1; index < snapshots.length; index += 1) {
+    events.push(...detectFlowEventsBetween(state, snapshots[index - 1], snapshots[index], minUsd));
+  }
+  return events;
+}
+
 /**
  * 大额资金变动流水。
  * 逐张快照对比“每个钱包 / 每家交易所 / 每条手动资产”的余额差，

@@ -11,7 +11,7 @@ import type {
   WalletTokenCacheEntry,
   Wallet,
 } from "./types";
-import { detectFlowEventsBetween, PERSISTED_FLOW_LIMIT, PERSISTED_FLOW_MIN_USD } from "./flows";
+import { deriveFlowEventsFromSnapshots, PERSISTED_FLOW_LIMIT, PERSISTED_FLOW_MIN_USD } from "./flows";
 import { BASELINE, MIGRATION_WALLETS, SEED_MANUAL, seedWallets } from "./seed";
 import { WALLET_LIMIT, normalizeAddress } from "./wallets";
 
@@ -448,7 +448,13 @@ export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: str
   };
   const previous = s.snapshots.at(-1);
   if (previous && !previous.seeded && previous.wallets && snap.wallets) {
-    const additions = detectFlowEventsBetween(s, previous, snap, PERSISTED_FLOW_MIN_USD);
+    // Also backfill all still-retained history on migration, so records visible before
+    // this release become durable before their source snapshots rotate out.
+    const additions = deriveFlowEventsFromSnapshots(
+      s,
+      [...s.snapshots, snap],
+      PERSISTED_FLOW_MIN_USD
+    );
     if (additions.length) {
       const existing = s.flowEvents ?? [];
       const seen = new Set(existing.map((event) => event.id));
