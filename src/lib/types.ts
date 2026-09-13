@@ -85,6 +85,8 @@ export interface SnapshotPoint {
   partial?: boolean;
   /** true 表示这是首次部署写入的演示基线快照，等待真实刷新数据替换。 */
   seeded?: boolean;
+  /** 余额口径升级当轮需要忽略的交易所，避免把算法差额误记为真实流水。 */
+  suppressExchangeFlows?: string[];
 }
 
 export type FlowDirection = "in" | "out" | "transfer";
@@ -235,6 +237,8 @@ export interface PortfolioState {
   lastRefresh: string | null;
   /** 最近一次「全量刷新」（链上 + DApp + 代币）的时间，用于自动判断该跑 fast 还是 full */
   lastFullRefreshAt?: string | null;
+  /** 各交易所已启用的全账户估值口径版本。 */
+  cexValuationVersions?: Partial<Record<ExchangeBalance["exchange"], number>>;
   usdCnyRate: number;
   onchainBreakdown?: OnchainBreakdown | null;
   /** 逐地址的代币明细缓存（服务端专用，不下发浏览器） */

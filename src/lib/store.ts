@@ -41,6 +41,7 @@ function trimSnapshots(list: SnapshotPoint[]): SnapshotPoint[] {
       exchanges: point.exchanges,
       partial: point.partial,
       seeded: point.seeded,
+      suppressExchangeFlows: point.suppressExchangeFlows,
     };
   });
   return changed ? out : sliced;
@@ -110,6 +111,7 @@ export function defaultState(): PortfolioState {
     tokenCache: {},
     protocolCache: {},
     encryptedSecrets: null,
+    cexValuationVersions: {},
   };
 }
 
@@ -173,6 +175,9 @@ function normalizeSnapshot(raw: unknown): SnapshotPoint | null {
         : undefined,
     partial: point.partial === true ? true : undefined,
     seeded: point.seeded === true ? true : undefined,
+    suppressExchangeFlows: Array.isArray(point.suppressExchangeFlows)
+      ? point.suppressExchangeFlows.filter((item): item is string => typeof item === "string")
+      : undefined,
   };
 }
 
@@ -219,6 +224,10 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
         : {},
     encryptedSecrets: raw.encryptedSecrets ?? null,
     lastFullRefreshAt: typeof raw.lastFullRefreshAt === "string" ? raw.lastFullRefreshAt : null,
+    cexValuationVersions:
+      raw.cexValuationVersions && typeof raw.cexValuationVersions === "object"
+        ? raw.cexValuationVersions
+        : {},
   };
 }
 
@@ -468,6 +477,15 @@ export async function setEncryptedSecrets(blob: EncryptedSecretsBlob | null) {
   return s;
 }
 
+export async function updateCexValuationVersions(
+  versions: NonNullable<PortfolioState["cexValuationVersions"]>
+) {
+  const s = await readStore();
+  s.cexValuationVersions = versions;
+  await writeStore(s);
+  return s;
+}
+
 export async function setLastFullRefresh(at: string) {
   const s = await readStore();
   s.lastFullRefreshAt = at;
@@ -502,6 +520,7 @@ export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: str
     manualItems: point.manualItems,
     dapps: point.dapps,
     partial: point.partial === true ? true : undefined,
+    suppressExchangeFlows: point.suppressExchangeFlows,
   };
   const previous = s.snapshots.at(-1);
   if (previous && !previous.seeded && previous.wallets && snap.wallets) {
@@ -557,12 +576,14 @@ export function publicState(s: PortfolioState) {
     tokenCache: _omitTokenCache,
     protocolCache: _omitProtocolCache,
     flowEvents: _omitFlowEvents,
+    cexValuationVersions: _omitCexValuationVersions,
     ...rest
   } = s;
   void _omitSecrets;
   void _omitTokenCache;
   void _omitProtocolCache;
   void _omitFlowEvents;
+  void _omitCexValuationVersions;
   const snapshots = s.snapshots.map((point) => ({
     ts: point.ts,
     totalUsd: point.totalUsd,

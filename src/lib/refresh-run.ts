@@ -8,6 +8,7 @@ import {
   readStore,
   setLastFullRefresh,
   updateExchanges,
+  updateCexValuationVersions,
   updateOnchainBreakdown,
   updateProtocolCache,
   updateTokenCache,
@@ -88,6 +89,14 @@ export async function runRefresh(
     fetchGateBalance(blob),
   ]);
 
+  // 全账户估值口径首次成功时只建立新基准，不把“旧算法 → 新算法”的差额记成交易。
+  const valuationVersion = 2;
+  const previousVersions = state.cexValuationVersions ?? {};
+  const cexResults = { okx, binance, gate } as const;
+  const suppressExchangeFlows = (Object.keys(cexResults) as Array<keyof typeof cexResults>).filter(
+    (exchange) => cexResults[exchange].status === "ok" && previousVersions[exchange] !== valuationVersion
+  );
+
   const prevMap = Object.fromEntries(state.exchanges.map((item) => [item.exchange, item])) as Record<
     string,
     ExchangeBalance | undefined
@@ -160,7 +169,14 @@ export async function runRefresh(
       ? Object.fromEntries(breakdown.dapps.map((dapp) => [dapp.name, dapp.netUsd]))
       : undefined,
     partial,
+    suppressExchangeFlows: suppressExchangeFlows.length ? suppressExchangeFlows : undefined,
   });
+  if (suppressExchangeFlows.length) {
+    await updateCexValuationVersions({
+      ...previousVersions,
+      ...Object.fromEntries(suppressExchangeFlows.map((exchange) => [exchange, valuationVersion])),
+    });
+  }
   const finalState = await readStore();
   const walletOk = finalState.wallets.filter((wallet) => wallet.status === "ok").length;
   // “可用”= 本轮拿到实时数据，或沿用了上次成功数据（余额依然有效）。

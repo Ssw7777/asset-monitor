@@ -108,7 +108,7 @@ export function TokenTable({
   }, [dustGroups]);
   const coverage = onchainUsd > 0 ? (shownTotal / onchainUsd) * 100 : 0;
 
-  const renderRow = (group: TokenGroup, index: number) => {
+  const renderCard = (group: TokenGroup) => {
     const key = group.symbol.toUpperCase();
     const open = openKey === key;
     const share = percent(group.valueUsd, shownTotal);
@@ -116,7 +116,7 @@ export function TokenTable({
     return (
       <div
         key={key}
-        className={`trow grid-token clickable${open ? " open" : ""}`}
+        className={`token-card clickable${open ? " open" : ""}`}
         onClick={() => setOpenKey(open ? null : key)}
         role="button"
         tabIndex={0}
@@ -127,48 +127,50 @@ export function TokenTable({
           }
         }}
       >
-        <div className="cell-token">
-          <TokenIcon symbol={group.symbol} logoUrl={group.logoUrl} />
-          <span className="cell-token-text">
-            <b>{group.symbol}</b>
-            <span>
-              {group.kind === "stable" ? "稳定币" : group.kind === "native" ? "主链币" : "现货"}
-              {group.chains.length > 1
-                ? ` · ${group.chains.length} 条链`
-                : group.wallets.length > 1
-                  ? ` · ${group.wallets.length} 个钱包`
-                  : ""}
+        <div className="token-card-head">
+          <div className="cell-token">
+            <TokenIcon symbol={group.symbol} logoUrl={group.logoUrl} />
+            <span className="cell-token-text">
+              <b>{group.symbol}</b>
+              <span>
+                {group.kind === "stable" ? "稳定币" : group.kind === "native" ? "主链币" : "现货"}
+              </span>
             </span>
-          </span>
-        </div>
-        <div className="right cell-main num hide-md">{priceUsd(group.price)}</div>
-        <div className="right num hide-md">
-          <div className="cell-main">{amountNum(group.amount)}</div>
-          <div className="cell-sub">{group.symbol}</div>
-        </div>
-        <div className="value-cell num">
-          <div className="cell-main">{usd(group.valueUsd)}</div>
-          <div className="value-bar" aria-hidden="true">
-            <i style={{ width: `${share}%` }} />
           </div>
-          <div className="cell-sub">{share.toFixed(2)}%</div>
+          <div className="token-card-value value-cell num">
+            <div className="cell-main">{usd(group.valueUsd)}</div>
+            <div className="value-bar" aria-hidden="true">
+              <i style={{ width: `${share}%` }} />
+            </div>
+            <div className="cell-sub">{share.toFixed(2)}%</div>
+          </div>
         </div>
-        <div className="right hide-lg">
-          {group.chains.length === 1 ? (
-            <span className="chain-chip" style={{ justifyContent: "flex-end" }}>
-              <TokenIcon
-                symbol={topChain.chainName}
-                localSrc={localChainIcon(topChain.chain)}
-                size={16}
-                shape="square"
-              />
-              {topChain.chainName}
-            </span>
-          ) : (
-            <span className="cell-sub">{group.chains.length} 条链</span>
-          )}
+
+        <div className="token-card-metrics">
+          <div>
+            <span>价格</span>
+            <b className="num">{priceUsd(group.price)}</b>
+          </div>
+          <div>
+            <span>数量</span>
+            <b className="num">{amountNum(group.amount)} {group.symbol}</b>
+          </div>
+          <div>
+            <span>分布</span>
+            <b className="token-card-location">
+              {group.chains.length === 1 && topChain ? (
+                <TokenIcon
+                  symbol={topChain.chainName}
+                  localSrc={localChainIcon(topChain.chain)}
+                  size={15}
+                  shape="square"
+                />
+              ) : null}
+              {group.chains.length === 1 ? topChain?.chainName : `${group.chains.length} 条链`}
+              {` · ${group.wallets.length} 个钱包`}
+            </b>
+          </div>
         </div>
-        <div className="right cell-main num hide-lg">{group.wallets.length}</div>
 
         {open && (
           <div className="row-detail">
@@ -245,58 +247,44 @@ export function TokenTable({
       </div>
 
       {groups.length ? (
-        <div className="table">
-          <div className="thead grid-token">
-            <div>代币</div>
-            <div className="right hide-md">价格</div>
-            <div className="right hide-md">数量</div>
-            <div className="right">价值</div>
-            <div className="right hide-lg">链</div>
-            <div className="right hide-lg">钱包</div>
-          </div>
-          {(dustOpen ? groups : mainGroups).map((group, index) => renderRow(group, index))}
-          {dustGroups.length > 0 && (
-            <div
-              className="trow grid-token clickable"
-              onClick={() => setDustOpen((value) => !value)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  setDustOpen((value) => !value);
-                }
-              }}
-            >
-              <div className="cell-token">
-                <span className="token-icon fallback" style={{ width: 28, height: 28 }}>
-                  ⋯
-                </span>
-                <span className="cell-token-text">
-                  <b>小额资产 {dustGroups.length} 项</b>
-                  <span>每项低于 50 USDT · {dustOpen ? "点击收起" : "点击展开"}</span>
-                </span>
-              </div>
-              <div className="right cell-main num hide-md">—</div>
-              <div className="right cell-main num hide-md">—</div>
-              <div className="value-cell num">
-                <div className="cell-main">{usd(dustTotal)}</div>
-                <div className="value-bar" aria-hidden="true">
-                  <i style={{ width: `${percent(dustTotal, shownTotal)}%` }} />
+        <div className="token-table-shell">
+          <div className="token-card-grid">
+            {mainGroups.map(renderCard)}
+            {dustGroups.length > 0 && (
+              <button
+                type="button"
+                className="token-dust-card"
+                onClick={() => setDustOpen((value) => !value)}
+                aria-expanded={dustOpen}
+              >
+                <div className="cell-token">
+                  <span className="token-icon fallback" style={{ width: 28, height: 28 }}>
+                    ⋯
+                  </span>
+                  <span className="cell-token-text">
+                    <b>小额资产 {dustGroups.length} 项</b>
+                    <span>每项低于 50 USDT · {dustOpen ? "点击收起" : "点击展开"}</span>
+                  </span>
                 </div>
-                <div className="cell-sub">{percent(dustTotal, shownTotal).toFixed(2)}%</div>
-              </div>
-              <div className="right cell-sub hide-lg">多链</div>
-              <div className="right cell-main num hide-lg">{dustWallets}</div>
-            </div>
-          )}
+                <div className="token-dust-value value-cell num">
+                  <div className="cell-main">{usd(dustTotal)}</div>
+                  <div className="value-bar" aria-hidden="true">
+                    <i style={{ width: `${percent(dustTotal, shownTotal)}%` }} />
+                  </div>
+                  <div className="cell-sub">{percent(dustTotal, shownTotal).toFixed(2)}%</div>
+                </div>
+                <span className="token-dust-meta">多链 · {dustWallets} 个钱包</span>
+              </button>
+            )}
+            {dustOpen && dustGroups.map(renderCard)}
+          </div>
           <div className="table-foot">
             <span>代币明细合计 {usd(shownTotal)} · 占链上总额 {coverage.toFixed(1)}%</span>
             <span>
               {tokenSource === "debank"
                 ? "数据源：DeBank Pro"
                 : tokenSource === "zerion"
-                  ? "数据源：Zerion（免费）"
+                  ? "数据源：Zerion"
                   : "数据源：公共接口（限流时会缺）"}
               {coverage < 95 ? " · 差额为未取到明细或未计价资产，不计入总额" : partial ? " · 本轮有地址使用上次成功数据" : ""}
             </span>

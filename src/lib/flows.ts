@@ -82,7 +82,9 @@ function collectDeltas(state: PortfolioState, prev: SnapshotPoint, cur: Snapshot
     });
   }
 
+  const suppressedExchanges = new Set(cur.suppressExchangeFlows ?? []);
   for (const [key, label] of Object.entries(EXCHANGE_LABEL)) {
+    if (suppressedExchanges.has(key)) continue;
     const before = Number(prev.exchanges?.[key] ?? 0);
     const after = Number(cur.exchanges?.[key] ?? before);
     out.push({
@@ -201,7 +203,7 @@ export function detectFlowEventsBetween(
       entityLabel: delta.entityLabel,
       entityAddress: delta.entityAddress,
       from: delta.entityLabel,
-      to: "外部（未匹配到去向）",
+      to: "外部",
       matched: false,
       counterparty: null,
       status,
@@ -223,7 +225,7 @@ export function detectFlowEventsBetween(
       entityKey: delta.entityKey,
       entityLabel: delta.entityLabel,
       entityAddress: delta.entityAddress,
-      from: "外部（收益 / 转入 / 价格波动）",
+      from: "外部",
       to: delta.entityLabel,
       matched: false,
       counterparty: null,

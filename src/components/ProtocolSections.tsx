@@ -94,6 +94,7 @@ export function ProtocolSections({
     const host = hostOf(dapp.siteUrl);
     const debt = dapp.debtUsd > 0.01;
     const stat = perfByName.get(dapp.name);
+    const reference = (perf?.rangeLabel ?? "所选区间").replace(/\s+/g, "");
     return (
       <div className="protocol" key={`${dapp.id}-${dapp.name}`}>
         <div className="protocol-head">
@@ -122,12 +123,17 @@ export function ProtocolSections({
               {debt ? ` · 负债 ${usd(dapp.debtUsd)}` : ""}
             </span>
           </div>
-          <span className="inline" style={{ justifyContent: "flex-end" }}>
-            {stat && stat.changeUsd !== 0 && (
-              <span className={`small num ${deltaClass(stat.changeUsd)}`}>
-                {signedUsd(stat.changeUsd)}（{signedPct(stat.changePct)}）
-                {stat.apy != null ? ` · 年化 ${stat.apy.toFixed(1)}%` : ""}
-              </span>
+          <span className="protocol-summary">
+            {stat && (
+              stat.comparable ? (
+                <span className={`small num protocol-history ${deltaClass(stat.changeUsd)}`}>
+                  {reference}前余额 {usd(stat.pastUsd)} · 目前 {signedUsd(stat.changeUsd)}
+                  {stat.changePct != null ? `（${signedPct(stat.changePct)}）` : ""}
+                  {stat.apy != null ? ` · 年化 ${stat.apy.toFixed(1)}%` : ""}
+                </span>
+              ) : (
+                <span className="small protocol-history">{reference}前暂无可比余额</span>
+              )
             )}
             <span className="section-total num">{usd(dapp.netUsd)}</span>
           </span>
@@ -192,7 +198,9 @@ export function ProtocolSections({
         </div>
         <span className="inline">
           {perf?.available ? (
-            <span className="small">较 {perf.rangeLabel} · 年化为该区间线性推算</span>
+            <span className="small">
+              按 {perf.rangeLabel}对比 · 年化为区间线性推算{perf.partial ? " · 含缓存" : ""}
+            </span>
           ) : (
             <span className="small">{perf?.reason ?? ""}</span>
           )}

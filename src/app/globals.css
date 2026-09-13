@@ -157,15 +157,15 @@ a {
 
 .overview-duo {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: stretch;
+  grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
+  align-items: start;
   gap: 20px;
   margin-top: 34px;
 }
 
 .overview-duo > .section {
   min-width: 0;
-  height: 100%;
+  height: auto;
   margin-top: 0;
 }
 
@@ -753,6 +753,124 @@ textarea.field {
   gap: 10px;
 }
 
+/* 代币卡片：桌面双列，压缩纵向空间，同时保留完整价格、数量和分布信息。 */
+.token-table-shell {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.token-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 10px;
+  padding: 10px;
+}
+
+.token-card {
+  min-width: 0;
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  background: #fff;
+  padding: 13px 14px;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.token-card.clickable {
+  cursor: pointer;
+}
+
+.token-card:hover,
+.token-card.open {
+  border-color: #c8bce7;
+  box-shadow: 0 5px 14px rgba(57, 41, 94, 0.07);
+}
+
+.token-card-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.token-card-value {
+  flex: 0 0 min(42%, 160px);
+}
+
+.token-card-metrics {
+  display: grid;
+  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 8px;
+  margin-top: 13px;
+  border-top: 1px solid var(--line-2);
+  padding-top: 11px;
+}
+
+.token-card-metrics > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.token-card-metrics span {
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+.token-card-metrics b {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.token-card-location {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.token-dust-card {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 0.32fr) auto;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  background: #f8f6fc;
+  color: var(--ink);
+  padding: 11px 14px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.token-dust-card:hover {
+  border-color: #c8bce7;
+  background: #f5f1fc;
+}
+
+.token-dust-meta {
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.token-table-shell > .table-foot {
+  border-top: 1px solid var(--line-2);
+  padding: 11px 14px;
+}
+
 .flow-meta {
   display: none;
   grid-column: 1 / -1;
@@ -918,23 +1036,19 @@ textarea.field {
 }
 
 .section-flows .section-head {
-  display: block;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
-.section-flows .section-title,
-.section-flows .section-title .hint {
+.section-flows .section-title {
   white-space: nowrap;
 }
 
-.section-flows .section-title .hint {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .section-flows .section-head > .inline {
-  flex-wrap: nowrap;
-  justify-content: space-between;
-  margin-top: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
 }
 
 .section-flows .section-total {
@@ -960,6 +1074,29 @@ textarea.field {
 
 .flow-entity {
   min-width: 0;
+}
+
+.flow-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.flow-scroll .thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  border-radius: 0;
+}
+
+.flow-scroll::-webkit-scrollbar {
+  width: 7px;
+}
+
+.flow-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #cbd7e8;
 }
 
 .section-flows .table,
@@ -1256,6 +1393,21 @@ textarea.field {
   color: #b8431f;
 }
 
+.protocol-summary {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.protocol-history {
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .notice-stack {
   display: grid;
   gap: 8px;
@@ -1468,6 +1620,12 @@ textarea.field {
   }
 }
 
+@media (max-width: 900px) {
+  .token-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 760px) {
   .topbar-inner {
     gap: 8px;
@@ -1520,6 +1678,43 @@ textarea.field {
   .section-flows .section-head > .inline {
     flex-wrap: wrap;
     justify-content: flex-start;
+    margin-left: 0;
+  }
+
+  .flow-scroll {
+    max-height: 390px;
+  }
+
+  .token-card-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .token-card-metrics > div:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .token-dust-card {
+    grid-template-columns: minmax(0, 1fr) minmax(100px, 0.4fr);
+  }
+
+  .token-dust-meta {
+    display: none;
+  }
+
+  .protocol-head {
+    align-items: flex-start;
+  }
+
+  .protocol-summary {
+    flex: 0 0 auto;
+    flex-direction: column-reverse;
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .protocol-history {
+    max-width: 52vw;
+    white-space: normal;
   }
 
   .exchange-change-panel {

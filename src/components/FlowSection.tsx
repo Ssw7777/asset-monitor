@@ -4,11 +4,16 @@ import type { FlowEvent, FlowRangeKey, FlowSummary } from "@/lib/flows";
 import { FLOW_RANGES } from "@/lib/flows";
 import { amountNum, shortAddr, timeAgo, usd } from "./format";
 
-const DIRECTION: Record<FlowEvent["direction"], { label: string; cls: string }> = {
-  in: { label: "增加", cls: "pos" },
-  out: { label: "减少", cls: "neg" },
-  transfer: { label: "疑似转账", cls: "" },
+const DIRECTION: Record<FlowEvent["direction"], { cls: string }> = {
+  in: { cls: "pos" },
+  out: { cls: "neg" },
+  transfer: { cls: "" },
 };
+
+/** 兼容历史记录：只收起“外部”的解释性括号，不改钱包或协议名称里的括号。 */
+function compactExternalLabel(value: string) {
+  return /^外部[（(]/.test(value) ? "外部" : value;
+}
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleString("zh-CN", {
@@ -45,10 +50,6 @@ export function FlowSection({
       <div className="section-head">
         <div className="section-title">
           <h2>资金变动流水</h2>
-          <span className="hint">
-            超{minUsd}U变动记录 · 已扫描 {summary?.intervals ?? 0}轮
-            {summary?.scannedFrom ? ` · 最早${timeAgo(summary.scannedFrom)}` : ""}
-          </span>
         </div>
         <div className="inline">
           <span className="section-total num">
@@ -85,49 +86,47 @@ export function FlowSection({
 
       {events.length ? (
         <div className="table">
-          <div className="thead grid-flow">
-            <div>时间</div>
-            <div className="right">变动</div>
-            <div className="hide-md">变动钱包/交易所</div>
-            <div className="right hide-md">余额变化</div>
+          <div className="flow-scroll">
+            <div className="thead grid-flow">
+              <div>时间</div>
+              <div className="right">变动</div>
+              <div className="hide-md">变动钱包/交易所</div>
+              <div className="right hide-md">余额变化</div>
+            </div>
+            {events.map((event) => {
+              const direction = DIRECTION[event.direction];
+              const from = compactExternalLabel(event.from);
+              const to = compactExternalLabel(event.to);
+              return (
+                <div className="trow grid-flow" key={event.id}>
+                  <div className="cell-token-text">
+                    <b>{formatTime(event.ts)}</b>
+                    <span>{timeAgo(event.ts)}</span>
+                  </div>
+                  <div className={`right num ${direction.cls}`}>
+                    <div className="cell-main">
+                      {event.direction === "out" ? "-" : event.direction === "in" ? "+" : "±"}
+                      {usd(event.amountUsd)}
+                    </div>
+                  </div>
+                  <div className="cell-token-text flow-entity hide-md">
+                    <b>{from} → {to}</b>
+                    <span>
+                      {event.entityAddress ? shortAddr(event.entityAddress) : event.entityLabel}
+                    </span>
+                  </div>
+                  <div className="right cell-sub num flow-balance hide-md">
+                    {amountNum(event.before)} → {usd(event.after)}
+                  </div>
+                  <div className="flow-meta cell-sub">
+                    {from} → {to}
+                    {event.entityAddress ? ` · ${shortAddr(event.entityAddress)}` : ""} · {amountNum(event.before)} →{" "}
+                    {usd(event.after)}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          {events.map((event) => {
-            const direction = DIRECTION[event.direction];
-            return (
-              <div className="trow grid-flow" key={event.id}>
-                <div className="cell-token-text">
-                  <b>{formatTime(event.ts)}</b>
-                  <span>{timeAgo(event.ts)}</span>
-                </div>
-                <div className={`right num ${direction.cls}`}>
-                  <div className="cell-main">
-                    {event.direction === "out" ? "-" : event.direction === "in" ? "+" : "±"}
-                    {usd(event.amountUsd)}
-                  </div>
-                  <div className="cell-sub">
-                    {direction.label}
-                    {event.changePct == null
-                      ? ""
-                      : ` · ${event.changePct > 0 ? "+" : ""}${event.changePct.toFixed(2)}%`}
-                  </div>
-                </div>
-                <div className="cell-token-text flow-entity hide-md">
-                  <b>{event.from} → {event.to}</b>
-                  <span>
-                    {event.entityAddress ? shortAddr(event.entityAddress) : event.entityLabel}
-                  </span>
-                </div>
-                <div className="right cell-sub num flow-balance hide-md">
-                  {amountNum(event.before)} → {usd(event.after)}
-                </div>
-                <div className="flow-meta cell-sub">
-                  {event.from} → {event.to}
-                  {event.entityAddress ? ` · ${shortAddr(event.entityAddress)}` : ""} · {amountNum(event.before)} →{" "}
-                  {usd(event.after)}
-                </div>
-              </div>
-            );
-          })}
           <div className="table-foot">
             <span>
               净流入 {usd(summary?.netUsd ?? 0)} · 共 {events.length} 条记录（只显示最新 {events.length} 条）
