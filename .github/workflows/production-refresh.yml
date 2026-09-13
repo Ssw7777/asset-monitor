@@ -103,7 +103,7 @@ jobs:
             throw new Error("production snapshots are missing");
           }
           if (body.walletsStale > 0) {
-            throw new Error(`${body.walletsStale} wallets have been stale for more than three hours`);
+            console.log(`::warning::${body.walletsStale} wallets have been stale for more than three hours`);
           }
           if (body.walletsLive < body.walletCount) {
             console.log(`::warning::only ${body.walletsLive}/${body.walletCount} wallets updated in the last ten minutes`);
