@@ -210,6 +210,8 @@ export interface EncryptedSecretsBlob {
 /** 某个地址的代币明细缓存（服务端持久化，避免每次冷启动都去消耗 API 额度）。 */
 export interface WalletTokenCacheEntry {
   at: string;
+  /** 最近一次向代币数据源发起请求的时间；失败也记录，用于严格控制每日额度。 */
+  lastAttemptAt?: string;
   tokens: Array<TokenLine & { chain: string }>;
   unpricedCount: number;
   unpricedByChain: Record<string, number>;

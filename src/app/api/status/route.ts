@@ -11,8 +11,11 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
+  const authorization = req.headers.get("authorization") || "";
   const token = new URL(req.url).searchParams.get("token") || "";
-  const authorized = (!!secret && token === secret) || (await isAuthenticated());
+  const authorized =
+    (!!secret && (authorization === `Bearer ${secret}` || token === secret)) ||
+    (await isAuthenticated());
   if (!authorized) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
@@ -21,11 +24,15 @@ export async function GET(req: NextRequest) {
   const wallets = state.wallets;
   const tenMinutes = 10 * 60 * 1000;
   const threeHours = 3 * 60 * 60 * 1000;
+  const refreshAgeSeconds = state.lastRefresh
+    ? Math.max(0, Math.round((Date.now() - new Date(state.lastRefresh).getTime()) / 1000))
+    : null;
   return NextResponse.json({
     ok: true,
     now: new Date().toISOString(),
     lastRefresh: state.lastRefresh,
     lastFullRefreshAt: state.lastFullRefreshAt ?? null,
+    refreshAgeSeconds,
     snapshotCount: state.snapshots.length,
     walletCount: wallets.length,
     walletsLive: wallets.filter((wallet) => {

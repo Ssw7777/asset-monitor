@@ -47,7 +47,7 @@ interface PortfolioPayload {
   refreshStatus?: "ok" | "partial" | "failed";
 }
 
-/** 每 5 分钟轮询全部地址余额 + 交易所；协议 / 代币明细各自 6 小时缓存轮换。 */
+/** 每 5 分钟轮询全部地址余额 + 交易所；协议缓存 6 小时，代币明细约 3 小时轮换。 */
 const AUTO_TICK_MS = 5 * 60 * 1000;
 const AUTO_FULL_EVERY_MS = 5 * 60 * 1000;
 const BACKOFF_BASE_MS = 30_000;

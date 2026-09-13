@@ -49,11 +49,11 @@ const CONCURRENCY = 4;
  */
 const PUBLIC_REQUEST_INTERVAL_MS = 900;
 /**
- * 代币明细额度控制：Zerion 免费版是 300 次/天，所以
- * 每轮最多补 8 个地址、单地址结果缓存 6 小时（持久化到数据库，冷启动也不重复消耗）。
+ * 代币明细额度控制：每个地址最多每 3 小时尝试一次、每轮最多 1 个地址。
+ * 25 个钱包稳定上限约 25 × 8 = 200 次/天；失败同样写 lastAttemptAt，避免重试风暴。
  */
-const TOKEN_TTL_MS = 6 * 60 * 60 * 1000;
-const TOKEN_WALLET_BUDGET = 4;
+const TOKEN_TTL_MS = 3 * 60 * 60 * 1000;
+const TOKEN_WALLET_BUDGET = 1;
 const TOKEN_CHAINS_PER_WALLET = 3;
 const TOKEN_MIN_WALLET_USD = 10;
 const TOKEN_MIN_CHAIN_USD = 5;
@@ -416,11 +416,25 @@ async function fetchWalletTokens(
 ): Promise<{ detail: WalletTokenDetail | null; status: WalletFetchStatus }> {
   const normalized = address.toLowerCase();
   const hit = store[normalized] || null;
-  const fresh = hit ? Date.now() - new Date(hit.at).getTime() < TOKEN_TTL_MS : false;
+  const freshnessAnchor = hit?.lastAttemptAt || hit?.at;
+  const fresh = freshnessAnchor
+    ? Date.now() - new Date(freshnessAnchor).getTime() < TOKEN_TTL_MS
+    : false;
   if (!force && hit && fresh) return { detail: hit, status: "cached" };
+  const attemptedAt = new Date().toISOString();
+  store[normalized] = hit
+    ? { ...hit, lastAttemptAt: attemptedAt }
+    : {
+        at: "",
+        lastAttemptAt: attemptedAt,
+        tokens: [],
+        unpricedCount: 0,
+        unpricedByChain: {},
+        coveredChains: [],
+      };
   const detail = await fetchTokenListOnce(normalized, chainIds);
   if (detail) {
-    store[normalized] = { at: new Date().toISOString(), ...detail };
+    store[normalized] = { at: attemptedAt, lastAttemptAt: attemptedAt, ...detail };
     return { detail, status: "ok" };
   }
   return hit ? { detail: hit, status: "cached" } : { detail: null, status: "error" };
@@ -432,7 +446,9 @@ type TokenCache = Record<string, WalletTokenCacheEntry>;
 function tokenCacheStale(address: string, store: TokenCache) {
   const hit = store[address.toLowerCase()];
   if (!hit) return true;
-  return Date.now() - new Date(hit.at).getTime() >= TOKEN_TTL_MS;
+  const anchor = hit.lastAttemptAt || hit.at;
+  if (!anchor) return true;
+  return Date.now() - new Date(anchor).getTime() >= TOKEN_TTL_MS;
 }
 
 /** Chains worth a token request: the largest ones that actually hold value. */
@@ -478,7 +494,7 @@ export async function refreshWallets(
   /**
    * 每轮按最久未成功优先尝试地址余额（每个地址 1 个请求，错峰 900ms）；
    * 只有真实成功才更新 lastSuccess，失败继续保留缓存和原成功时间。
-   * 协议明细 / 代币明细变化慢，按各自 6 小时缓存轮换补，避免把公共接口额度一次用光。
+   * 协议明细按 6 小时、代币明细按 3 小时缓存轮换补，避免把公共接口额度一次用光。
    */
   /** Every scheduled full refresh polls every wallet once. Failed reads retain the last good value. */
   const budget = Math.max(
@@ -540,9 +556,9 @@ export async function refreshWallets(
         // Same task, right after the total: avoids a second request storm and keeps
         // the total request from eating the rate limit before DApp/token detail loads.
         await fetchComplexProtocols(wallet.address, protocolStore);
-        if (wantsTokenDetail) {
-          await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
-        }
+      }
+      if (wantsTokenDetail) {
+        await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
       }
       const balanceUsd = Math.round(usd * 100) / 100;
       return {

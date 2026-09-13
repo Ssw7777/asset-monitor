@@ -199,6 +199,7 @@ export async function fetchZerionTokens(address: string): Promise<ProviderResult
     if (!response.ok) return null;
     const body = (await response.json()) as {
       data?: Array<{
+        id?: string;
         attributes?: {
           quantity?: { float?: number };
           value?: number;
@@ -220,7 +221,7 @@ export async function fetchZerionTokens(address: string): Promise<ProviderResult
           symbol,
           amount,
           valueUsd,
-          tokenId: symbol,
+          tokenId: String(item.id || symbol),
           logoUrl: attributes.fungible_info?.icon?.url,
           chain: normalizeChainId(String(item.relationships?.chain?.data?.id || "unknown")),
         };

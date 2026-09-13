@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { requireAuth } from "@/lib/auth";
 import { runRefresh } from "@/lib/refresh-run";
+import { acquireRefreshLease, releaseRefreshLease } from "@/lib/store";
 
 export const preferredRegion = ["hkg1"];
 export const dynamic = "force-dynamic";
@@ -28,21 +30,35 @@ async function handle(req: NextRequest) {
    * 定时器只要无脑 5 分钟调一次即可，节奏完全由服务端掌握。
    */
   const mode = new URL(req.url).searchParams.get("mode") || "auto";
-  const result =
-    mode === "fast"
-      ? await runRefresh({ fast: true })
-      : mode === "full"
-        ? await runRefresh({})
-        : await runRefresh({ auto: true });
-  return NextResponse.json({
-    ok: true,
-    mode,
-    ran: result.payload.refreshMode,
-    refreshedAt: new Date().toISOString(),
-    walletOk: result.walletOk,
-    walletTotal: result.walletTotal,
-    totals: result.totals,
-  });
+  const leaseOwner = req.headers.get("x-idempotency-key") || randomUUID();
+  const acquired = await acquireRefreshLease(leaseOwner);
+  if (!acquired) {
+    return NextResponse.json({ ok: true, mode, ran: "skipped", reason: "refresh_in_progress" }, { status: 202 });
+  }
+
+  try {
+    const result =
+      mode === "fast"
+        ? await runRefresh({ fast: true })
+        : mode === "full"
+          ? await runRefresh({})
+          : await runRefresh({ auto: true });
+    const refreshStatus = result.payload.refreshStatus;
+    return NextResponse.json(
+      {
+        ok: refreshStatus !== "failed",
+        mode,
+        ran: result.payload.refreshMode,
+        refreshStatus,
+        refreshedAt: new Date().toISOString(),
+        walletOk: result.walletOk,
+        walletTotal: result.walletTotal,
+      },
+      { status: refreshStatus === "failed" ? 503 : 200 }
+    );
+  } finally {
+    await releaseRefreshLease(leaseOwner);
+  }
 }
 
 export async function GET(req: NextRequest) {

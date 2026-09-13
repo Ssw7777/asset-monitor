@@ -46,7 +46,11 @@ function trimSnapshots(list: SnapshotPoint[]): SnapshotPoint[] {
   return changed ? out : sliced;
 }
 
-type GlobalCache = { __amStore?: PortfolioState; __amStoreLock?: Promise<void> };
+type GlobalCache = {
+  __amStore?: PortfolioState;
+  __amStoreLock?: Promise<void>;
+  __amRefreshLease?: { owner: string; expiresAt: number };
+};
 const g = globalThis as unknown as GlobalCache;
 
 function isServerless(): boolean {
@@ -252,6 +256,56 @@ async function ensureTursoSchema() {
     )
   `);
   return client;
+}
+
+/**
+ * Acquire a short distributed lease so scheduled and manual refreshes cannot overwrite
+ * each other. Turso is authoritative in production; memory is only the local fallback.
+ */
+export async function acquireRefreshLease(owner: string, ttlMs = 90_000): Promise<boolean> {
+  const now = Date.now();
+  const expiresAt = now + ttlMs;
+  if (preferTurso()) {
+    try {
+      const client = await ensureTursoSchema();
+      await client.execute(`
+        CREATE TABLE IF NOT EXISTS refresh_leases (
+          name TEXT PRIMARY KEY,
+          owner TEXT NOT NULL,
+          expires_at INTEGER NOT NULL
+        )
+      `);
+      const result = await client.execute({
+        sql: `INSERT INTO refresh_leases (name, owner, expires_at) VALUES (?, ?, ?)
+              ON CONFLICT(name) DO UPDATE SET owner = excluded.owner, expires_at = excluded.expires_at
+              WHERE refresh_leases.expires_at <= ? OR refresh_leases.owner = ?`,
+        args: ["portfolio-refresh", owner, expiresAt, now, owner],
+      });
+      return result.rowsAffected === 1;
+    } catch (error) {
+      console.error("[store] refresh lease acquire failed; using process-local fallback", error);
+    }
+  }
+
+  const lease = g.__amRefreshLease;
+  if (lease && lease.expiresAt > now && lease.owner !== owner) return false;
+  g.__amRefreshLease = { owner, expiresAt };
+  return true;
+}
+
+export async function releaseRefreshLease(owner: string): Promise<void> {
+  if (preferTurso()) {
+    try {
+      const client = await ensureTursoSchema();
+      await client.execute({
+        sql: "DELETE FROM refresh_leases WHERE name = ? AND owner = ?",
+        args: ["portfolio-refresh", owner],
+      });
+    } catch (error) {
+      console.error("[store] refresh lease release failed", error);
+    }
+  }
+  if (g.__amRefreshLease?.owner === owner) delete g.__amRefreshLease;
 }
 
 async function readTurso(): Promise<PortfolioState | null> {
