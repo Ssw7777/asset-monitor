@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { requireAuth } from "@/lib/auth";
+import { hasCronAuthorization } from "@/lib/cron-auth";
 import { runRefresh } from "@/lib/refresh-run";
 import { acquireRefreshLease, releaseRefreshLease } from "@/lib/store";
 
@@ -9,18 +10,11 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * 云端定时刷新入口：Vercel Cron（或任意外部定时器）用
- * `Authorization: Bearer $CRON_SECRET` 调用即可；已登录的浏览器会话同样可用。
- * 没有配置 CRON_SECRET 时，只有已登录会话能触发，避免被外部随意调用。
+ * 云端定时刷新入口：接受 Vercel Cron 的 CRON_SECRET、指定 GitHub Actions
+ * 工作流签发的短期 OIDC Token，或已经登录的浏览器会话。
  */
 async function handle(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  const header = req.headers.get("authorization") || "";
-  // 支持两种带法：Header（Vercel Cron / cron-job.org）或 ?token=（GitHub Actions 之类不方便设头的场景）
-  const queryToken = new URL(req.url).searchParams.get("token") || "";
-  const headerOk = !!secret && (header === `Bearer ${secret}` || queryToken === secret);
-
-  if (!headerOk) {
+  if (!(await hasCronAuthorization(req))) {
     const denied = await requireAuth();
     if (denied) return denied;
   }

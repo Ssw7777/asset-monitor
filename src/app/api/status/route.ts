@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
+import { hasCronAuthorization } from "@/lib/cron-auth";
 import { readStore } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -7,15 +8,10 @@ export const dynamic = "force-dynamic";
 /**
  * 轻量状态接口：用来确认「云端定时刷新到底有没有在跑」。
  * 只返回时间与数量，不含任何余额、地址或密钥；
- * 需要登录会话，或带 ?token=$CRON_SECRET。
+ * 需要登录会话，或通过云端定时任务鉴权。
  */
 export async function GET(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  const authorization = req.headers.get("authorization") || "";
-  const token = new URL(req.url).searchParams.get("token") || "";
-  const authorized =
-    (!!secret && (authorization === `Bearer ${secret}` || token === secret)) ||
-    (await isAuthenticated());
+  const authorized = (await hasCronAuthorization(req)) || (await isAuthenticated());
   if (!authorized) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
