@@ -49,17 +49,15 @@ Vercel 负责构建和运行网页/API；Turso 负责持久化业务数据，不
 
 ### 云端定时扫描
 
-`GET /api/cron/refresh?mode=auto` 与页面上的刷新逻辑共用同一实现，应由可信定时器每 5 分钟调用一次：
+正式调度器位于公开且无密钥的
+[`Ssw7777/0xstudybank-scheduler`](https://github.com/Ssw7777/0xstudybank-scheduler)。
+它使用 GitHub 短期 OIDC 身份访问刷新接口，不保存长期 Token、钱包地址、余额或密码。
 
-```bash
-curl --fail-with-body -H "Authorization: Bearer $CRON_SECRET" "https://<你的域名>/api/cron/refresh?mode=auto"
-```
-
-- 云端定时请求必须携带正确的 `Authorization: Bearer <CRON_SECRET>`；浏览器内的手动刷新仍使用登录会话。兼容用的 `?token=` 仅保留给旧本机任务，迁移后停用。
-- Vercel Hobby 每天运行一次 `/api/cron/refresh` 作为云端兜底；五分钟 GitHub Actions 工作流已在本地准备，待仓库权限和运行费用方案确认后上传启用。
-- 每轮都会写入一条 Turso 快照；2016 条上限覆盖 7 天，达到 50 USDT 的变动会在快照淘汰前另存为长期流水。
+- 每 5 分钟先调用一次 `mode=fast`，刷新三家交易所并写入一条 Turso 快照；2016 条上限覆盖 7 天，达到 50 USDT 的变动会在快照淘汰前另存为长期流水。
+- 同一周期再按约 1 分钟间隔调用 5 个 `mode=wallet-batch` 小批次，每批最多 3 个最久未尝试的钱包；连续两轮形成不断循环的 10 批窗口，正常约 10 分钟覆盖当前 25 个钱包。
+- Rabby 请求严格串行且至少间隔 3 秒；失败保留上次成功余额，不写成 0，也不会让失败地址长期霸占队列。
 - 刷新使用 Turso 分布式租约避免计划任务、手动刷新互相覆盖；云端状态检查只输出时间和数量，不输出余额、地址或密钥。
-- 云端五分钟工作流启用前，钱包轮询仍由 Windows 计划任务触发，因此电脑和代理需要在线；电脑关闭时只剩 Vercel 每日兜底。
+- Vercel 每天保留一次兜底；正式五分钟调度完全在云端运行，不依赖 Windows 计划任务、本机开机或本机代理。
 - Zerion 只校准代币明细，每轮最多一个地址、单地址三小时内不重复尝试，25 个钱包稳定上限约 200 次/天。
 
 ### 环境变量（全部服务端）

@@ -223,6 +223,8 @@ export interface WalletTokenCacheEntry {
 /** 某个地址的 DeFi 协议明细缓存（服务端持久化，避免 Vercel 冷启动后丢失多钱包仓位）。 */
 export interface WalletProtocolCacheEntry {
   at: string;
+  /** Last upstream attempt, including failures, so one bad address cannot retry every minute. */
+  lastAttemptAt?: string;
   protocols: Record<string, unknown>[];
 }
 

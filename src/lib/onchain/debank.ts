@@ -38,16 +38,19 @@ const cache = new Map<string, { detail: TotalBalanceDetail; at: number }>();
 const TTL = 5 * 60 * 1000;
 /** 协议明细缓存 6 小时；过期时一轮尝试补齐全部地址，失败则继续保留上次成功值。 */
 const PROTOCOL_TTL = 6 * 60 * 60 * 1000;
-/** Fill every missing/stale wallet protocol record in one full cycle when the API allows it. */
-const PROTOCOL_WALLET_BUDGET = 25;
-/** One five-minute cycle attempts every configured wallet (the UI limit is 50). */
-const MAX_PUBLIC_REQUESTS_PER_RUN = 50;
-const CONCURRENCY = 4;
+/** Failed protocol reads retry after 30 minutes instead of occupying every rolling batch. */
+const PROTOCOL_RETRY_TTL = 30 * 60 * 1000;
+/** One protocol request per batch is enough to refresh all 25 records well inside the 6-hour TTL. */
+const PROTOCOL_WALLET_BUDGET = 1;
+/** Ten rolling batches of three cover all 25 configured wallets in about ten minutes. */
+const MAX_PUBLIC_REQUESTS_PER_RUN = 3;
+/** Keep wallet work fully sequential so Rabby requests never overlap. */
+const CONCURRENCY = 1;
 /**
- * 公共接口的请求间隔。实测：同一个 IP 按 450ms 间隔逐个请求 10 个地址全部 200，
- * 而并发 4 + 320ms 错峰会被判定为突发流量直接 429。所以这里放慢到 700ms。
+ * Rabby / DeBank 公共接口严格串行，并让相邻请求至少间隔 3 秒。
+ * 每个云端小批次最多 3 个钱包，避免 Vercel 共用出口形成突发流量。
  */
-const PUBLIC_REQUEST_INTERVAL_MS = 900;
+const PUBLIC_REQUEST_INTERVAL_MS = 3_000;
 /**
  * 代币明细额度控制：每个地址最多每 3 小时尝试一次、每轮最多 1 个地址。
  * 25 个钱包稳定上限约 25 × 8 = 200 次/天；失败同样写 lastAttemptAt，避免重试风暴。
@@ -183,21 +186,23 @@ async function fetchJson(
   url: string,
   headers: Record<string, string> = {},
   retries = 2
-): Promise<{ data: unknown | null; status: number }> {
+): Promise<{ data: unknown | null; status: number; attempted: boolean }> {
   const publicEndpoint = isPublicEndpoint(url);
   // 冷却期内直接返回限流状态：不再发请求，调用方沿用上次成功数据。
-  if (publicEndpoint && publicBlocked()) return { data: null, status: 429 };
+  if (publicEndpoint && publicBlocked()) return { data: null, status: 429, attempted: false };
+  let attempted = false;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
       await waitForPublicSlot(url);
+      attempted = true;
       const response = await fetch(url, {
         headers: { ...commonHeaders, ...headers },
         cache: "no-store",
-        signal: AbortSignal.timeout(18_000),
+        signal: AbortSignal.timeout(10_000),
       });
       if (response.ok) {
         if (publicEndpoint) publicConsecutive429 = 0;
-        return { data: await response.json(), status: response.status };
+        return { data: await response.json(), status: response.status, attempted };
       }
       if (response.status === 429) {
         const wait = retryDelay(response, attempt);
@@ -209,69 +214,86 @@ async function fetchJson(
             await sleep(wait);
             continue;
           }
-          return { data: null, status: 429 };
+          return { data: null, status: 429, attempted };
         }
         if (attempt < retries) {
           await sleep(wait);
           continue;
         }
-        return { data: null, status: 429 };
+        return { data: null, status: 429, attempted };
       }
       if (response.status >= 500 && attempt < retries) {
         await sleep(retryDelay(response, attempt));
         continue;
       }
-      return { data: null, status: response.status };
+      return { data: null, status: response.status, attempted };
     } catch {
       if (attempt < retries) {
         await sleep(Math.min(4_000, 600 * 2 ** attempt));
         continue;
       }
-      return { data: null, status: 0 };
+      return { data: null, status: 0, attempted };
     }
   }
-  return { data: null, status: 0 };
+  return { data: null, status: 0, attempted };
 }
 
-async function fetchDetailOnce(address: string): Promise<TotalBalanceDetail | null> {
+async function fetchDetailOnce(
+  address: string
+): Promise<{ detail: TotalBalanceDetail | null; attempted: boolean }> {
   const key = process.env.DEBANK_ACCESS_KEY;
+  let attempted = false;
   if (key) {
     const response = await fetchJson(
       `https://pro-openapi.debank.com/v1/user/total_balance?id=${address}`,
       { AccessKey: key },
       1
     );
+    attempted = attempted || response.attempted;
     const official = parseTotalDetail(
       response.data
     );
-    if (official) return official;
+    if (official) return { detail: official, attempted };
   }
-  const rabbyResponse = await fetchJson(`https://api.rabby.io/v1/user/total_balance?id=${address}`);
+  const rabbyResponse = await fetchJson(
+    `https://api.rabby.io/v1/user/total_balance?id=${address}`,
+    {},
+    0
+  );
+  attempted = attempted || rabbyResponse.attempted;
   const rabby = parseTotalDetail(rabbyResponse.data);
-  if (rabby) return rabby;
+  if (rabby) return { detail: rabby, attempted };
   // The legacy host is a last-resort fallback. Avoid doubling requests while Rabby is rate-limiting.
-  if (rabbyResponse.status === 429) return null;
+  if (rabbyResponse.status === 429 || rabbyResponse.status === 0) {
+    return { detail: null, attempted };
+  }
   const legacyResponse = await fetchJson(
     `https://api.debank.com/user/total_balance?addr=${address}`,
     { Origin: "https://debank.com", Referer: "https://debank.com/" },
-    1
+    0
   );
-  return parseTotalDetail(
-    legacyResponse.data
-  );
+  attempted = attempted || legacyResponse.attempted;
+  return { detail: parseTotalDetail(legacyResponse.data), attempted };
 }
 
-async function fetchWalletDetail(address: string, force = false): Promise<{ detail: TotalBalanceDetail | null; status: WalletFetchStatus }> {
+async function fetchWalletDetail(
+  address: string,
+  force = false
+): Promise<{ detail: TotalBalanceDetail | null; status: WalletFetchStatus; attempted: boolean }> {
   const normalized = address.toLowerCase();
   const hit = cache.get(normalized);
-  if (!force && hit && Date.now() - hit.at < TTL) return { detail: hit.detail, status: "cached" };
+  if (!force && hit && Date.now() - hit.at < TTL) {
+    return { detail: hit.detail, status: "cached", attempted: false };
+  }
 
-  const detail = await fetchDetailOnce(normalized);
+  const { detail, attempted } = await fetchDetailOnce(normalized);
   if (detail) {
     cache.set(normalized, { detail, at: Date.now() });
-    return { detail, status: "ok" };
+    return { detail, status: "ok", attempted };
   }
-  return hit ? { detail: hit.detail, status: "cached" } : { detail: null, status: "error" };
+  return hit
+    ? { detail: hit.detail, status: "cached", attempted }
+    : { detail: null, status: "error", attempted };
 }
 
 type ProtocolCache = Record<string, WalletProtocolCacheEntry>;
@@ -282,7 +304,15 @@ async function fetchComplexProtocols(
 ): Promise<Record<string, unknown>[] | null> {
   const normalized = address.toLowerCase();
   const hit = store[normalized] || null;
-  if (hit && Date.now() - new Date(hit.at).getTime() < PROTOCOL_TTL) return hit.protocols;
+  const now = Date.now();
+  const successAt = hit?.at ? new Date(hit.at).getTime() : 0;
+  const attemptedAt = hit?.lastAttemptAt ? new Date(hit.lastAttemptAt).getTime() : 0;
+  if (hit && successAt > 0 && now - successAt < PROTOCOL_TTL) return hit.protocols;
+  if (hit && attemptedAt > 0 && now - attemptedAt < PROTOCOL_RETRY_TTL) return hit.protocols;
+  const attemptIso = new Date().toISOString();
+  store[normalized] = hit
+    ? { ...hit, lastAttemptAt: attemptIso }
+    : { at: "", lastAttemptAt: attemptIso, protocols: [] };
   const key = process.env.DEBANK_ACCESS_KEY;
   const urls: Array<{ url: string; headers?: Record<string, string> }> = [];
   if (key) {
@@ -295,10 +325,10 @@ async function fetchComplexProtocols(
     { url: `https://api.rabby.io/v1/user/complex_protocol_list?id=${normalized}` }
   );
   for (const candidate of urls) {
-    const response = await fetchJson(candidate.url, candidate.headers);
+    const response = await fetchJson(candidate.url, candidate.headers, 0);
     if (response.data !== null) {
       const protocols = unwrapArray(response.data);
-      store[normalized] = { protocols, at: new Date().toISOString() };
+      store[normalized] = { protocols, at: attemptIso, lastAttemptAt: attemptIso };
       return protocols;
     }
   }
@@ -464,9 +494,9 @@ function tokenChainsFor(address: string): string[] {
 export async function fetchWalletUsd(
   address: string,
   opts?: { force?: boolean }
-): Promise<{ usd: number; status: WalletFetchStatus }> {
-  const { detail, status } = await fetchWalletDetail(address, opts?.force);
-  return { usd: detail?.totalUsd ?? 0, status };
+): Promise<{ usd: number; status: WalletFetchStatus; attempted: boolean }> {
+  const { detail, status, attempted } = await fetchWalletDetail(address, opts?.force);
+  return { usd: detail?.totalUsd ?? 0, status, attempted };
 }
 
 async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
@@ -491,25 +521,25 @@ export async function refreshWallets(
 ): Promise<Wallet[]> {
   if (!wallets.length) return [];
   const originalOrder = new Map(wallets.map((wallet, index) => [wallet.id, index]));
+  const stopAt = Date.now() + 40_000;
   /**
-   * 每轮按最久未成功优先尝试地址余额（每个地址 1 个请求，错峰 900ms）；
+   * 每个小批次按“最久未尝试”轮转地址，每个地址 1 个请求、完全串行且间隔 3 秒；
    * 只有真实成功才更新 lastSuccess，失败继续保留缓存和原成功时间。
    * 协议明细按 6 小时、代币明细按 3 小时缓存轮换补，避免把公共接口额度一次用光。
    */
-  /** Every scheduled full refresh polls every wallet once. Failed reads retain the last good value. */
+  /** Failed reads retain the last good value; updatedAt advances so one bad address cannot starve the queue. */
   const budget = Math.max(
     1,
     Math.min(opts.budget ?? MAX_PUBLIC_REQUESTS_PER_RUN, MAX_PUBLIC_REQUESTS_PER_RUN)
   );
   const targets = [...wallets]
     .sort((left, right) => {
+      const leftAttempt = new Date(left.updatedAt ?? left.lastUpdated ?? 0).getTime();
+      const rightAttempt = new Date(right.updatedAt ?? right.lastUpdated ?? 0).getTime();
+      if (leftAttempt !== rightAttempt) return leftAttempt - rightAttempt;
       const leftSuccess = new Date(left.lastSuccess?.at ?? left.lastUpdated ?? 0).getTime();
       const rightSuccess = new Date(right.lastSuccess?.at ?? right.lastUpdated ?? 0).getTime();
-      if (leftSuccess !== rightSuccess) return leftSuccess - rightSuccess;
-      // 同样没有成功历史时，优先上轮靠后、最可能因全局限流而没真正发出请求的地址。
-      const leftAttempt = new Date(left.updatedAt ?? 0).getTime();
-      const rightAttempt = new Date(right.updatedAt ?? 0).getTime();
-      return rightAttempt - leftAttempt;
+      return leftSuccess - rightSuccess;
     })
     .slice(0, budget);
   const targetIds = new Set(targets.map((wallet) => wallet.id));
@@ -518,11 +548,18 @@ export async function refreshWallets(
     [...targets]
       .filter((wallet) => {
         const hit = protocolStore[wallet.address.toLowerCase()];
-        return !hit || Date.now() - new Date(hit.at).getTime() >= PROTOCOL_TTL;
+        if (!hit) return true;
+        const successAt = hit.at ? new Date(hit.at).getTime() : 0;
+        const attemptedAt = hit.lastAttemptAt ? new Date(hit.lastAttemptAt).getTime() : 0;
+        const successStale = !successAt || Date.now() - successAt >= PROTOCOL_TTL;
+        const retryReady = !attemptedAt || Date.now() - attemptedAt >= PROTOCOL_RETRY_TTL;
+        return successStale && retryReady;
       })
       .sort((left, right) => {
-        const leftAt = new Date(protocolStore[left.address.toLowerCase()]?.at || 0).getTime();
-        const rightAt = new Date(protocolStore[right.address.toLowerCase()]?.at || 0).getTime();
+        const leftEntry = protocolStore[left.address.toLowerCase()];
+        const rightEntry = protocolStore[right.address.toLowerCase()];
+        const leftAt = new Date(leftEntry?.lastAttemptAt || leftEntry?.at || 0).getTime();
+        const rightAt = new Date(rightEntry?.lastAttemptAt || rightEntry?.at || 0).getTime();
         if (leftAt !== rightAt) return leftAt - rightAt;
         return right.balanceUsd - left.balanceUsd;
       })
@@ -546,18 +583,21 @@ export async function refreshWallets(
       .map((wallet) => wallet.address.toLowerCase())
   );
   const refreshed = await mapPool(targets, CONCURRENCY, async (wallet) => {
+    if (Date.now() >= stopAt - 10_000 || publicBlocked()) return wallet;
     const attemptedAt = new Date().toISOString();
     const previous = wallet.balanceUsd;
-    const { usd, status } = await fetchWalletUsd(wallet.address, { force: true });
+    const { usd, status, attempted } = await fetchWalletUsd(wallet.address, { force: true });
+    if (!attempted) return wallet;
     const wantsTokenDetail = tokenTargets.has(wallet.address.toLowerCase());
     const wantsProtocolDetail = protocolTargets.has(wallet.address.toLowerCase());
+    const hasDetailTime = () => Date.now() < stopAt - 10_000 && !publicBlocked();
     if (status === "ok") {
-      if (usd >= 0.01 && wantsProtocolDetail) {
+      if (usd >= 0.01 && wantsProtocolDetail && hasDetailTime()) {
         // Same task, right after the total: avoids a second request storm and keeps
         // the total request from eating the rate limit before DApp/token detail loads.
         await fetchComplexProtocols(wallet.address, protocolStore);
       }
-      if (wantsTokenDetail) {
+      if (wantsTokenDetail && hasDetailTime()) {
         await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
       }
       const balanceUsd = Math.round(usd * 100) / 100;
@@ -571,9 +611,11 @@ export async function refreshWallets(
       };
     }
     if (status === "cached") {
-      if (usd >= 0.01 && wantsProtocolDetail) await fetchComplexProtocols(wallet.address, protocolStore);
+      if (usd >= 0.01 && wantsProtocolDetail && hasDetailTime()) {
+        await fetchComplexProtocols(wallet.address, protocolStore);
+      }
       // 公共 DeBank 接口失败时，代币明细仍可能从 Zerion 拿到，所以这里也尝试补一次
-      if (wantsTokenDetail) {
+      if (wantsTokenDetail && hasDetailTime()) {
         await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
       }
       return {
@@ -584,6 +626,11 @@ export async function refreshWallets(
       };
     }
     // Never zero out on failure — keep the last known balance and say so.
+    // Zerion token detail is independent from Rabby's total endpoint, so a Rabby
+    // failure must not waste this batch's one bounded token-detail opportunity.
+    if (wantsTokenDetail && hasDetailTime()) {
+      await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
+    }
     return {
       ...wallet,
       balanceUsd: previous,

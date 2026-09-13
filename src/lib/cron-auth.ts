@@ -4,10 +4,24 @@ import type { NextRequest } from "next/server";
 
 const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const GITHUB_OIDC_AUDIENCE = "https://0xstudybank.vercel.app";
-const GITHUB_REPOSITORY = "Ssw7777/asset-monitor";
 const GITHUB_MAIN_REF = "refs/heads/main";
-const GITHUB_REFRESH_WORKFLOW_REF =
-  "Ssw7777/asset-monitor/.github/workflows/production-refresh.yml@refs/heads/main";
+const TRUSTED_GITHUB_WORKFLOWS = [
+  {
+    repository: "Ssw7777/asset-monitor",
+    repositoryId: "1359556821",
+    visibility: "private",
+    workflowRef: "Ssw7777/asset-monitor/.github/workflows/production-refresh.yml@refs/heads/main",
+    allowedEvents: ["workflow_dispatch"],
+  },
+  {
+    repository: "Ssw7777/0xstudybank-scheduler",
+    repositoryId: "1368972947",
+    visibility: "public",
+    workflowRef:
+      "Ssw7777/0xstudybank-scheduler/.github/workflows/production-refresh.yml@refs/heads/main",
+    allowedEvents: ["schedule", "workflow_dispatch"],
+  },
+] as const;
 
 const githubJwks = createRemoteJWKSet(
   new URL(`${GITHUB_OIDC_ISSUER}/.well-known/jwks`),
@@ -37,13 +51,21 @@ async function isTrustedGithubWorkflowToken(token: string) {
     const { payload } = await jwtVerify(token, githubJwks, {
       issuer: GITHUB_OIDC_ISSUER,
       audience: GITHUB_OIDC_AUDIENCE,
+      algorithms: ["RS256"],
     });
 
+    const trustedWorkflow = TRUSTED_GITHUB_WORKFLOWS.find(
+      (candidate) =>
+        payload.repository === candidate.repository &&
+        payload.repository_id === candidate.repositoryId &&
+        payload.workflow_ref === candidate.workflowRef &&
+        payload.repository_visibility === candidate.visibility
+    );
+
     return (
-      payload.repository === GITHUB_REPOSITORY &&
+      !!trustedWorkflow &&
       payload.ref === GITHUB_MAIN_REF &&
-      payload.workflow_ref === GITHUB_REFRESH_WORKFLOW_REF &&
-      (payload.event_name === "schedule" || payload.event_name === "workflow_dispatch") &&
+      trustedWorkflow.allowedEvents.some((event) => payload.event_name === event) &&
       payload.runner_environment === "github-hosted"
     );
   } catch {

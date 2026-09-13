@@ -6,13 +6,9 @@ import {
   publicState,
   pushSnapshot,
   readStore,
-  setLastFullRefresh,
   updateExchanges,
   updateCexValuationVersions,
-  updateOnchainBreakdown,
-  updateProtocolCache,
-  updateTokenCache,
-  updateWallets,
+  writeStore,
 } from "@/lib/store";
 import type { ExchangeBalance, PortfolioState } from "@/lib/types";
 
@@ -63,11 +59,107 @@ export interface RefreshResult {
   payload: Record<string, unknown>;
 }
 
+async function refreshOnchainSlice(
+  state: PortfolioState,
+  walletBudget: number | undefined,
+  now: string
+) {
+  const tokenCache = { ...(state.tokenCache || {}) };
+  const protocolCache = { ...(state.protocolCache || {}) };
+  const previousSuccessById = new Map(
+    state.wallets.map((wallet) => [wallet.id, wallet.lastSuccess?.at ?? null])
+  );
+  const wallets = await refreshWallets(state.wallets, tokenCache, protocolCache, {
+    budget: walletBudget,
+  });
+  let partial = wallets.some((wallet) => wallet.status !== "ok");
+  let breakdown = state.onchainBreakdown ?? null;
+  const succeededThisBatch = wallets.some(
+    (wallet) =>
+      wallet.status === "ok" &&
+      !!wallet.lastSuccess?.at &&
+      wallet.lastSuccess.at !== previousSuccessById.get(wallet.id)
+  );
+  try {
+    const onchainBreakdown = await refreshOnchainBreakdown(wallets, tokenCache, protocolCache);
+    const previous = state.onchainBreakdown ?? null;
+    // 限流时不要用“更少的成功地址”覆盖上一轮完整明细：保留旧明细，只更新限流状态。
+    const richer = !previous || onchainBreakdown.successfulWallets >= previous.successfulWallets;
+    const effective = richer
+      ? onchainBreakdown
+      : {
+          ...previous,
+          partial: true,
+          // 保留上一轮更完整的链 / 协议明细，但代币明细只要新拿到就一定要用上
+          tokens: onchainBreakdown.tokens.length ? onchainBreakdown.tokens : previous.tokens,
+          tokensTotalUsd: onchainBreakdown.tokens.length
+            ? onchainBreakdown.tokensTotalUsd
+            : previous.tokensTotalUsd,
+          tokenSource: onchainBreakdown.tokenSource || previous.tokenSource,
+          cachedWallets: onchainBreakdown.cachedWallets,
+          rateLimitedUntil: onchainBreakdown.rateLimitedUntil ?? null,
+        };
+    if (effective.successfulWallets > 0 || !previous) {
+      breakdown = effective;
+      partial = partial || effective.partial === true;
+    }
+  } catch (error) {
+    // 明细接口失败时保留上一轮结果，绝不把总额清空。
+    console.error("[refresh] on-chain breakdown failed", error);
+  }
+
+  // Persist the entire on-chain slice once. The old per-field helpers each read and
+  // rewrote the same large JSON document, multiplying Turso traffic for every batch.
+  state.wallets = wallets;
+  state.onchainCacheUsd = wallets.reduce((total, wallet) => total + wallet.balanceUsd, 0);
+  state.tokenCache = tokenCache;
+  state.protocolCache = protocolCache;
+  state.onchainBreakdown = breakdown;
+  if (succeededThisBatch) state.lastFullRefreshAt = now;
+  await writeStore(state);
+
+  return { state, wallets, partial, breakdown };
+}
+
+/**
+ * One rolling wallet-only batch. It deliberately skips CEX reads and snapshots;
+ * the scheduler performs those once per five-minute cycle through fast mode.
+ */
+export async function runWalletBatch(
+  opts: { walletBudget?: number } = {}
+): Promise<RefreshResult> {
+  const state = await readStore();
+  const now = new Date().toISOString();
+  const onchain = await refreshOnchainSlice(state, opts.walletBudget, now);
+  const finalState = onchain.state;
+  const walletOk = finalState.wallets.filter((wallet) => wallet.status === "ok").length;
+  const walletUsable = finalState.wallets.filter(
+    (wallet) => wallet.status !== "error" || wallet.balanceUsd > 0
+  ).length;
+
+  return {
+    state: finalState,
+    walletOk,
+    walletTotal: finalState.wallets.length,
+    totals: computeTotals(finalState),
+    payload: {
+      refreshed: true,
+      refreshMode: "wallet-batch",
+      refreshStatus:
+        walletOk === finalState.wallets.length
+          ? "ok"
+          : walletUsable > 0
+            ? "partial"
+            : "failed",
+    },
+  };
+}
+
 /**
  * 刷新：
  * - fast（默认给 1 分钟级定时器）：只读三家交易所余额 + 写一条快照，几百毫秒完成，
  *   链上 / DApp / 代币沿用上一次结果 —— 这样曲线可以做到分钟级，又不烧 API 额度。
- * - full：交易所 + 全部地址余额 + DApp / 代币缓存补齐；每 5 分钟定时任务使用这个。
+ * - full：交易所 + 一小批轮转地址余额 + DApp / 代币缓存补齐；云端任务连续分批调用。
  */
 export async function runRefresh(
   opts: { fast?: boolean; auto?: boolean; walletBudget?: number } = {}
@@ -106,58 +198,22 @@ export async function runRefresh(
     mapExchange("binance", binance, prevMap.binance, BASELINE.binance, now),
     mapExchange("gate", gate, prevMap.gate, BASELINE.gate, now),
   ];
-  await updateExchanges(exchanges);
+  let latest = await updateExchanges(exchanges);
 
-  let partial = state.wallets.some((wallet) => wallet.status !== "ok");
-  let breakdown = state.onchainBreakdown ?? null;
+  let partial = latest.wallets.some((wallet) => wallet.status !== "ok");
+  let breakdown = latest.onchainBreakdown ?? null;
 
   if (!fast) {
-    const tokenCache = { ...(state.tokenCache || {}) };
-    const protocolCache = { ...(state.protocolCache || {}) };
-    const wallets = await refreshWallets(state.wallets, tokenCache, protocolCache, { budget: opts.walletBudget });
-    await updateWallets(wallets);
-    await updateTokenCache(tokenCache);
-    await updateProtocolCache(protocolCache);
-    partial = wallets.some((wallet) => wallet.status !== "ok");
-    if (wallets.some((wallet) => wallet.status === "ok")) {
-      await setLastFullRefresh(now);
-    }
-
-    try {
-      const onchainBreakdown = await refreshOnchainBreakdown(wallets, tokenCache, protocolCache);
-      const previous = state.onchainBreakdown ?? null;
-      // 限流时不要用“更少的成功地址”覆盖上一轮完整明细：保留旧明细，只更新限流状态。
-      const richer = !previous || onchainBreakdown.successfulWallets >= previous.successfulWallets;
-      const effective = richer
-        ? onchainBreakdown
-        : {
-            ...previous,
-            partial: true,
-            // 保留上一轮更完整的链 / 协议明细，但代币明细只要新拿到就一定要用上
-            tokens: onchainBreakdown.tokens.length ? onchainBreakdown.tokens : previous.tokens,
-            tokensTotalUsd: onchainBreakdown.tokens.length
-              ? onchainBreakdown.tokensTotalUsd
-              : previous.tokensTotalUsd,
-            tokenSource: onchainBreakdown.tokenSource || previous.tokenSource,
-            cachedWallets: onchainBreakdown.cachedWallets,
-            rateLimitedUntil: onchainBreakdown.rateLimitedUntil ?? null,
-          };
-      if (effective.successfulWallets > 0 || !previous) {
-        await updateOnchainBreakdown(effective);
-        breakdown = effective;
-        partial = partial || effective.partial === true;
-      }
-    } catch (error) {
-      // 明细接口失败时保留上一轮结果，绝不把总额清空。
-      console.error("[refresh] on-chain breakdown failed", error);
-    }
+    const onchain = await refreshOnchainSlice(latest, opts.walletBudget, now);
+    latest = onchain.state;
+    partial = onchain.partial;
+    breakdown = onchain.breakdown;
   } else if (breakdown?.partial) {
     partial = true;
   }
 
-  const latest = await readStore();
   const totals = computeTotals(latest);
-  await pushSnapshot({
+  let finalState = await pushSnapshot({
     totalUsd: totals.totalUsd,
     onchain: totals.onchainUsd,
     cex: totals.cexUsd,
@@ -172,12 +228,11 @@ export async function runRefresh(
     suppressExchangeFlows: suppressExchangeFlows.length ? suppressExchangeFlows : undefined,
   });
   if (suppressExchangeFlows.length) {
-    await updateCexValuationVersions({
+    finalState = await updateCexValuationVersions({
       ...previousVersions,
       ...Object.fromEntries(suppressExchangeFlows.map((exchange) => [exchange, valuationVersion])),
     });
   }
-  const finalState = await readStore();
   const walletOk = finalState.wallets.filter((wallet) => wallet.status === "ok").length;
   // “可用”= 本轮拿到实时数据，或沿用了上次成功数据（余额依然有效）。
   // 只有所有地址都没有任何余额、交易所也全失败时，才算整体失败。

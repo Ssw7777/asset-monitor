@@ -1,9 +1,6 @@
-name: Production data refresh
+name: Production data refresh (manual fallback)
 
 on:
-  schedule:
-    # Every five minutes, offset from the top of the hour to reduce GitHub queue delays.
-    - cron: "2-59/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -22,7 +19,7 @@ jobs:
       - name: Refresh and verify production
         env:
           OIDC_AUDIENCE: https://0xstudybank.vercel.app
-          REFRESH_URL: https://0xstudybank.vercel.app/api/cron/refresh?mode=auto
+          REFRESH_URL: https://0xstudybank.vercel.app/api/cron/refresh?mode=full&walletBudget=3
           STATUS_URL: https://0xstudybank.vercel.app/api/status
         shell: bash
         run: |

@@ -287,8 +287,8 @@ export async function acquireRefreshLease(owner: string, ttlMs = 90_000): Promis
       const result = await client.execute({
         sql: `INSERT INTO refresh_leases (name, owner, expires_at) VALUES (?, ?, ?)
               ON CONFLICT(name) DO UPDATE SET owner = excluded.owner, expires_at = excluded.expires_at
-              WHERE refresh_leases.expires_at <= ? OR refresh_leases.owner = ?`,
-        args: ["portfolio-refresh", owner, expiresAt, now, owner],
+              WHERE refresh_leases.expires_at <= ?`,
+        args: ["portfolio-refresh", owner, expiresAt, now],
       });
       return result.rowsAffected === 1;
     } catch (error) {
