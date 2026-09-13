@@ -57,6 +57,8 @@ async function handle(req: NextRequest) {
         refreshedAt: new Date().toISOString(),
         walletOk: result.walletOk,
         walletTotal: result.walletTotal,
+        batchAttempted: result.batchAttempted,
+        batchSucceeded: result.batchSucceeded,
       },
       { status: refreshStatus === "failed" ? 503 : 200 }
     );

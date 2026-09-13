@@ -55,6 +55,8 @@ export interface RefreshResult {
   state: PortfolioState;
   walletOk: number;
   walletTotal: number;
+  batchAttempted?: number;
+  batchSucceeded?: number;
   totals: ReturnType<typeof computeTotals>;
   payload: Record<string, unknown>;
 }
@@ -69,17 +71,24 @@ async function refreshOnchainSlice(
   const previousSuccessById = new Map(
     state.wallets.map((wallet) => [wallet.id, wallet.lastSuccess?.at ?? null])
   );
+  const previousAttemptById = new Map(
+    state.wallets.map((wallet) => [wallet.id, wallet.updatedAt ?? null])
+  );
   const wallets = await refreshWallets(state.wallets, tokenCache, protocolCache, {
     budget: walletBudget,
   });
   let partial = wallets.some((wallet) => wallet.status !== "ok");
   let breakdown = state.onchainBreakdown ?? null;
-  const succeededThisBatch = wallets.some(
+  const batchAttempted = wallets.filter(
+    (wallet) => (wallet.updatedAt ?? null) !== previousAttemptById.get(wallet.id)
+  ).length;
+  const batchSucceeded = wallets.filter(
     (wallet) =>
       wallet.status === "ok" &&
       !!wallet.lastSuccess?.at &&
       wallet.lastSuccess.at !== previousSuccessById.get(wallet.id)
-  );
+  ).length;
+  const succeededThisBatch = batchSucceeded > 0;
   try {
     const onchainBreakdown = await refreshOnchainBreakdown(wallets, tokenCache, protocolCache);
     const previous = state.onchainBreakdown ?? null;
@@ -118,7 +127,7 @@ async function refreshOnchainSlice(
   if (succeededThisBatch) state.lastFullRefreshAt = now;
   await writeStore(state);
 
-  return { state, wallets, partial, breakdown };
+  return { state, wallets, partial, breakdown, batchAttempted, batchSucceeded };
 }
 
 /**
@@ -141,12 +150,16 @@ export async function runWalletBatch(
     state: finalState,
     walletOk,
     walletTotal: finalState.wallets.length,
+    batchAttempted: onchain.batchAttempted,
+    batchSucceeded: onchain.batchSucceeded,
     totals: computeTotals(finalState),
     payload: {
       refreshed: true,
       refreshMode: "wallet-batch",
       refreshStatus:
-        walletOk === finalState.wallets.length
+        onchain.batchSucceeded === 0
+          ? "failed"
+          : walletOk === finalState.wallets.length
           ? "ok"
           : walletUsable > 0
             ? "partial"
