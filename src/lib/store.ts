@@ -283,7 +283,10 @@ export async function acquireRefreshLease(owner: string, ttlMs = 90_000): Promis
       });
       return result.rowsAffected === 1;
     } catch (error) {
-      console.error("[store] refresh lease acquire failed; using process-local fallback", error);
+      // Production must fail closed: a process-local fallback cannot coordinate
+      // separate Vercel instances and could allow overlapping state writes.
+      console.error("[store] refresh lease acquire failed", error);
+      return false;
     }
   }
 
