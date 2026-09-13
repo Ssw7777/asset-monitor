@@ -44,10 +44,10 @@ interface PortfolioPayload {
   onchainBreakdown?: OnchainBreakdown | null;
   snapshotCount?: number;
   snapshotLimit?: number;
-  refreshStatus?: "ok" | "failed";
+  refreshStatus?: "ok" | "partial" | "failed";
 }
 
-/** 每 5 分钟刷新全部地址余额 + 交易所；协议 / 代币明细各自 6 小时缓存轮换。 */
+/** 每 5 分钟轮询全部地址余额 + 交易所；协议 / 代币明细各自 6 小时缓存轮换。 */
 const AUTO_TICK_MS = 5 * 60 * 1000;
 const AUTO_FULL_EVERY_MS = 5 * 60 * 1000;
 const BACKOFF_BASE_MS = 30_000;
@@ -320,7 +320,6 @@ export function Dashboard() {
   const partial = breakdown?.partial === true;
   const dapps = breakdown?.dapps ?? [];
   const onchainUsd = totals.onchainUsd || chains.reduce((sum, chain) => sum + chain.valueUsd, 0);
-
   return (
     <main className="page">
       <header className="topbar">
@@ -359,6 +358,7 @@ export function Dashboard() {
       </header>
 
       <div className="container" id="top">
+        <div className="summary-panel">
         <section className="profile">
           <div className="profile-left">
             <Image src="/avatar.jpg" alt="0xStudy" width={68} height={68} className="avatar" />
@@ -412,13 +412,22 @@ export function Dashboard() {
             </div>
           </div>
           <div className="stat-status">
-            <span className={`tag ${error || data.refreshStatus === "failed" ? "neg" : "pos"}`}>
-              {error || data.refreshStatus === "failed" ? "数据获取失败" : "数据刷新成功"}
+            <span
+              className={`tag ${
+                error || data.refreshStatus === "failed" ? "neg" : data.refreshStatus === "partial" ? "warn" : "pos"
+              }`}
+            >
+              {error || data.refreshStatus === "failed"
+                ? "数据获取失败"
+                : data.refreshStatus === "partial"
+                  ? "部分数据沿用缓存"
+                  : "数据刷新成功"}
             </span>
-            <span className="small">每 5 分钟刷新全部地址 + 交易所</span>
+            <span className="small">每 5 分钟轮询全部地址 + 交易所</span>
           </div>
         </div>
-
+        </div>
+        <div className="overview-duo">
         <PortfolioChart
           snapshots={snapshots}
           usdCnyRate={rate}
@@ -426,6 +435,15 @@ export function Dashboard() {
           summary={changes}
           onRangeChange={setRange}
         />
+        <FlowSection
+          summary={flows}
+          loading={flowsLoading}
+          range={flowRange}
+          minUsd={flowMin}
+          onRangeChange={setFlowRange}
+          onMinChange={setFlowMin}
+        />
+        </div>
 
         <section className="section" id="chains">
           <div className="section-head">
@@ -494,15 +512,6 @@ export function Dashboard() {
             <div className="empty">还没有链上明细：点击右上角刷新获取</div>
           )}
         </section>
-
-        <FlowSection
-          summary={flows}
-          loading={flowsLoading}
-          range={flowRange}
-          minUsd={flowMin}
-          onRangeChange={setFlowRange}
-          onMinChange={setFlowMin}
-        />
 
         <TokenTable
           tokens={breakdown?.tokens ?? []}
@@ -609,10 +618,11 @@ export function Dashboard() {
               </button>
             </div>
           </div>
-          <div className="notice">
-            DApp 明细单独导出一个文件，是为了避免你把「钱包余额」和「协议仓位」再相加（协议仓位本来就包含在钱包余额里）。
-            历史快照目前 {data.snapshotCount ?? snapshots.length} / {data.snapshotLimit ?? 2016} 条：
-            每 5 分钟记一条，上限 2016 条正好覆盖 7 天，超过就自动丢掉最老的。
+          <div className="notice notice-stack">
+            <p>DApp 明细单独导出一个文件，是为避免把「钱包余额」和「协议仓位」再相加（协议仓位本来就包含在钱包余额里）</p>
+            <p>
+              历史快照目前 {data.snapshotCount ?? snapshots.length} / {data.snapshotLimit ?? 2016} 条：每 5 分钟记一条，上限 2016 条覆盖 7 天，超过就自动删除超时记录
+            </p>
           </div>
         </section>
 

@@ -105,7 +105,7 @@ export function PortfolioChart({
         <div className="section-title">
           <h2>资产趋势</h2>
           <span className="hint">
-            全部来源合计（链上 + 交易所 + 手动）· 快照 {summary?.snapshotCount ?? snapshots.length} 条
+            全部资产 · 快照 {summary?.snapshotCount ?? snapshots.length} 条
           </span>
         </div>
         <span className="seg">
@@ -119,7 +119,7 @@ export function PortfolioChart({
                 setActiveIdx(null);
               }}
             >
-              {item.label}
+              {item.short}
             </button>
           ))}
         </span>

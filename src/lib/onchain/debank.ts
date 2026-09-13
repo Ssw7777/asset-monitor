@@ -474,18 +474,28 @@ export async function refreshWallets(
   opts: { budget?: number } = {}
 ): Promise<Wallet[]> {
   if (!wallets.length) return [];
-  const now = new Date().toISOString();
   const originalOrder = new Map(wallets.map((wallet, index) => [wallet.id, index]));
   /**
-   * 余额每轮都刷（每个地址 1 个请求，错峰 900ms），保证「最新」时间戳一直是刚刚；
-   * 协议明细 / 代币明细变化慢，改成按各自 6 小时缓存轮换补，避免把公共接口额度一次用光。
+   * 每轮按最久未成功优先尝试地址余额（每个地址 1 个请求，错峰 900ms）；
+   * 只有真实成功才更新 lastSuccess，失败继续保留缓存和原成功时间。
+   * 协议明细 / 代币明细变化慢，按各自 6 小时缓存轮换补，避免把公共接口额度一次用光。
    */
   /** Every scheduled full refresh polls every wallet once. Failed reads retain the last good value. */
   const budget = Math.max(
     1,
     Math.min(opts.budget ?? MAX_PUBLIC_REQUESTS_PER_RUN, MAX_PUBLIC_REQUESTS_PER_RUN)
   );
-  const targets = wallets.slice(0, budget);
+  const targets = [...wallets]
+    .sort((left, right) => {
+      const leftSuccess = new Date(left.lastSuccess?.at ?? left.lastUpdated ?? 0).getTime();
+      const rightSuccess = new Date(right.lastSuccess?.at ?? right.lastUpdated ?? 0).getTime();
+      if (leftSuccess !== rightSuccess) return leftSuccess - rightSuccess;
+      // 同样没有成功历史时，优先上轮靠后、最可能因全局限流而没真正发出请求的地址。
+      const leftAttempt = new Date(left.updatedAt ?? 0).getTime();
+      const rightAttempt = new Date(right.updatedAt ?? 0).getTime();
+      return rightAttempt - leftAttempt;
+    })
+    .slice(0, budget);
   const targetIds = new Set(targets.map((wallet) => wallet.id));
   /** 本轮补协议明细的地址（6 小时缓存），优先最久没补过的。 */
   const protocolTargets = new Set(
@@ -520,6 +530,7 @@ export async function refreshWallets(
       .map((wallet) => wallet.address.toLowerCase())
   );
   const refreshed = await mapPool(targets, CONCURRENCY, async (wallet) => {
+    const attemptedAt = new Date().toISOString();
     const previous = wallet.balanceUsd;
     const { usd, status } = await fetchWalletUsd(wallet.address, { force: true });
     const wantsTokenDetail = tokenTargets.has(wallet.address.toLowerCase());
@@ -537,9 +548,9 @@ export async function refreshWallets(
       return {
         ...wallet,
         balanceUsd,
-        lastUpdated: now,
-        updatedAt: now,
-        lastSuccess: { at: now, balanceUsd },
+        lastUpdated: attemptedAt,
+        updatedAt: attemptedAt,
+        lastSuccess: { at: attemptedAt, balanceUsd },
         status: "ok" as const,
       };
     }
@@ -552,7 +563,7 @@ export async function refreshWallets(
       return {
         ...wallet,
         balanceUsd: Math.round((usd > 0 ? usd : previous) * 100) / 100,
-        updatedAt: now,
+        updatedAt: attemptedAt,
         status: "cached" as const,
       };
     }
@@ -560,7 +571,7 @@ export async function refreshWallets(
     return {
       ...wallet,
       balanceUsd: previous,
-      updatedAt: now,
+      updatedAt: attemptedAt,
       status: previous > 0 ? ("cached" as const) : ("error" as const),
     };
   });

@@ -2,7 +2,7 @@
 
 import type { FlowEvent, FlowRangeKey, FlowSummary } from "@/lib/flows";
 import { FLOW_RANGES } from "@/lib/flows";
-import { shortAddr, timeAgo, usd } from "./format";
+import { amountNum, shortAddr, timeAgo, usd } from "./format";
 
 const DIRECTION: Record<FlowEvent["direction"], { label: string; cls: string }> = {
   in: { label: "增加", cls: "pos" },
@@ -21,7 +21,7 @@ function formatTime(iso: string) {
 
 /**
  * 资金变动流水：每轮刷新都会把“超过阈值的余额变化”记一条，
- * 并给出金额、方向、来源、去路、涉及钱包与前后余额。
+ * 并给出金额、方向、变动钱包 / 交易所与前后余额。
  */
 export function FlowSection({
   summary,
@@ -46,8 +46,8 @@ export function FlowSection({
         <div className="section-title">
           <h2>资金变动流水</h2>
           <span className="hint">
-            超过 {minUsd} U 的变动自动记录 · 已扫描 {summary?.intervals ?? 0} 轮
-            {summary?.scannedFrom ? ` · 最早 ${timeAgo(summary.scannedFrom)}` : ""}
+            超{minUsd}U变动记录 · 已扫描 {summary?.intervals ?? 0}轮
+            {summary?.scannedFrom ? ` · 最早${timeAgo(summary.scannedFrom)}` : ""}
           </span>
         </div>
         <div className="inline">
@@ -64,7 +64,7 @@ export function FlowSection({
                 className={range === item.key ? "active" : ""}
                 onClick={() => onRangeChange(item.key)}
               >
-                {item.label}
+                {item.key === "all" ? "全部" : item.key}
               </button>
             ))}
           </span>
@@ -88,10 +88,8 @@ export function FlowSection({
           <div className="thead grid-flow">
             <div>时间</div>
             <div className="right">变动</div>
-            <div className="hide-md">来源</div>
-            <div className="hide-md">去路</div>
-            <div className="hide-md">对象</div>
-            <div className="right hide-lg">余额变化</div>
+            <div className="hide-md">变动钱包/交易所</div>
+            <div className="right hide-md">余额变化</div>
           </div>
           {events.map((event) => {
             const direction = DIRECTION[event.direction];
@@ -113,21 +111,18 @@ export function FlowSection({
                       : ` · ${event.changePct > 0 ? "+" : ""}${event.changePct.toFixed(2)}%`}
                   </div>
                 </div>
-                <div className="cell-main hide-md">{event.from}</div>
-                <div className="cell-main hide-md">{event.to}</div>
-                <div className="cell-token-text hide-md">
-                  <b>{event.entityLabel}</b>
+                <div className="cell-token-text flow-entity hide-md">
+                  <b>{event.from} → {event.to}</b>
                   <span>
-                    {event.entityType === "wallet" ? "钱包" : event.entityType === "exchange" ? "交易所" : "手动"}
-                    {event.entityAddress ? ` · ${shortAddr(event.entityAddress)}` : ""}
+                    {event.entityAddress ? shortAddr(event.entityAddress) : event.entityLabel}
                   </span>
                 </div>
-                <div className="right cell-sub num hide-lg">
-                  {usd(event.before)} → {usd(event.after)}
+                <div className="right cell-sub num flow-balance hide-md">
+                  {amountNum(event.before)} → {usd(event.after)}
                 </div>
                 <div className="flow-meta cell-sub">
-                  {event.from} → {event.to} · {event.entityLabel}
-                  {event.entityAddress ? ` ${shortAddr(event.entityAddress)}` : ""} · {usd(event.before)} →{" "}
+                  {event.from} → {event.to}
+                  {event.entityAddress ? ` · ${shortAddr(event.entityAddress)}` : ""} · {amountNum(event.before)} →{" "}
                   {usd(event.after)}
                 </div>
               </div>

@@ -3,7 +3,7 @@
 import type { ExchangeBalance } from "@/lib/types";
 import type { ChangeRangeKey, ChangeSummary } from "@/lib/changes";
 import { CHANGE_RANGES } from "@/lib/changes";
-import { deltaClass, signedPct, signedUsd, timeAgo, usd } from "./format";
+import { amountNum, deltaClass, signedPct, signedUsd, timeAgo, usd } from "./format";
 import { TokenIcon } from "./TokenIcon";
 
 const LABEL: Record<string, string> = { okx: "OKX", binance: "Binance", gate: "Gate" };
@@ -110,7 +110,9 @@ export function ExchangeSection({
               return (
                 <div className="exchange-change-row" key={`change-${exchange.exchange}`}>
                   <span>{LABEL[exchange.exchange]}</span>
-                  <span className="num">{row ? `${usd(row.before)} → ${usd(row.after)}` : usd(exchange.balanceUsd)}</span>
+                  <span className="num exchange-change-balance">
+                    {row ? `${amountNum(row.before)} → ${usd(row.after)}` : usd(exchange.balanceUsd)}
+                  </span>
                   <b className={`num ${deltaClass(row?.change ?? 0)}`}>
                     {row ? `${signedUsd(row.change)} · ${signedPct(row.pct)}` : "—"}
                   </b>

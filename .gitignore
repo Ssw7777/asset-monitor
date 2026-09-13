@@ -15,3 +15,5 @@ data/*.json
 *.tsbuildinfo
 .tmp-*
 output/playwright/
+.playwright-cli/
+output/

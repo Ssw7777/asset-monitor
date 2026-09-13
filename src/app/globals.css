@@ -137,49 +137,81 @@ a {
   position: relative;
 }
 
+.summary-panel {
+  margin-top: 24px;
+  border: 1px solid #d8e1ec;
+  border-radius: 14px;
+  background: #f7f9fc;
+  padding: 22px;
+  box-shadow: 0 4px 16px rgba(25, 35, 60, 0.035);
+}
+
+.summary-panel .profile {
+  padding-top: 0;
+}
+
+.summary-panel .stats {
+  border-top: 1px solid #e5eaf1;
+  padding-top: 18px;
+}
+
+.overview-duo {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 20px;
+  margin-top: 34px;
+}
+
+.overview-duo > .section {
+  min-width: 0;
+  height: 100%;
+  margin-top: 0;
+}
+
 #trend {
-  border-color: #dce4f3;
-  background: #fafcff;
+  border-color: #cbd8f0;
+  background: #f5f8ff;
 }
 
 #chains {
-  border-color: #d9e9f1;
-  background: #f8fcfe;
+  border-color: #c9e3df;
+  background: #f2faf7;
 }
 
 .section-flows {
-  border-color: #dbe6f7;
-  background: #f8fbff;
+  border-color: #c9ddf5;
+  background: #f2f8ff;
 }
 
 .section-tokens {
-  border-color: #e3e0f4;
-  background: #fbfaff;
+  border-color: #d9d0ef;
+  background: #f8f5ff;
 }
 
 .section-exchanges {
-  border-color: #dcebe6;
-  background: #f8fcfa;
+  border-color: #c9e2d7;
+  background: #f2faf5;
 }
 
 #defi {
-  border-color: #eadfd6;
-  background: #fffaf6;
+  border-color: #ead5c5;
+  background: #fff7f0;
 }
 
 #manual {
-  border-color: #e7e1cd;
-  background: #fffdf6;
+  border-color: #eadfbc;
+  background: #fff9ec;
 }
 
 #changes {
-  border-color: #e8dfe9;
-  background: #fffaff;
+  border-color: #ead4df;
+  background: #fff4f8;
 }
 
 #addresses {
-  border-color: #dfe5e8;
-  background: #fbfcfd;
+  border-color: #d8e1e7;
+  background: #f5f8fa;
 }
 
 #export {
@@ -626,6 +658,11 @@ textarea.field {
   color: #c8372c;
 }
 
+.stat-status .tag.warn {
+  background: #fff4d8;
+  color: #9a6500;
+}
+
 /* ── 卡片 / 面板 ────────────────────────────────────────────────────── */
 .card {
   border: 1px solid var(--line);
@@ -712,9 +749,8 @@ textarea.field {
 
 /* 资金流水表 */
 .grid-flow {
-  grid-template-columns:
-    minmax(120px, 0.85fr) minmax(120px, 0.85fr) minmax(140px, 1.2fr)
-    minmax(140px, 1.2fr) minmax(150px, 1.2fr) minmax(150px, 1fr);
+  grid-template-columns: minmax(74px, 0.65fr) minmax(100px, 0.8fr) minmax(142px, 1.25fr) minmax(126px, 1fr);
+  gap: 10px;
 }
 
 .flow-meta {
@@ -881,6 +917,51 @@ textarea.field {
   font-size: 12px;
 }
 
+.section-flows .section-head {
+  display: block;
+}
+
+.section-flows .section-title,
+.section-flows .section-title .hint {
+  white-space: nowrap;
+}
+
+.section-flows .section-title .hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.section-flows .section-head > .inline {
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.section-flows .section-total {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.section-flows .seg button {
+  padding: 0 7px;
+}
+
+.section-flows .thead,
+.section-flows .trow {
+  padding-right: 10px;
+  padding-left: 10px;
+}
+
+.section-flows .cell-main,
+.section-flows .cell-sub,
+.flow-balance {
+  white-space: nowrap;
+}
+
+.flow-entity {
+  min-width: 0;
+}
+
 .section-flows .table,
 .section-tokens .table,
 .exchange-balance-table {
@@ -892,7 +973,7 @@ textarea.field {
 
 .exchange-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.85fr);
+  grid-template-columns: minmax(0, 1fr) minmax(450px, 0.72fr);
   gap: 16px;
   align-items: stretch;
 }
@@ -946,6 +1027,9 @@ textarea.field {
 }
 
 .exchange-change-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  gap: 8px;
   min-height: 44px;
   border-bottom: 1px solid var(--line-2);
   font-size: 12px;
@@ -962,13 +1046,23 @@ textarea.field {
 }
 
 .exchange-change-row > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
   color: var(--ink-3);
   text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .exchange-change-row b {
   min-width: 92px;
   text-align: right;
+  white-space: nowrap;
+}
+
+.exchange-balance-grid > .right,
+.exchange-change-balance {
+  white-space: nowrap;
 }
 
 /* 翻页控件（长期快照列表用，不做内部滚动条） */
@@ -1162,6 +1256,15 @@ textarea.field {
   color: #b8431f;
 }
 
+.notice-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.notice-stack p {
+  margin: 0;
+}
+
 .empty {
   border: 1px dashed var(--line);
   border-radius: var(--radius-sm);
@@ -1184,6 +1287,38 @@ textarea.field {
   justify-content: space-between;
   gap: 12px;
   padding: 4px 0 10px;
+}
+
+.overview-duo #trend .section-head {
+  flex-wrap: nowrap;
+}
+
+.overview-duo #trend .section-title .hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-duo #trend .chart-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+
+.overview-duo #trend .chart-delta,
+.overview-duo #trend .chart-head > .muted {
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-duo #trend .chart-delta .muted {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chart-delta {
@@ -1301,6 +1436,17 @@ textarea.field {
 }
 
 /* ── 响应式：小屏隐藏次要列，绝不出现横向滚动 ───────────────────────── */
+@media (max-width: 1120px) {
+  .overview-duo,
+  .exchange-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-duo > .section {
+    height: auto;
+  }
+}
+
 @media (max-width: 1040px) {
   .exchange-layout {
     grid-template-columns: 1fr;
@@ -1323,6 +1469,24 @@ textarea.field {
 }
 
 @media (max-width: 760px) {
+  .topbar-inner {
+    gap: 8px;
+  }
+
+  .topbar-actions {
+    gap: 6px;
+  }
+
+  .topbar-actions > .small {
+    display: none;
+  }
+
+  .topbar-actions .btn {
+    height: 32px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
   .section {
     margin-left: -6px;
     margin-right: -6px;
@@ -1347,6 +1511,15 @@ textarea.field {
 
   .section > .section-head > .inline {
     margin-top: 10px;
+  }
+
+  .section-flows .section-title .hint {
+    white-space: normal;
+  }
+
+  .section-flows .section-head > .inline {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .exchange-change-panel {

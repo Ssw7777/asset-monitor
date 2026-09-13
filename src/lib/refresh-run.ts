@@ -72,8 +72,9 @@ export async function runRefresh(
   opts: { fast?: boolean; auto?: boolean; walletBudget?: number } = {}
 ): Promise<RefreshResult> {
   const state = await readStore();
-  // auto：距上次全量超过 5 分钟就跑全量（刷全部地址），否则只跑快速（交易所 + 快照）
-  const fullIntervalMs = 5 * 60 * 1000;
+  // auto：用略短于 5 分钟的容差判断是否全量，避免定时器提前数秒时误判为快速刷新。
+  // 计划任务存在数秒调度抖动；用 4 分钟门槛，确保 PT5M 调用不会因 4:58 而误判成 fast。
+  const fullIntervalMs = 4 * 60 * 1000;
   const sinceFull = state.lastFullRefreshAt
     ? Date.now() - new Date(state.lastFullRefreshAt).getTime()
     : Number.MAX_SAFE_INTEGER;
@@ -108,8 +109,10 @@ export async function runRefresh(
     await updateWallets(wallets);
     await updateTokenCache(tokenCache);
     await updateProtocolCache(protocolCache);
-    await setLastFullRefresh(now);
     partial = wallets.some((wallet) => wallet.status !== "ok");
+    if (wallets.some((wallet) => wallet.status === "ok")) {
+      await setLastFullRefresh(now);
+    }
 
     try {
       const onchainBreakdown = await refreshOnchainBreakdown(wallets, tokenCache, protocolCache);
@@ -178,7 +181,12 @@ export async function runRefresh(
       refreshed: true,
       refreshMode: fast ? "fast" : "full",
       /** 只有“一个地址、一个交易所都没读到”才算整体失败；部分成功仍算成功 */
-      refreshStatus: walletUsable > 0 || exchangeOk ? "ok" : "failed",
+      refreshStatus:
+        walletOk === finalState.wallets.length && exchangeOk
+          ? "ok"
+          : walletUsable > 0 || exchangeOk
+            ? "partial"
+            : "failed",
     },
   };
 }

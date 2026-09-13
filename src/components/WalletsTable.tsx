@@ -123,9 +123,16 @@ export function WalletsTable({
   }
 
   function statusText(wallet: Wallet) {
-    if (wallet.status === "ok") return { text: `最新 · ${timeAgo(wallet.lastUpdated)}`, cls: "pos" };
+    const successAt = wallet.lastSuccess?.at ?? wallet.lastUpdated;
+    const successAge = successAt ? Date.now() - new Date(successAt).getTime() : Number.POSITIVE_INFINITY;
+    if (wallet.status === "ok" && successAge <= 10 * 60 * 1000) {
+      return { text: `最新 · ${timeAgo(successAt)}`, cls: "pos" };
+    }
+    if (wallet.status === "ok" && successAt) {
+      return { text: `上次成功数据 · ${timeAgo(successAt)}`, cls: "" };
+    }
     if (wallet.status === "cached" || wallet.status === "stale")
-      return { text: `上次成功数据 · ${timeAgo(wallet.lastUpdated)}`, cls: "" };
+      return { text: `上次成功数据 · ${timeAgo(successAt)}`, cls: "" };
     if (wallet.status === "baseline") return { text: "基线数据", cls: "" };
     return {
       text: wallet.balanceUsd > 0 ? "读取失败 · 保留上次" : "读取失败 · 暂无历史数据",
