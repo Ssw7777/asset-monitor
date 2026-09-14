@@ -68,13 +68,14 @@ async function refreshOnchainSlice(
 ) {
   const tokenCache = { ...(state.tokenCache || {}) };
   const protocolCache = { ...(state.protocolCache || {}) };
+  const chainCache = { ...(state.chainCache || {}) };
   const previousSuccessById = new Map(
     state.wallets.map((wallet) => [wallet.id, wallet.lastSuccess?.at ?? null])
   );
   const previousAttemptById = new Map(
     state.wallets.map((wallet) => [wallet.id, wallet.updatedAt ?? null])
   );
-  const wallets = await refreshWallets(state.wallets, tokenCache, protocolCache, {
+  const wallets = await refreshWallets(state.wallets, chainCache, tokenCache, protocolCache, {
     budget: walletBudget,
   });
   let partial = wallets.some((wallet) => wallet.status !== "ok");
@@ -90,7 +91,12 @@ async function refreshOnchainSlice(
   ).length;
   const succeededThisBatch = batchSucceeded > 0;
   try {
-    const onchainBreakdown = await refreshOnchainBreakdown(wallets, tokenCache, protocolCache);
+    const onchainBreakdown = await refreshOnchainBreakdown(
+      wallets,
+      chainCache,
+      tokenCache,
+      protocolCache
+    );
     const previous = state.onchainBreakdown ?? null;
     // 限流时不要用“更少的成功地址”覆盖上一轮完整明细：保留旧明细，只更新限流状态。
     const richer = !previous || onchainBreakdown.successfulWallets >= previous.successfulWallets;
@@ -123,6 +129,7 @@ async function refreshOnchainSlice(
   state.onchainCacheUsd = wallets.reduce((total, wallet) => total + wallet.balanceUsd, 0);
   state.tokenCache = tokenCache;
   state.protocolCache = protocolCache;
+  state.chainCache = chainCache;
   state.onchainBreakdown = breakdown;
   if (succeededThisBatch) state.lastFullRefreshAt = now;
   await writeStore(state);

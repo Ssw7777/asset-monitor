@@ -8,6 +8,7 @@ import type {
   PortfolioState,
   SnapshotPoint,
   WalletProtocolCacheEntry,
+  WalletChainCacheEntry,
   WalletTokenCacheEntry,
   Wallet,
 } from "./types";
@@ -110,6 +111,7 @@ export function defaultState(): PortfolioState {
     onchainBreakdown: null,
     tokenCache: {},
     protocolCache: {},
+    chainCache: {},
     encryptedSecrets: null,
     cexValuationVersions: {},
   };
@@ -221,6 +223,10 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
     protocolCache:
       raw.protocolCache && typeof raw.protocolCache === "object"
         ? (raw.protocolCache as Record<string, WalletProtocolCacheEntry>)
+        : {},
+    chainCache:
+      raw.chainCache && typeof raw.chainCache === "object"
+        ? (raw.chainCache as Record<string, WalletChainCacheEntry>)
         : {},
     encryptedSecrets: raw.encryptedSecrets ?? null,
     lastFullRefreshAt: typeof raw.lastFullRefreshAt === "string" ? raw.lastFullRefreshAt : null,
@@ -575,6 +581,7 @@ export function publicState(s: PortfolioState) {
     encryptedSecrets: _omitSecrets,
     tokenCache: _omitTokenCache,
     protocolCache: _omitProtocolCache,
+    chainCache: _omitChainCache,
     flowEvents: _omitFlowEvents,
     cexValuationVersions: _omitCexValuationVersions,
     ...rest
@@ -582,6 +589,7 @@ export function publicState(s: PortfolioState) {
   void _omitSecrets;
   void _omitTokenCache;
   void _omitProtocolCache;
+  void _omitChainCache;
   void _omitFlowEvents;
   void _omitCexValuationVersions;
   const snapshots = s.snapshots.map((point) => ({

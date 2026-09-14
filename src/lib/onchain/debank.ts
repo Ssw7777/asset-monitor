@@ -7,6 +7,7 @@ import type {
   OnchainBreakdown,
   TokenLine,
   TokenHolding,
+  WalletChainCacheEntry,
   WalletProtocolCacheEntry,
   WalletTokenCacheEntry,
   Wallet,
@@ -42,13 +43,13 @@ const PROTOCOL_TTL = 6 * 60 * 60 * 1000;
 const PROTOCOL_RETRY_TTL = 30 * 60 * 1000;
 /** One protocol request per batch is enough to refresh all 25 records well inside the 6-hour TTL. */
 const PROTOCOL_WALLET_BUDGET = 1;
-/** Ten rolling batches of three cover all 25 configured wallets in about ten minutes. */
-const MAX_PUBLIC_REQUESTS_PER_RUN = 3;
+/** Five widely spaced batches of five cover all 25 configured wallets in about ten minutes. */
+const MAX_PUBLIC_REQUESTS_PER_RUN = 5;
 /** Keep wallet work fully sequential so Rabby requests never overlap. */
 const CONCURRENCY = 1;
 /**
  * Rabby / DeBank 公共接口严格串行，并让相邻请求至少间隔 3 秒。
- * 每个云端小批次最多 3 个钱包，避免 Vercel 共用出口形成突发流量。
+ * 每个云端小批次最多 5 个钱包；批次之间由调度器留出约 135 秒。
  */
 const PUBLIC_REQUEST_INTERVAL_MS = 3_000;
 /**
@@ -185,20 +186,29 @@ function retryDelay(response: Response, attempt: number) {
 async function fetchJson(
   url: string,
   headers: Record<string, string> = {},
-  retries = 2
+  retries = 2,
+  deadlineMs?: number
 ): Promise<{ data: unknown | null; status: number; attempted: boolean }> {
   const publicEndpoint = isPublicEndpoint(url);
   // 冷却期内直接返回限流状态：不再发请求，调用方沿用上次成功数据。
   if (publicEndpoint && publicBlocked()) return { data: null, status: 429, attempted: false };
   let attempted = false;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
+    if (deadlineMs != null && Date.now() >= deadlineMs - 500) {
+      return { data: null, status: 0, attempted };
+    }
     try {
       await waitForPublicSlot(url);
+      if (deadlineMs != null && Date.now() >= deadlineMs - 500) {
+        return { data: null, status: 0, attempted };
+      }
       attempted = true;
+      const timeoutMs =
+        deadlineMs == null ? 10_000 : Math.max(500, Math.min(10_000, deadlineMs - Date.now()));
       const response = await fetch(url, {
         headers: { ...commonHeaders, ...headers },
         cache: "no-store",
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (response.ok) {
         if (publicEndpoint) publicConsecutive429 = 0;
@@ -297,6 +307,7 @@ async function fetchWalletDetail(
 }
 
 type ProtocolCache = Record<string, WalletProtocolCacheEntry>;
+type ChainCache = Record<string, WalletChainCacheEntry>;
 
 async function fetchComplexProtocols(
   address: string,
@@ -393,13 +404,18 @@ function parseTokenList(data: unknown): WalletTokenDetail | null {
  * Official DeBank Pro endpoint first (one request covers every chain), then the Rabby
  * public endpoint for a bounded number of chains per wallet.
  */
-async function fetchTokenListOnce(address: string, chainIds: string[]): Promise<WalletTokenDetail | null> {
+async function fetchTokenListOnce(
+  address: string,
+  chainIds: string[],
+  deadlineMs?: number
+): Promise<WalletTokenDetail | null> {
   const key = process.env.DEBANK_ACCESS_KEY;
   if (key) {
     const official = await fetchJson(
       `https://pro-openapi.debank.com/v1/user/all_token_list?id=${address}&is_all=true`,
       { AccessKey: key },
-      1
+      0,
+      deadlineMs
     );
     const parsed = parseTokenList(official.data);
     if (parsed) return { ...parsed, coveredChains: ["*"] };
@@ -407,7 +423,7 @@ async function fetchTokenListOnce(address: string, chainIds: string[]): Promise<
 
   // 免费替代方案：Zerion 一个请求拿到全链代币（含价格与图标）
   if (process.env.ZERION_API_KEY) {
-    const zerion = await fetchZerionTokens(address);
+    const zerion = await fetchZerionTokens(address, { deadlineMs });
     if (zerion) return zerion;
   }
 
@@ -420,8 +436,12 @@ async function fetchTokenListOnce(address: string, chainIds: string[]): Promise<
   };
   let anyOk = false;
   for (const chainId of chainIds) {
+    if (deadlineMs != null && Date.now() >= deadlineMs - 500) break;
     const response = await fetchJson(
-      `https://api.rabby.io/v1/user/token_list?id=${address}&chain_id=${encodeURIComponent(chainId)}&is_all=true`
+      `https://api.rabby.io/v1/user/token_list?id=${address}&chain_id=${encodeURIComponent(chainId)}&is_all=true`,
+      {},
+      0,
+      deadlineMs
     );
     const parsed = parseTokenList(response.data);
     if (!parsed) continue;
@@ -442,7 +462,8 @@ async function fetchWalletTokens(
   address: string,
   chainIds: string[],
   store: TokenCache,
-  force = false
+  force = false,
+  deadlineMs?: number
 ): Promise<{ detail: WalletTokenDetail | null; status: WalletFetchStatus }> {
   const normalized = address.toLowerCase();
   const hit = store[normalized] || null;
@@ -462,7 +483,7 @@ async function fetchWalletTokens(
         unpricedByChain: {},
         coveredChains: [],
       };
-  const detail = await fetchTokenListOnce(normalized, chainIds);
+  const detail = await fetchTokenListOnce(normalized, chainIds, deadlineMs);
   if (detail) {
     store[normalized] = { at: attemptedAt, lastAttemptAt: attemptedAt, ...detail };
     return { detail, status: "ok" };
@@ -515,6 +536,7 @@ async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: num
 
 export async function refreshWallets(
   wallets: Wallet[],
+  chainStore: ChainCache,
   tokenStore: TokenCache,
   protocolStore: ProtocolCache,
   opts: { budget?: number } = {}
@@ -588,6 +610,14 @@ export async function refreshWallets(
     const previous = wallet.balanceUsd;
     const { usd, status, attempted } = await fetchWalletUsd(wallet.address, { force: true });
     if (!attempted) return wallet;
+    const memoryDetail = cache.get(wallet.address.toLowerCase());
+    if (memoryDetail) {
+      chainStore[wallet.address.toLowerCase()] = {
+        at: status === "ok" ? attemptedAt : new Date(memoryDetail.at).toISOString(),
+        totalUsd: memoryDetail.detail.totalUsd,
+        chains: memoryDetail.detail.chains.map((chain) => ({ ...chain })),
+      };
+    }
     const wantsTokenDetail = tokenTargets.has(wallet.address.toLowerCase());
     const wantsProtocolDetail = protocolTargets.has(wallet.address.toLowerCase());
     const hasDetailTime = () => Date.now() < stopAt - 10_000 && !publicBlocked();
@@ -598,7 +628,13 @@ export async function refreshWallets(
         await fetchComplexProtocols(wallet.address, protocolStore);
       }
       if (wantsTokenDetail && hasDetailTime()) {
-        await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
+        await fetchWalletTokens(
+          wallet.address,
+          tokenChainsFor(wallet.address),
+          tokenStore,
+          true,
+          stopAt
+        );
       }
       const balanceUsd = Math.round(usd * 100) / 100;
       return {
@@ -616,7 +652,13 @@ export async function refreshWallets(
       }
       // 公共 DeBank 接口失败时，代币明细仍可能从 Zerion 拿到，所以这里也尝试补一次
       if (wantsTokenDetail && hasDetailTime()) {
-        await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
+        await fetchWalletTokens(
+          wallet.address,
+          tokenChainsFor(wallet.address),
+          tokenStore,
+          true,
+          stopAt
+        );
       }
       return {
         ...wallet,
@@ -629,7 +671,13 @@ export async function refreshWallets(
     // Zerion token detail is independent from Rabby's total endpoint, so a Rabby
     // failure must not waste this batch's one bounded token-detail opportunity.
     if (wantsTokenDetail && hasDetailTime()) {
-      await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true);
+      await fetchWalletTokens(
+        wallet.address,
+        tokenChainsFor(wallet.address),
+        tokenStore,
+        true,
+        stopAt
+      );
     }
     return {
       ...wallet,
@@ -735,6 +783,7 @@ const rounded = (value: number) => Math.round(value * 100) / 100;
 
 export async function refreshOnchainBreakdown(
   wallets: Wallet[],
+  chainStore: ChainCache,
   tokenStore: TokenCache,
   protocolStore: ProtocolCache
 ): Promise<OnchainBreakdown> {
@@ -765,8 +814,9 @@ export async function refreshOnchainBreakdown(
   await mapPool(wallets, CONCURRENCY, async (wallet) => {
     // refreshWallets runs immediately before this and fills the cache. Avoid a second
     // network storm for addresses whose total request just failed.
-    const cachedDetail = cache.get(wallet.address.toLowerCase())?.detail ?? null;
-    const detail = cachedDetail;
+    const normalizedAddress = wallet.address.toLowerCase();
+    const persistedDetail = chainStore[normalizedAddress] ?? null;
+    const detail = persistedDetail ?? cache.get(normalizedAddress)?.detail ?? null;
     // 协议缓存持久化后不再依赖本次函数实例里的余额缓存；冷启动也能聚合全部钱包。
     const protocols = protocolStore[wallet.address.toLowerCase()]?.protocols ?? null;
     const tokenDetail = tokenStore[wallet.address.toLowerCase()] ?? null;

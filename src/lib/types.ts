@@ -228,6 +228,18 @@ export interface WalletProtocolCacheEntry {
   protocols: Record<string, unknown>[];
 }
 
+/** Per-wallet chain allocation persisted across serverless cold starts. */
+export interface WalletChainCacheEntry {
+  at: string;
+  totalUsd: number;
+  chains: Array<{
+    id: string;
+    name: string;
+    valueUsd: number;
+    logoUrl?: string;
+  }>;
+}
+
 export interface PortfolioState {
   manual: ManualAsset[];
   wallets: Wallet[];
@@ -247,6 +259,8 @@ export interface PortfolioState {
   tokenCache?: Record<string, WalletTokenCacheEntry>;
   /** 逐地址的协议明细缓存（服务端专用，不下发浏览器） */
   protocolCache?: Record<string, WalletProtocolCacheEntry>;
+  /** 逐地址的链分布缓存（服务端专用，避免 Serverless 冷启动丢失其他批次） */
+  chainCache?: Record<string, WalletChainCacheEntry>;
   /** Optional encrypted CEX keys at rest (server-only) */
   encryptedSecrets?: EncryptedSecretsBlob | null;
 }

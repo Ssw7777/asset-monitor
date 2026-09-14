@@ -181,9 +181,14 @@ function collect(rows: Array<Omit<ProviderToken, "kind" | "isCore"> & { isCore?:
  * Zerion 免费版：一个请求就能拿到该地址在所有链上的代币仓位，含价格与图标。
  * 官方文档：https://developers.zerion.io — 用 Basic 认证，key 作为用户名。
  */
-export async function fetchZerionTokens(address: string): Promise<ProviderResult | null> {
+export async function fetchZerionTokens(
+  address: string,
+  opts: { deadlineMs?: number } = {}
+): Promise<ProviderResult | null> {
   const key = process.env.ZERION_API_KEY;
   if (!key) return null;
+  const remainingMs = opts.deadlineMs == null ? 20_000 : opts.deadlineMs - Date.now();
+  if (remainingMs < 750) return null;
   try {
     const response = await fetch(
       `https://api.zerion.io/v1/wallets/${address}/positions/?currency=usd&filter[positions]=only_simple&page[size]=100`,
@@ -193,7 +198,7 @@ export async function fetchZerionTokens(address: string): Promise<ProviderResult
           Accept: "application/json",
         },
         cache: "no-store",
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(Math.min(20_000, remainingMs)),
       }
     );
     if (!response.ok) return null;

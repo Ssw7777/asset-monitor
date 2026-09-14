@@ -109,7 +109,12 @@ export async function POST(req: NextRequest) {
   }
 
   await updateProtocolCache(cache);
-  const breakdown = await refreshOnchainBreakdown(state.wallets, state.tokenCache ?? {}, cache);
+  const breakdown = await refreshOnchainBreakdown(
+    state.wallets,
+    state.chainCache ?? {},
+    state.tokenCache ?? {},
+    cache
+  );
   await updateOnchainBreakdown(breakdown);
   const kona = breakdown.dapps.find((dapp) => dapp.name.toLowerCase() === "kona");
 
