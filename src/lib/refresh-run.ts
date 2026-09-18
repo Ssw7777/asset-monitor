@@ -61,8 +61,8 @@ export interface RefreshResult {
   payload: Record<string, unknown>;
 }
 
-/** Zerion 兜底每日硬上限：25 钱包的代币明细约 200 次/天，兜底再留 60 次余量。 */
-const ZERION_FALLBACK_DAILY_LIMIT = 60;
+/** Zerion 兜底每日硬上限：用户确认 300/天额度用不完（日常代币明细仅 ~34 次），放宽到 240。 */
+const ZERION_FALLBACK_DAILY_LIMIT = 240;
 
 async function refreshOnchainSlice(
   state: PortfolioState,

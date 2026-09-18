@@ -22,6 +22,8 @@ export async function POST(req: NextRequest) {
   }
   try {
     // 单地址手动检查：地址管理页的「检查」按钮，立即单独刷新这一个地址。
+    // 读取失败也返回 200 + checkedWallet（余额保留上次成功值），由前端如实提示，
+    // 不当成接口错误。
     if (mode === "wallet") {
       const walletId = (searchParams.get("walletId") || "").trim();
       if (!walletId) {
@@ -29,10 +31,7 @@ export async function POST(req: NextRequest) {
       }
       const result = await runWalletBatch({ walletIds: [walletId] });
       const checked = result.state.wallets.find((wallet) => wallet.id === walletId) ?? null;
-      return NextResponse.json(
-        { ...result.payload, checkedWallet: checked },
-        { status: result.payload.refreshStatus === "failed" ? 503 : 200 }
-      );
+      return NextResponse.json({ ...result.payload, checkedWallet: checked });
     }
     // 手动刷新 = 刷全部地址（余额每个地址只要 1 个请求，错峰 900ms 一般 25 秒内完成）
     const result = await runRefresh({ fast: mode === "fast" });

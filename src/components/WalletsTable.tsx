@@ -61,23 +61,24 @@ export function WalletsTable({
       }
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setMsg(
-          data?.error ||
-            (Number(data?.batchAttempted) === 0
-              ? "数据源限流中，稍后再试；已保留上次成功数据"
-              : "检查失败，已保留上次成功数据")
-        );
+        setMsg(data?.error || "检查失败，已保留上次成功数据");
+        return;
+      }
+      if (data?.refreshMode === "skipped") {
+        setMsg("云端正在批量刷新，请 1 分钟后再试");
         return;
       }
       const updated = (data?.checkedWallet ?? null) as Wallet | null;
       if (updated && onChange) {
         onChange(wallets.map((item) => (item.id === updated.id ? updated : item)));
       }
-      setMsg(
-        updated?.status === "ok"
-          ? `已重新读取「${wallet.name}」`
-          : `「${wallet.name}」本次未读取成功，保留上次成功数据`
-      );
+      if (updated?.status === "ok") {
+        setMsg(updated.source === "zerion" ? `已通过 Zerion 兜底读取「${wallet.name}」` : `已重新读取「${wallet.name}」`);
+      } else if (Number(data?.batchAttempted) === 0) {
+        setMsg("公共接口限流中且当日兜底额度已用完，明天再试");
+      } else {
+        setMsg(`「${wallet.name}」本次读取失败，保留上次成功数据（${timeAgo(updated?.lastSuccess?.at ?? null)}）`);
+      }
     } catch {
       setMsg("检查失败，网络异常");
     } finally {

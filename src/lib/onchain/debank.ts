@@ -63,12 +63,12 @@ const TOKEN_MIN_WALLET_USD = 10;
 const TOKEN_MIN_CHAIN_USD = 5;
 const TOKEN_MIN_VALUE_USD = 0.01;
 /**
- * Zerion 硬兜底：公共源（Rabby/DeBank）连续限流时，成功时间超过 90 分钟的地址
- * 改用 Zerion 鉴权 API 恢复。每批最多 2 个、每日总量由调用方的持久化计数控制，
- * 保证 25 个钱包 + 代币明细仍然稳定落在 Zerion 免费额度内。
+ * Zerion 硬兜底：公共源（Rabby/DeBank）连续限流时，成功时间超过 30 分钟的地址
+ * 改用 Zerion 鉴权 API 恢复；手动单地址「检查」不受年龄限制（点了就该尽力出数）。
+ * 每批最多 5 个、每日总量 240 次（用户确认 300/天额度用不完），由调用方持久化计数控制。
  */
-const ZERION_FALLBACK_MIN_AGE_MS = 90 * 60 * 1000;
-const ZERION_FALLBACK_PER_BATCH = 2;
+const ZERION_FALLBACK_MIN_AGE_MS = 30 * 60 * 1000;
+const ZERION_FALLBACK_PER_BATCH = 5;
 
 /** 稳定币白名单：这些代币在链上分类时归入“稳定币”，其余归入“现货”。 */
 const STABLE_SYMBOLS = new Set([
@@ -709,13 +709,13 @@ export async function refreshWallets(
       attempted = result.attempted;
     }
 
-    // Zerion 兜底：公共源这一轮没有拿到新数据（限流冷却或读取失败），而该地址的
-    // 成功时间已经超过 90 分钟、当日额度还有 —— 改用 Zerion 鉴权 API 恢复余额与链分布，
-    // 避免公共接口故障让地址一整天停在旧数据上。
+    // Zerion 兜底：公共源这一轮没有拿到新数据（限流冷却或读取失败）就切换数据源。
+    // 自动批次要求成功时间超过 30 分钟；手动单地址检查不设年龄门槛（点了就该尽力出数）。
     if (status !== "ok" && fallbackRemaining > 0) {
+      const fallbackMinAge = opts.only?.length ? 0 : ZERION_FALLBACK_MIN_AGE_MS;
       const walletSuccessTs = successTs(wallet);
       const staleMs = nowMs - walletSuccessTs;
-      if (staleMs >= ZERION_FALLBACK_MIN_AGE_MS) {
+      if (staleMs >= fallbackMinAge) {
         const zerionDetail = await fetchZerionTotalDetail(wallet.address);
         if (zerionDetail) {
           fallbackRemaining -= 1;
