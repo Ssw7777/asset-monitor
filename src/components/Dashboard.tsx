@@ -359,73 +359,68 @@ export function Dashboard() {
 
       <div className="container" id="top">
         <div className="summary-panel">
-        <section className="profile">
-          <div className="profile-left">
-            <Image src="/avatar.jpg" alt="0xStudy" width={68} height={68} className="avatar" />
-            <div>
-              <div className="profile-name">多钱包总览</div>
+          <section className="profile">
+            <div className="profile-left">
+              <Image src="/avatar.jpg" alt="0xStudy" width={52} height={52} className="avatar" />
+              <div className="stats">
+                <div>
+                  <div className="stat-label">链上资产</div>
+                  <div className="stat-value num">{usd(totals.onchainUsd)}</div>
+                </div>
+                <div>
+                  <div className="stat-label">交易所资产</div>
+                  <div className="stat-value num">{usd(totals.cexUsd)}</div>
+                </div>
+                <div>
+                  <div className="stat-label">手动资产</div>
+                  <div className="stat-value num">{usd(totals.manualUsd)}</div>
+                </div>
+                <div>
+                  <div className="stat-label">DApp 协议</div>
+                  <div className="stat-value num">{dapps.length}</div>
+                </div>
+                <div>
+                  <div className="stat-label">地址上限</div>
+                  <div className="stat-value num">
+                    {wallets.length}/50
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-          <div className="profile-right">
-            <div className="networth-value num">{usd(totals.totalUsd)}</div>
-            <div className="networth-cny num">{cny(totals.totalUsd * rate)}</div>
-            <div className="networth-rate">
-              <label htmlFor="usd-cny-rate">USD/CNY</label>
-              <input
-                id="usd-cny-rate"
-                type="number"
-                step="0.01"
-                inputMode="decimal"
-                value={rateDraft}
-                onChange={(event) => setRateDraft(event.target.value)}
-                onBlur={() => saveRate()}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur();
-                }}
-              />
-              <span>{rateSaving ? "保存中…" : "自动保存"}</span>
+            <div className="profile-right">
+              <div className="profile-status">
+                <span
+                  className={`tag ${
+                    error || data.refreshStatus === "failed" ? "neg" : data.refreshStatus === "partial" ? "warn" : "pos"
+                  }`}
+                >
+                  {error || data.refreshStatus === "failed"
+                    ? "数据获取失败"
+                    : data.refreshStatus === "partial"
+                      ? "部分数据沿用缓存"
+                      : "数据刷新成功"}
+                </span>
+                <span className="small">{rateSaving ? "汇率保存中…" : "快照每 5 分钟"}</span>
+              </div>
+              <div className="networth-value num">{usd(totals.totalUsd)}</div>
+              <div className="networth-cny num">{cny(totals.totalUsd * rate)}</div>
+              <div className="networth-rate">
+                <label htmlFor="usd-cny-rate">USD/CNY</label>
+                <input
+                  id="usd-cny-rate"
+                  type="number"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={rateDraft}
+                  onChange={(event) => setRateDraft(event.target.value)}
+                  onBlur={() => saveRate()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                  }}
+                />
+              </div>
             </div>
-          </div>
-        </section>
-
-        <div className="stats">
-          <div>
-            <div className="stat-label">链上资产</div>
-            <div className="stat-value num">{usd(totals.onchainUsd)}</div>
-          </div>
-          <div>
-            <div className="stat-label">交易所资产</div>
-            <div className="stat-value num">{usd(totals.cexUsd)}</div>
-          </div>
-          <div>
-            <div className="stat-label">手动资产</div>
-            <div className="stat-value num">{usd(totals.manualUsd)}</div>
-          </div>
-          <div>
-            <div className="stat-label">DApp 协议</div>
-            <div className="stat-value num">{dapps.length}</div>
-          </div>
-          <div>
-            <div className="stat-label">地址上限</div>
-            <div className="stat-value num">
-              {wallets.length}/50
-            </div>
-          </div>
-          <div className="stat-status">
-            <span
-              className={`tag ${
-                error || data.refreshStatus === "failed" ? "neg" : data.refreshStatus === "partial" ? "warn" : "pos"
-              }`}
-            >
-              {error || data.refreshStatus === "failed"
-                ? "数据获取失败"
-                : data.refreshStatus === "partial"
-                  ? "部分数据沿用缓存"
-                  : "数据刷新成功"}
-            </span>
-            <span className="small">快照每 5 分钟 · 地址滚动轮询 + 交易所</span>
-          </div>
-        </div>
+          </section>
         </div>
         <div className="overview-duo">
         <PortfolioChart

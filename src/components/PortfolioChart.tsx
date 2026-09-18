@@ -43,15 +43,33 @@ function ChartTooltip({
       <div className="value num">{usd(point.v)}</div>
       <div className="time num">{cny(point.v * rate)}</div>
       <div className="grid">
-        <span>链上</span>
+        <span>
+          <i className="tip-dot" style={{ background: "#5089ff" }} />
+          链上
+        </span>
         <b>{usd(point.onchain)}</b>
-        <span>交易所</span>
+        <span>
+          <i className="tip-dot" style={{ background: "#00a76f" }} />
+          交易所
+        </span>
         <b>{usd(point.cex)}</b>
-        <span>手动</span>
+        <span>
+          <i className="tip-dot" style={{ background: "#fe815f" }} />
+          手动
+        </span>
         <b>{usd(point.manual)}</b>
       </div>
     </div>
   );
+}
+
+/** Y 轴刻度：窄区间也能看出差异（79.0K / 79.1K），不再是清一色的 79K。 */
+function formatAxisTick(value: number) {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (abs >= 10_000) return `${(value / 1000).toFixed(abs < 1_000_000 ? 1 : 0)}K`;
+  if (abs >= 1_000) return `${(value / 1000).toFixed(2)}K`;
+  return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 /** 资产趋势：DeBank 那种细面积图，右侧是 1 小时 / 12 小时 / 24 小时 / 7 天切换。 */
@@ -174,22 +192,19 @@ export function PortfolioChart({
             </defs>
             <XAxis
               dataKey="t"
-              tick={{ fontSize: 12, fill: "#8b93a7" }}
+              tick={{ fontSize: 11, fill: "#8b93a7" }}
               axisLine={false}
               tickLine={false}
               minTickGap={48}
             />
             <YAxis
               domain={yDomain}
-              tick={{ fontSize: 12, fill: "#8b93a7" }}
+              tick={{ fontSize: 11, fill: "#8b93a7" }}
               axisLine={false}
               tickLine={false}
-              width={64}
-              tickFormatter={(value) =>
-                Math.abs(Number(value)) >= 10_000
-                  ? `${Math.round(Number(value) / 1000)}K`
-                  : Math.round(Number(value)).toLocaleString("en-US")
-              }
+              width={52}
+              tickCount={5}
+              tickFormatter={(value) => formatAxisTick(Number(value))}
             />
             <Tooltip
               content={<ChartTooltip rate={rate} />}

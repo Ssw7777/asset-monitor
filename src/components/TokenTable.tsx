@@ -137,38 +137,39 @@ export function TokenTable({
               </span>
             </span>
           </div>
+          <div className="token-card-metrics">
+            <div>
+              <span>价格</span>
+              <b className="num">{priceUsd(group.price)}</b>
+            </div>
+            <div>
+              <span>数量</span>
+              <b className="num">
+                {amountNum(group.amount)} {group.symbol}
+              </b>
+            </div>
+            <div>
+              <span>分布</span>
+              <b className="token-card-location">
+                {group.chains.length === 1 && topChain ? (
+                  <TokenIcon
+                    symbol={topChain.chainName}
+                    localSrc={localChainIcon(topChain.chain)}
+                    size={15}
+                    shape="square"
+                  />
+                ) : null}
+                {group.chains.length === 1 ? topChain?.chainName : `${group.chains.length} 条链`}
+                {` · ${group.wallets.length} 个钱包`}
+              </b>
+            </div>
+          </div>
           <div className="token-card-value value-cell num">
             <div className="cell-main">{usd(group.valueUsd)}</div>
             <div className="value-bar" aria-hidden="true">
               <i style={{ width: `${share}%` }} />
             </div>
             <div className="cell-sub">{share.toFixed(2)}%</div>
-          </div>
-        </div>
-
-        <div className="token-card-metrics">
-          <div>
-            <span>价格</span>
-            <b className="num">{priceUsd(group.price)}</b>
-          </div>
-          <div>
-            <span>数量</span>
-            <b className="num">{amountNum(group.amount)} {group.symbol}</b>
-          </div>
-          <div>
-            <span>分布</span>
-            <b className="token-card-location">
-              {group.chains.length === 1 && topChain ? (
-                <TokenIcon
-                  symbol={topChain.chainName}
-                  localSrc={localChainIcon(topChain.chain)}
-                  size={15}
-                  shape="square"
-                />
-              ) : null}
-              {group.chains.length === 1 ? topChain?.chainName : `${group.chains.length} 条链`}
-              {` · ${group.wallets.length} 个钱包`}
-            </b>
           </div>
         </div>
 

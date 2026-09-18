@@ -147,17 +147,30 @@ a {
   border: 1px solid #d8e1ec;
   border-radius: 14px;
   background: #f7f9fc;
-  padding: 22px;
+  padding: 16px 22px;
   box-shadow: 0 4px 16px rgba(25, 35, 60, 0.035);
 }
 
+/* 单行总览：头像 + 五项统计与总额同一行，面板高度收紧 */
 .summary-panel .profile {
-  padding-top: 0;
+  padding: 0;
+  align-items: center;
 }
 
 .summary-panel .stats {
-  border-top: 1px solid #e5eaf1;
-  padding-top: 18px;
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 0;
+  gap: 26px;
+  align-items: center;
+}
+
+.profile-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 3px;
 }
 
 .overview-duo {
@@ -516,8 +529,8 @@ textarea.field {
 }
 
 .avatar {
-  width: 68px;
-  height: 68px;
+  width: 52px;
+  height: 52px;
   flex: 0 0 auto;
   border-radius: 50%;
   object-fit: cover;
@@ -570,6 +583,21 @@ textarea.field {
   color: var(--accent-ink);
 }
 
+.tag.pos {
+  background: #e8f8f1;
+  color: #07835a;
+}
+
+.tag.warn {
+  background: #fff4d8;
+  color: #9a6500;
+}
+
+.tag.neg {
+  background: #fdeceb;
+  color: #c8372c;
+}
+
 .tag.line {
   border: 1px solid var(--line);
   background: #fff;
@@ -581,16 +609,16 @@ textarea.field {
 }
 
 .networth-value {
-  font-size: 32px;
+  font-size: 26px;
   font-weight: 700;
   line-height: 1.15;
   letter-spacing: -0.02em;
 }
 
 .networth-cny {
-  margin-top: 2px;
+  margin-top: 1px;
   color: var(--ink-2);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
 }
 
@@ -599,7 +627,7 @@ textarea.field {
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 5px;
   color: var(--ink-3);
   font-size: 12px;
 }
@@ -794,32 +822,35 @@ textarea.field {
   box-shadow: 0 5px 14px rgba(57, 41, 94, 0.07);
 }
 
+/* 单行代币卡：价格 / 数量 / 分布与币名同行，卡片高度减半 */
 .token-card-head {
   display: flex;
   min-width: 0;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 14px;
 }
 
 .token-card-value {
-  flex: 0 0 min(42%, 160px);
+  flex: 0 0 auto;
+  min-width: 116px;
 }
 
 .token-card-metrics {
-  display: grid;
-  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1fr) minmax(0, 1.25fr);
-  gap: 8px;
-  margin-top: 13px;
-  border-top: 1px solid var(--line-2);
-  padding-top: 11px;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 22px;
 }
 
 .token-card-metrics > div {
   display: flex;
   min-width: 0;
-  flex-direction: column;
-  gap: 3px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
 }
 
 .token-card-metrics span {
@@ -1224,11 +1255,17 @@ textarea.field {
   font-size: 13px;
 }
 
-/* ── 链卡片横排（DeBank 归集卡） ────────────────────────────────────── */
+/* ── 链卡片横排（DeBank 归集卡）：固定 5 列，收起态两行正好对称 ────── */
 .chain-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
+}
+
+@media (max-width: 1240px) {
+  .chain-strip {
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  }
 }
 
 .chain-card {
@@ -1444,7 +1481,7 @@ textarea.field {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 4px 0 10px;
+  padding: 0 0 10px;
 }
 
 .overview-duo #trend .section-head {
@@ -1487,12 +1524,38 @@ textarea.field {
 }
 
 .chart-delta strong {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .chart-delta span {
   font-size: 14px;
+  font-weight: 600;
+}
+
+/* 流水卡摘要行：净额大数字 + 流入/流出小字 */
+.flow-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  padding: 2px 0 12px;
+}
+
+.flow-summary strong {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.flow-summary-sub {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.flow-summary-sub b {
   font-weight: 600;
 }
 
@@ -1563,6 +1626,20 @@ textarea.field {
   padding-top: 7px;
   color: var(--ink-3);
   font-size: 12px;
+}
+
+.chart-tooltip .grid span {
+  display: flex;
+  align-items: center;
+}
+
+/* 悬浮明细的三个资产板块用三种颜色区分，避免看混 */
+.chart-tooltip .tip-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 2px;
 }
 
 .chart-tooltip .grid b {
@@ -1691,12 +1768,20 @@ textarea.field {
     max-height: 390px;
   }
 
-  .token-card-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .token-card-head {
+    flex-wrap: wrap;
   }
 
-  .token-card-metrics > div:last-child {
-    grid-column: 1 / -1;
+  .token-card-metrics {
+    flex: 0 0 auto;
+    flex-basis: 100%;
+    order: 3;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 6px 18px;
+    margin-top: 2px;
+    border-top: 1px solid var(--line-2);
+    padding-top: 9px;
   }
 
   .token-dust-card {
@@ -1740,7 +1825,7 @@ textarea.field {
   }
 
   .networth-value {
-    font-size: 28px;
+    font-size: 24px;
   }
 
   .stats {

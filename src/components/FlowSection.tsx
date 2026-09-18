@@ -44,6 +44,7 @@ export function FlowSection({
   onMinChange: (min: number) => void;
 }) {
   const events = summary?.events ?? [];
+  const net = summary?.netUsd ?? 0;
 
   return (
     <section className="section section-surface section-flows" id="flows">
@@ -52,15 +53,6 @@ export function FlowSection({
           <h2>资金变动流水</h2>
         </div>
         <div className="inline">
-          <span className="section-total num">
-            <span
-              className={(summary?.netUsd ?? 0) >= 0 ? "pos" : "neg"}
-              title={`流入 +${usd(summary?.totalIn ?? 0)} · 流出 -${usd(summary?.totalOut ?? 0)}`}
-            >
-              {(summary?.netUsd ?? 0) > 0 ? "+" : (summary?.netUsd ?? 0) < 0 ? "-" : ""}
-              {usd(Math.abs(summary?.netUsd ?? 0))}
-            </span>
-          </span>
           <span className="seg">
             {FLOW_RANGES.map((item) => (
               <button
@@ -86,6 +78,17 @@ export function FlowSection({
             ))}
           </span>
         </div>
+      </div>
+
+      <div className="flow-summary">
+        <strong className={`num ${net >= 0 ? "pos" : "neg"}`}>
+          {net > 0 ? "+" : net < 0 ? "-" : ""}
+          {usd(Math.abs(net))}
+        </strong>
+        <span className="flow-summary-sub num">
+          流入 <b className="pos">+{usd(summary?.totalIn ?? 0)}</b> · 流出{" "}
+          <b className="neg">-{usd(summary?.totalOut ?? 0)}</b> · 共 {events.length} 条
+        </span>
       </div>
 
       {events.length ? (
@@ -132,12 +135,6 @@ export function FlowSection({
             })}
           </div>
           <div className="table-foot">
-            <span>
-              流入 <span className="pos">+{usd(summary?.totalIn ?? 0)}</span> · 流出{" "}
-              <span className="neg">-{usd(summary?.totalOut ?? 0)}</span> · 净{" "}
-              {(summary?.netUsd ?? 0) >= 0 ? "+" : "-"}
-              {usd(Math.abs(summary?.netUsd ?? 0))} · 共 {events.length} 条记录
-            </span>
             <span>{summary?.note}</span>
           </div>
         </div>
