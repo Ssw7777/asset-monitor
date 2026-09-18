@@ -316,46 +316,48 @@ async function fetchWalletDetail(
 
 /**
  * Zerion 硬兜底：Rabby / DeBank 公共源持续限流时，用鉴权 API 读取钱包总额与链分布。
- * Zerion 走独立鉴权通道，不受公共 IP 池的 429 影响；每日调用总量由调用方持久化计数控制。
- * `distribution_by_chain` 的取值同时兼容 `{ value }` 对象和裸数字两种返回形态。
+ * 走 /positions/ 端点（一次请求返回全部持仓，按链聚合即得总额）——注意 Zerion 没有
+ * 钱包级 total_value 端点，/v1/wallets/{addr} 会 404。每日调用总量由调用方持久化计数控制。
  */
 async function fetchZerionTotalDetail(address: string): Promise<TotalBalanceDetail | null> {
   const key = nextZerionKey();
   if (!key) return null;
   try {
-    const response = await fetch(`https://api.zerion.io/v1/wallets/${address}?currency=usd`, {
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`,
-        Accept: "application/json",
-      },
-      cache: "no-store",
-      signal: AbortSignal.timeout(15_000),
-    });
+    const response = await fetch(
+      `https://api.zerion.io/v1/wallets/${address}/positions/?currency=usd&page[size]=100`,
+      {
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`,
+          Accept: "application/json",
+        },
+        cache: "no-store",
+        signal: AbortSignal.timeout(15_000),
+      }
+    );
     if (!response.ok) return null;
     const body = (await response.json()) as {
-      data?: {
-        attributes?: {
-          positions?: {
-            total_value?: unknown;
-            distribution_by_chain?: Record<string, unknown>;
-          };
-        };
-      };
+      data?: Array<{
+        attributes?: { value?: unknown };
+        relationships?: { chain?: { data?: { id?: string } } };
+      }>;
     };
-    const positions = body.data?.attributes?.positions;
-    const totalUsd = number(positions?.total_value);
-    if (!Number.isFinite(totalUsd) || totalUsd <= 0) return null;
-    const chains: ChainBalanceDetail[] = [];
-    for (const [rawId, entry] of Object.entries(positions?.distribution_by_chain || {})) {
-      const id = normalizeChainId(rawId);
-      const rawValue =
-        entry && typeof entry === "object" ? (entry as { value?: unknown }).value : entry;
-      const valueUsd = number(rawValue);
-      if (id && id !== "unknown" && valueUsd >= 0.01) {
-        chains.push({ id, name: chainName(id), valueUsd });
+    if (!Array.isArray(body.data)) return null;
+    let totalUsd = 0;
+    const chainValues = new Map<string, number>();
+    for (const item of body.data) {
+      const value = number(item.attributes?.value);
+      if (!Number.isFinite(value) || value <= 0) continue;
+      totalUsd += value;
+      const chainId = normalizeChainId(String(item.relationships?.chain?.data?.id || "unknown"));
+      if (chainId && chainId !== "unknown") {
+        chainValues.set(chainId, (chainValues.get(chainId) || 0) + value);
       }
     }
-    chains.sort((left, right) => right.valueUsd - left.valueUsd);
+    if (totalUsd <= 0) return null;
+    const chains: ChainBalanceDetail[] = [...chainValues.entries()]
+      .map(([id, valueUsd]) => ({ id, name: chainName(id), valueUsd }))
+      .filter((chain) => chain.valueUsd >= 0.01)
+      .sort((left, right) => right.valueUsd - left.valueUsd);
     return { totalUsd, chains };
   } catch {
     return null;
