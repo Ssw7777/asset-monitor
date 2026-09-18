@@ -1,5 +1,6 @@
 import { fetchBinanceBalance, fetchGateBalance, fetchOkxBalance, type CexResult } from "@/lib/cex/balances";
 import { refreshOnchainBreakdown, refreshWallets } from "@/lib/onchain/debank";
+import { zerionKeys } from "@/lib/onchain/zerion-keys";
 import { BASELINE } from "@/lib/seed";
 import {
   computeTotals,
@@ -61,8 +62,8 @@ export interface RefreshResult {
   payload: Record<string, unknown>;
 }
 
-/** Zerion 兜底每日硬上限：用户确认 300/天额度用不完（日常代币明细仅 ~34 次），放宽到 240。 */
-const ZERION_FALLBACK_DAILY_LIMIT = 240;
+/** Zerion 兜底每日硬上限：按 Key 数量放大（240/天/Key），轮转池分摊，不会打爆免费额度。 */
+const ZERION_FALLBACK_DAILY_LIMIT_PER_KEY = 240;
 
 async function refreshOnchainSlice(
   state: PortfolioState,
@@ -82,6 +83,7 @@ async function refreshOnchainSlice(
   const todayKey = now.slice(0, 10);
   const fallbackUsedToday =
     state.zerionFallback?.date === todayKey ? state.zerionFallback.count : 0;
+  const fallbackDailyLimit = ZERION_FALLBACK_DAILY_LIMIT_PER_KEY * Math.max(1, zerionKeys().length);
   const { wallets, fallbackUsed } = await refreshWallets(
     state.wallets,
     chainCache,
@@ -91,7 +93,7 @@ async function refreshOnchainSlice(
       budget: walletBudget,
       only: selection.walletIds,
       staleMinutes: selection.staleMinutes,
-      fallbackRemaining: Math.max(0, ZERION_FALLBACK_DAILY_LIMIT - fallbackUsedToday),
+      fallbackRemaining: Math.max(0, fallbackDailyLimit - fallbackUsedToday),
     }
   );
   let partial = wallets.some((wallet) => wallet.status !== "ok");

@@ -13,6 +13,7 @@ import type {
   Wallet,
 } from "../types";
 import { activeTokenSource, fetchZerionTokens, normalizeChainId, type TokenSource } from "./token-providers";
+import { nextZerionKey } from "./zerion-keys";
 
 interface ChainBalanceDetail {
   id: string;
@@ -319,7 +320,7 @@ async function fetchWalletDetail(
  * `distribution_by_chain` 的取值同时兼容 `{ value }` 对象和裸数字两种返回形态。
  */
 async function fetchZerionTotalDetail(address: string): Promise<TotalBalanceDetail | null> {
-  const key = process.env.ZERION_API_KEY;
+  const key = nextZerionKey();
   if (!key) return null;
   try {
     const response = await fetch(`https://api.zerion.io/v1/wallets/${address}?currency=usd`, {

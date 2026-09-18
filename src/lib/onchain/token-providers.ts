@@ -1,4 +1,5 @@
 import type { TokenLine } from "../types";
+import { nextZerionKey, zerionKeys } from "./zerion-keys";
 
 export type TokenSource = "debank" | "zerion" | "rabby-public" | "none";
 
@@ -143,7 +144,7 @@ export function normalizeChainId(raw: string): string {
 /** 当前生效的代币数据源（在环境变量里按优先级选择）。 */
 export function activeTokenSource(): TokenSource {
   if (process.env.DEBANK_ACCESS_KEY) return "debank";
-  if (process.env.ZERION_API_KEY) return "zerion";
+  if (zerionKeys().length) return "zerion";
   return "rabby-public";
 }
 
@@ -185,7 +186,7 @@ export async function fetchZerionTokens(
   address: string,
   opts: { deadlineMs?: number } = {}
 ): Promise<ProviderResult | null> {
-  const key = process.env.ZERION_API_KEY;
+  const key = nextZerionKey();
   if (!key) return null;
   const remainingMs = opts.deadlineMs == null ? 20_000 : opts.deadlineMs - Date.now();
   if (remainingMs < 750) return null;
