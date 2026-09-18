@@ -523,6 +523,7 @@ export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: str
     manual: point.manual,
     exchanges: point.exchanges,
     wallets: point.wallets,
+    zerionWallets: point.zerionWallets?.length ? point.zerionWallets : undefined,
     manualItems: point.manualItems,
     dapps: point.dapps,
     partial: point.partial === true ? true : undefined,

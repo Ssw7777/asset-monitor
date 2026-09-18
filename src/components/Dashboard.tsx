@@ -47,7 +47,7 @@ interface PortfolioPayload {
   refreshStatus?: "ok" | "partial" | "failed";
 }
 
-/** 每 5 分钟轮询全部地址余额 + 交易所；协议缓存 6 小时，代币明细约 3 小时轮换。 */
+/** 快照每 5 分钟记一条；钱包余额由云端接力循环每约 10 分钟滚动检查（成功时间最旧的优先）。 */
 const AUTO_TICK_MS = 5 * 60 * 1000;
 const AUTO_FULL_EVERY_MS = 5 * 60 * 1000;
 const BACKOFF_BASE_MS = 30_000;
@@ -423,7 +423,7 @@ export function Dashboard() {
                   ? "部分数据沿用缓存"
                   : "数据刷新成功"}
             </span>
-            <span className="small">每 5 分钟轮询全部地址 + 交易所</span>
+            <span className="small">快照每 5 分钟 · 地址滚动轮询 + 交易所</span>
           </div>
         </div>
         </div>

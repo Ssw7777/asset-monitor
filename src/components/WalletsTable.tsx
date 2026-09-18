@@ -17,6 +17,7 @@ export function WalletsTable({
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
+  const [checkingId, setCheckingId] = useState<string | null>(null);
   const [panel, setPanel] = useState<"none" | "add" | "batch">("none");
   const [form, setForm] = useState({ name: "", address: "", chain: "EVM" as ChainType });
   const [editId, setEditId] = useState<string | null>(null);
@@ -40,6 +41,49 @@ export function WalletsTable({
 
   const evmCount = wallets.filter((wallet) => wallet.chain === "EVM").length;
   const absCount = wallets.filter((wallet) => wallet.chain === "ABSTRACT").length;
+  const over20 = wallets.filter((wallet) => {
+    const at = wallet.lastSuccess?.at;
+    return !at || Date.now() - new Date(at).getTime() > 20 * 60 * 1000;
+  }).length;
+
+  /** 单地址立即检查：只刷新这一个地址，返回后把结果合并进当前列表。 */
+  async function checkWallet(wallet: Wallet) {
+    if (checkingId) return;
+    setCheckingId(wallet.id);
+    setMsg("");
+    try {
+      const res = await fetch(`/api/refresh?mode=wallet&walletId=${encodeURIComponent(wallet.id)}`, {
+        method: "POST",
+      });
+      if (res.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setMsg(
+          data?.error ||
+            (Number(data?.batchAttempted) === 0
+              ? "数据源限流中，稍后再试；已保留上次成功数据"
+              : "检查失败，已保留上次成功数据")
+        );
+        return;
+      }
+      const updated = (data?.checkedWallet ?? null) as Wallet | null;
+      if (updated && onChange) {
+        onChange(wallets.map((item) => (item.id === updated.id ? updated : item)));
+      }
+      setMsg(
+        updated?.status === "ok"
+          ? `已重新读取「${wallet.name}」`
+          : `「${wallet.name}」本次未读取成功，保留上次成功数据`
+      );
+    } catch {
+      setMsg("检查失败，网络异常");
+    } finally {
+      setCheckingId(null);
+    }
+  }
 
   async function api(body: Record<string, unknown>) {
     setBusy(true);
@@ -128,11 +172,13 @@ export function WalletsTable({
     if (wallet.status === "ok" && successAge <= 10 * 60 * 1000) {
       return { text: `最新 · ${timeAgo(successAt)}`, cls: "pos" };
     }
-    if (wallet.status === "ok" && successAt) {
-      return { text: `上次成功数据 · ${timeAgo(successAt)}`, cls: "" };
+    if (successAt && successAge !== Number.POSITIVE_INFINITY) {
+      // 10–20 分钟黄色、超过 20 分钟红色：调度器每轮都会最优先单独补查红色地址。
+      return {
+        text: `上次成功 · ${timeAgo(successAt)}`,
+        cls: successAge <= 20 * 60 * 1000 ? "warn" : "neg",
+      };
     }
-    if (wallet.status === "cached" || wallet.status === "stale")
-      return { text: `上次成功数据 · ${timeAgo(successAt)}`, cls: "" };
     if (wallet.status === "baseline") return { text: "基线数据", cls: "" };
     return {
       text: wallet.balanceUsd > 0 ? "读取失败 · 保留上次" : "读取失败 · 暂无历史数据",
@@ -148,6 +194,11 @@ export function WalletsTable({
           <span className="hint">
             {wallets.length} / 50 个地址 · EVM {evmCount} · Abstract {absCount}
           </span>
+          {over20 > 0 && (
+            <span className="hint" style={{ color: "#c8372c" }}>
+              {over20} 个地址超过 20 分钟未更新，每轮自动优先补查
+            </span>
+          )}
         </div>
         <div className="inline">
           <button
@@ -358,6 +409,15 @@ export function WalletsTable({
               <div className="right inline" style={{ justifyContent: "flex-end" }}>
                 <button
                   type="button"
+                  className="btn-mini"
+                  disabled={checkingId === wallet.id || busy}
+                  onClick={() => checkWallet(wallet)}
+                  title="立即单独检查这个地址的余额"
+                >
+                  {checkingId === wallet.id ? "检查中…" : "检查"}
+                </button>
+                <button
+                  type="button"
                   className="btn-mini plain"
                   onClick={() => {
                     setEditId(wallet.id);
@@ -385,7 +445,7 @@ export function WalletsTable({
           显示 {filtered.length} / {wallets.length} 个地址 · 上限 50
         </span>
         <span>
-          每 5 分钟轮询全部地址；单个接口失败时保留上次成功值，不用错误的 0 覆盖
+          每 10 分钟滚动轮询全部地址，成功时间最旧的地址优先补查；单个接口失败时保留上次成功值，不用错误的 0 覆盖
         </span>
       </div>
     </section>

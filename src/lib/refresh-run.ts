@@ -61,10 +61,14 @@ export interface RefreshResult {
   payload: Record<string, unknown>;
 }
 
+/** Zerion 兜底每日硬上限：25 钱包的代币明细约 200 次/天，兜底再留 60 次余量。 */
+const ZERION_FALLBACK_DAILY_LIMIT = 60;
+
 async function refreshOnchainSlice(
   state: PortfolioState,
   walletBudget: number | undefined,
-  now: string
+  now: string,
+  selection: { staleMinutes?: number; walletIds?: string[] } = {}
 ) {
   const tokenCache = { ...(state.tokenCache || {}) };
   const protocolCache = { ...(state.protocolCache || {}) };
@@ -75,9 +79,21 @@ async function refreshOnchainSlice(
   const previousAttemptById = new Map(
     state.wallets.map((wallet) => [wallet.id, wallet.updatedAt ?? null])
   );
-  const wallets = await refreshWallets(state.wallets, chainCache, tokenCache, protocolCache, {
-    budget: walletBudget,
-  });
+  const todayKey = now.slice(0, 10);
+  const fallbackUsedToday =
+    state.zerionFallback?.date === todayKey ? state.zerionFallback.count : 0;
+  const { wallets, fallbackUsed } = await refreshWallets(
+    state.wallets,
+    chainCache,
+    tokenCache,
+    protocolCache,
+    {
+      budget: walletBudget,
+      only: selection.walletIds,
+      staleMinutes: selection.staleMinutes,
+      fallbackRemaining: Math.max(0, ZERION_FALLBACK_DAILY_LIMIT - fallbackUsedToday),
+    }
+  );
   let partial = wallets.some((wallet) => wallet.status !== "ok");
   let breakdown = state.onchainBreakdown ?? null;
   const batchAttempted = wallets.filter(
@@ -126,6 +142,9 @@ async function refreshOnchainSlice(
   // Persist the entire on-chain slice once. The old per-field helpers each read and
   // rewrote the same large JSON document, multiplying Turso traffic for every batch.
   state.wallets = wallets;
+  if (fallbackUsed > 0) {
+    state.zerionFallback = { date: todayKey, count: fallbackUsedToday + fallbackUsed };
+  }
   state.onchainCacheUsd = wallets.reduce((total, wallet) => total + wallet.balanceUsd, 0);
   state.tokenCache = tokenCache;
   state.protocolCache = protocolCache;
@@ -134,24 +153,30 @@ async function refreshOnchainSlice(
   if (succeededThisBatch) state.lastFullRefreshAt = now;
   await writeStore(state);
 
-  return { state, wallets, partial, breakdown, batchAttempted, batchSucceeded };
+  return { state, wallets, partial, breakdown, batchAttempted, batchSucceeded, zerionRecovered: fallbackUsed };
 }
 
 /**
  * One rolling wallet-only batch. It deliberately skips CEX reads and snapshots;
  * the scheduler performs those once per five-minute cycle through fast mode.
+ * `staleMinutes` 限定只刷成功时间超过阈值的地址（调度器补查批次）；
+ * `walletIds` 指定单个地址立即检查（地址管理页的「检查」按钮）。
  */
 export async function runWalletBatch(
-  opts: { walletBudget?: number } = {}
+  opts: { walletBudget?: number; staleMinutes?: number; walletIds?: string[] } = {}
 ): Promise<RefreshResult> {
   const state = await readStore();
   const now = new Date().toISOString();
-  const onchain = await refreshOnchainSlice(state, opts.walletBudget, now);
+  const onchain = await refreshOnchainSlice(state, opts.walletBudget, now, {
+    staleMinutes: opts.staleMinutes,
+    walletIds: opts.walletIds,
+  });
   const finalState = onchain.state;
   const walletOk = finalState.wallets.filter((wallet) => wallet.status === "ok").length;
   const walletUsable = finalState.wallets.filter(
     (wallet) => wallet.status !== "error" || wallet.balanceUsd > 0
   ).length;
+  const noStaleTargets = !!opts.staleMinutes && !onchain.batchAttempted;
 
   return {
     state: finalState,
@@ -163,8 +188,13 @@ export async function runWalletBatch(
     payload: {
       refreshed: true,
       refreshMode: "wallet-batch",
-      refreshStatus:
-        onchain.batchSucceeded === 0
+      staleMinutes: opts.staleMinutes ?? null,
+      checkedWalletIds: opts.walletIds ?? null,
+      zerionRecovered: onchain.zerionRecovered,
+      skipped: noStaleTargets ? "no_stale_wallets" : undefined,
+      refreshStatus: noStaleTargets
+        ? "ok"
+        : onchain.batchSucceeded === 0
           ? "failed"
           : walletOk === finalState.wallets.length
           ? "ok"
@@ -240,6 +270,9 @@ export async function runRefresh(
     manual: totals.manualUsd,
     exchanges: Object.fromEntries(latest.exchanges.map((item) => [item.exchange, item.balanceUsd])),
     wallets: Object.fromEntries(latest.wallets.map((wallet) => [wallet.address.toLowerCase(), wallet.balanceUsd])),
+    zerionWallets: latest.wallets
+      .filter((wallet) => wallet.source === "zerion")
+      .map((wallet) => wallet.address.toLowerCase()),
     manualItems: Object.fromEntries(latest.manual.map((item) => [item.name, item.amountUsd])),
     dapps: breakdown
       ? Object.fromEntries(breakdown.dapps.map((dapp) => [dapp.name, dapp.netUsd]))

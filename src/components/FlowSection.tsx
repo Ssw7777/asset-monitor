@@ -53,9 +53,13 @@ export function FlowSection({
         </div>
         <div className="inline">
           <span className="section-total num">
-            <span className="pos">+{usd(summary?.totalIn ?? 0)}</span>
-            {" / "}
-            <span className="neg">-{usd(summary?.totalOut ?? 0)}</span>
+            <span
+              className={(summary?.netUsd ?? 0) >= 0 ? "pos" : "neg"}
+              title={`流入 +${usd(summary?.totalIn ?? 0)} · 流出 -${usd(summary?.totalOut ?? 0)}`}
+            >
+              {(summary?.netUsd ?? 0) > 0 ? "+" : (summary?.netUsd ?? 0) < 0 ? "-" : ""}
+              {usd(Math.abs(summary?.netUsd ?? 0))}
+            </span>
           </span>
           <span className="seg">
             {FLOW_RANGES.map((item) => (
@@ -129,7 +133,10 @@ export function FlowSection({
           </div>
           <div className="table-foot">
             <span>
-              净流入 {usd(summary?.netUsd ?? 0)} · 共 {events.length} 条记录（只显示最新 {events.length} 条）
+              流入 <span className="pos">+{usd(summary?.totalIn ?? 0)}</span> · 流出{" "}
+              <span className="neg">-{usd(summary?.totalOut ?? 0)}</span> · 净{" "}
+              {(summary?.netUsd ?? 0) >= 0 ? "+" : "-"}
+              {usd(Math.abs(summary?.netUsd ?? 0))} · 共 {events.length} 条记录
             </span>
             <span>{summary?.note}</span>
           </div>

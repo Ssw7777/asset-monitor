@@ -59,6 +59,8 @@ export interface Wallet {
   updatedAt?: string | null;
   /** Last successful refresh: timestamp + balance at that moment. */
   lastSuccess?: { at: string; balanceUsd: number } | null;
+  /** 最近一次成功读数的数据源:public = Rabby/DeBank 公共源;zerion = 公共源持续失败时的鉴权兜底。 */
+  source?: "public" | "zerion";
 }
 
 export interface ExchangeBalance {
@@ -87,6 +89,8 @@ export interface SnapshotPoint {
   seeded?: boolean;
   /** 余额口径升级当轮需要忽略的交易所，避免把算法差额误记为真实流水。 */
   suppressExchangeFlows?: string[];
+  /** 本快照里这些地址的余额来自 Zerion 兜底读数；相邻快照任一侧为兜底值时不记流水（估值口径切换，不是真实资金变动）。 */
+  zerionWallets?: string[];
 }
 
 export type FlowDirection = "in" | "out" | "transfer";
@@ -261,6 +265,8 @@ export interface PortfolioState {
   protocolCache?: Record<string, WalletProtocolCacheEntry>;
   /** 逐地址的链分布缓存（服务端专用，避免 Serverless 冷启动丢失其他批次） */
   chainCache?: Record<string, WalletChainCacheEntry>;
+  /** Zerion 兜底当日用量计数 { date: YYYY-MM-DD, count }，硬上限防止免费额度被单日故障打爆。 */
+  zerionFallback?: { date: string; count: number };
   /** Optional encrypted CEX keys at rest (server-only) */
   encryptedSecrets?: EncryptedSecretsBlob | null;
 }

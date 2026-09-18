@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
   const state = await readStore();
   const wallets = state.wallets;
   const tenMinutes = 10 * 60 * 1000;
+  const twentyMinutes = 20 * 60 * 1000;
   const threeHours = 3 * 60 * 60 * 1000;
   const refreshAgeSeconds = state.lastRefresh
     ? Math.max(0, Math.round((Date.now() - new Date(state.lastRefresh).getTime()) / 1000))
@@ -34,6 +35,10 @@ export async function GET(req: NextRequest) {
     walletsLive: wallets.filter((wallet) => {
       const at = wallet.lastSuccess?.at ?? wallet.lastUpdated;
       return wallet.status === "ok" && !!at && Date.now() - new Date(at).getTime() <= tenMinutes;
+    }).length,
+    walletsOver20min: wallets.filter((wallet) => {
+      const at = wallet.lastSuccess?.at;
+      return !at || Date.now() - new Date(at).getTime() > twentyMinutes;
     }).length,
     walletsStale: wallets.filter((wallet) => {
       const at = wallet.lastSuccess?.at;

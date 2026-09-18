@@ -22,6 +22,8 @@ async function handle(req: NextRequest) {
   /**
    * mode=fast：只刷新交易所 + 写一条快照。
    * mode=wallet-batch：只刷新最多 5 个轮转钱包，不读交易所、不写快照。
+   *   - staleMinutes=N：只刷「成功时间超过 N 分钟」的地址（调度器 20 分钟补查批次）。
+   *   - walletId=x：只刷指定地址（地址管理页「检查」按钮）。
    * mode=full / auto：兼容页面手动刷新与每日兜底，同样使用安全的小批量钱包预算。
    */
   const searchParams = new URL(req.url).searchParams;
@@ -31,6 +33,12 @@ async function handle(req: NextRequest) {
   const walletBudget = Number.isInteger(requestedWalletBudget)
     ? Math.max(1, Math.min(5, requestedWalletBudget))
     : undefined;
+  const staleMinutesParam = Number(searchParams.get("staleMinutes"));
+  const staleMinutes =
+    Number.isInteger(staleMinutesParam) && staleMinutesParam > 0
+      ? Math.min(1440, staleMinutesParam)
+      : undefined;
+  const walletId = (searchParams.get("walletId") || "").trim();
   const leaseOwner = req.headers.get("x-idempotency-key") || randomUUID();
   const acquired = await acquireRefreshLease(leaseOwner);
   if (!acquired) {
@@ -42,7 +50,11 @@ async function handle(req: NextRequest) {
       mode === "fast"
         ? await runRefresh({ fast: true })
         : mode === "wallet-batch"
-          ? await runWalletBatch({ walletBudget })
+          ? await runWalletBatch({
+              walletBudget,
+              staleMinutes,
+              walletIds: walletId ? [walletId] : undefined,
+            })
         : mode === "full"
           ? await runRefresh({ walletBudget })
           : await runRefresh({ auto: true, walletBudget });
@@ -52,6 +64,7 @@ async function handle(req: NextRequest) {
         ok: refreshStatus !== "failed",
         mode,
         walletBudget: walletBudget ?? 5,
+        staleMinutes: staleMinutes ?? null,
         ran: result.payload.refreshMode,
         refreshStatus,
         refreshedAt: new Date().toISOString(),
