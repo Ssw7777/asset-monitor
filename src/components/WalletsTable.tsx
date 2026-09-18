@@ -73,9 +73,9 @@ export function WalletsTable({
         onChange(wallets.map((item) => (item.id === updated.id ? updated : item)));
       }
       if (updated?.status === "ok") {
-        setMsg(updated.source === "zerion" ? `已通过 Zerion 兜底读取「${wallet.name}」` : `已重新读取「${wallet.name}」`);
+        setMsg(`已重新读取「${wallet.name}」`);
       } else if (Number(data?.batchAttempted) === 0) {
-        setMsg("公共接口限流中且当日兜底额度已用完，明天再试");
+        setMsg("公共接口限流中，稍后再试；已保留上次成功数据");
       } else {
         setMsg(`「${wallet.name}」本次读取失败，保留上次成功数据（${timeAgo(updated?.lastSuccess?.at ?? null)}）`);
       }

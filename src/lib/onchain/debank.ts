@@ -13,7 +13,6 @@ import type {
   Wallet,
 } from "../types";
 import { activeTokenSource, fetchZerionTokens, normalizeChainId, type TokenSource } from "./token-providers";
-import { nextZerionKey } from "./zerion-keys";
 
 interface ChainBalanceDetail {
   id: string;
@@ -63,13 +62,6 @@ const TOKEN_CHAINS_PER_WALLET = 3;
 const TOKEN_MIN_WALLET_USD = 10;
 const TOKEN_MIN_CHAIN_USD = 5;
 const TOKEN_MIN_VALUE_USD = 0.01;
-/**
- * Zerion 硬兜底：公共源（Rabby/DeBank）连续限流时，成功时间超过 30 分钟的地址
- * 改用 Zerion 鉴权 API 恢复；手动单地址「检查」不受年龄限制（点了就该尽力出数）。
- * 每批最多 5 个、每日总量 240 次（用户确认 300/天额度用不完），由调用方持久化计数控制。
- */
-const ZERION_FALLBACK_MIN_AGE_MS = 30 * 60 * 1000;
-const ZERION_FALLBACK_PER_BATCH = 5;
 
 /** 稳定币白名单：这些代币在链上分类时归入“稳定币”，其余归入“现货”。 */
 const STABLE_SYMBOLS = new Set([
@@ -314,56 +306,6 @@ async function fetchWalletDetail(
     : { detail: null, status: "error", attempted };
 }
 
-/**
- * Zerion 硬兜底：Rabby / DeBank 公共源持续限流时，用鉴权 API 读取钱包总额与链分布。
- * 走 /positions/ 端点（一次请求返回全部持仓，按链聚合即得总额）——注意 Zerion 没有
- * 钱包级 total_value 端点，/v1/wallets/{addr} 会 404。每日调用总量由调用方持久化计数控制。
- */
-async function fetchZerionTotalDetail(address: string): Promise<TotalBalanceDetail | null> {
-  const key = nextZerionKey();
-  if (!key) return null;
-  try {
-    const response = await fetch(
-      `https://api.zerion.io/v1/wallets/${address}/positions/?currency=usd&page[size]=100`,
-      {
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`,
-          Accept: "application/json",
-        },
-        cache: "no-store",
-        signal: AbortSignal.timeout(15_000),
-      }
-    );
-    if (!response.ok) return null;
-    const body = (await response.json()) as {
-      data?: Array<{
-        attributes?: { value?: unknown };
-        relationships?: { chain?: { data?: { id?: string } } };
-      }>;
-    };
-    if (!Array.isArray(body.data)) return null;
-    let totalUsd = 0;
-    const chainValues = new Map<string, number>();
-    for (const item of body.data) {
-      const value = number(item.attributes?.value);
-      if (!Number.isFinite(value) || value <= 0) continue;
-      totalUsd += value;
-      const chainId = normalizeChainId(String(item.relationships?.chain?.data?.id || "unknown"));
-      if (chainId && chainId !== "unknown") {
-        chainValues.set(chainId, (chainValues.get(chainId) || 0) + value);
-      }
-    }
-    if (totalUsd <= 0) return null;
-    const chains: ChainBalanceDetail[] = [...chainValues.entries()]
-      .map(([id, valueUsd]) => ({ id, name: chainName(id), valueUsd }))
-      .filter((chain) => chain.valueUsd >= 0.01)
-      .sort((left, right) => right.valueUsd - left.valueUsd);
-    return { totalUsd, chains };
-  } catch {
-    return null;
-  }
-}
-
 type ProtocolCache = Record<string, WalletProtocolCacheEntry>;
 type ChainCache = Record<string, WalletChainCacheEntry>;
 
@@ -603,11 +545,9 @@ export async function refreshWallets(
     only?: string[];
     /** 只刷「成功时间超过 N 分钟」的地址（从未成功的地址永远符合），供调度器补查批次使用。 */
     staleMinutes?: number;
-    /** Zerion 兜底当日剩余额度；函数内部再按每批上限收敛，返回值报告实际消耗。 */
-    fallbackRemaining?: number;
   } = {}
-): Promise<{ wallets: Wallet[]; fallbackUsed: number }> {
-  if (!wallets.length) return { wallets: [], fallbackUsed: 0 };
+): Promise<Wallet[]> {
+  if (!wallets.length) return [];
   const originalOrder = new Map(wallets.map((wallet, index) => [wallet.id, index]));
   const stopAt = Date.now() + 40_000;
   /**
@@ -653,11 +593,6 @@ export async function refreshWallets(
     )
     .slice(0, budget);
   const targetIds = new Set(targets.map((wallet) => wallet.id));
-  let fallbackUsed = 0;
-  let fallbackRemaining = Math.max(
-    0,
-    Math.min(opts.fallbackRemaining ?? 0, ZERION_FALLBACK_PER_BATCH)
-  );
   /** 本轮补协议明细的地址（6 小时缓存），优先最久没补过的。 */
   const protocolTargets = new Set(
     [...targets]
@@ -698,39 +633,10 @@ export async function refreshWallets(
       .map((wallet) => wallet.address.toLowerCase())
   );
   const refreshed = await mapPool(targets, CONCURRENCY, async (wallet) => {
+    if (Date.now() >= stopAt - 10_000 || publicBlocked()) return wallet;
     const attemptedAt = new Date().toISOString();
     const previous = wallet.balanceUsd;
-    const canAttemptPublic = Date.now() < stopAt - 10_000 && !publicBlocked();
-    let usd = 0;
-    let status: WalletFetchStatus = "error";
-    let attempted = false;
-    let usedZerion = false;
-    if (canAttemptPublic) {
-      const result = await fetchWalletUsd(wallet.address, { force: true });
-      usd = result.usd;
-      status = result.status;
-      attempted = result.attempted;
-    }
-
-    // Zerion 兜底：公共源这一轮没有拿到新数据（限流冷却或读取失败）就切换数据源。
-    // 自动批次要求成功时间超过 30 分钟；手动单地址检查不设年龄门槛（点了就该尽力出数）。
-    if (status !== "ok" && fallbackRemaining > 0) {
-      const fallbackMinAge = opts.only?.length ? 0 : ZERION_FALLBACK_MIN_AGE_MS;
-      const walletSuccessTs = successTs(wallet);
-      const staleMs = nowMs - walletSuccessTs;
-      if (staleMs >= fallbackMinAge) {
-        const zerionDetail = await fetchZerionTotalDetail(wallet.address);
-        if (zerionDetail) {
-          fallbackRemaining -= 1;
-          fallbackUsed += 1;
-          status = "ok";
-          usd = zerionDetail.totalUsd;
-          attempted = true;
-          usedZerion = true;
-          cache.set(wallet.address.toLowerCase(), { detail: zerionDetail, at: Date.now() });
-        }
-      }
-    }
+    const { usd, status, attempted } = await fetchWalletUsd(wallet.address, { force: true });
     if (!attempted) return wallet;
     const memoryDetail = cache.get(wallet.address.toLowerCase());
     if (memoryDetail) {
@@ -766,7 +672,8 @@ export async function refreshWallets(
         updatedAt: attemptedAt,
         lastSuccess: { at: attemptedAt, balanceUsd },
         status: "ok" as const,
-        source: usedZerion ? ("zerion" as const) : ("public" as const),
+        // 余额一律来自公共源；显式重置，避免历史残留的 zerion 标记继续抑制流水
+        source: "public" as const,
       };
     }
     if (status === "cached") {
@@ -811,10 +718,9 @@ export async function refreshWallets(
   });
   // 没被选中的地址原样返回（保留上次成功的余额与状态）
   const untouched = wallets.filter((wallet) => !targetIds.has(wallet.id));
-  const merged = [...refreshed, ...untouched].sort(
+  return [...refreshed, ...untouched].sort(
     (left, right) => (originalOrder.get(left.id) ?? 0) - (originalOrder.get(right.id) ?? 0)
   );
-  return { wallets: merged, fallbackUsed };
 }
 
 function canonicalDappName(value: string) {
