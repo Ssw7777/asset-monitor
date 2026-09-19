@@ -13,6 +13,41 @@ export async function GET(req: NextRequest) {
   if (!(await hasCronAuthorization(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
+  const url = new URL(req.url);
+  const checkAddress = (url.searchParams.get("check") || "").trim();
+
+  // 服务端直查第三方数据源（Vercel hkg1 出口 IP），用于对账一个地址。
+  if (checkAddress) {
+    const out: Record<string, unknown> = {};
+    const hd: Record<string, string> = {
+      Accept: "application/json",
+      "User-Agent": "Mozilla/5.0",
+      Origin: "https://debank.com",
+      Referer: "https://debank.com/",
+    };
+    for (const [label, u] of [
+      ["debank_total", `https://api.debank.com/user/total_balance?addr=${checkAddress}`],
+      ["debank_protocols", `https://api.debank.com/user/complex_protocol_list?addr=${checkAddress}`],
+      ["rabby_total", `https://api.rabby.io/v1/user/total_balance?id=${checkAddress}`],
+      ["rabby_protocols", `https://api.rabby.io/v1/user/complex_protocol_list?id=${checkAddress}`],
+    ] as const) {
+      try {
+        const response = await fetch(u, { headers: hd, cache: "no-store", signal: AbortSignal.timeout(20_000) });
+        const text = await response.text();
+        let parsed: unknown = text;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          /* keep raw */
+        }
+        out[label] = { status: response.status, body: parsed };
+      } catch (error) {
+        out[label] = { error: String(error) };
+      }
+    }
+    return NextResponse.json({ check: checkAddress, results: out });
+  }
+
   const state = await readStore();
   const wallets = state.wallets.map((wallet) => {
     const addressLower = wallet.address.toLowerCase();
