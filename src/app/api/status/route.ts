@@ -44,6 +44,10 @@ export async function GET(req: NextRequest) {
       const at = wallet.lastSuccess?.at;
       return !at || Date.now() - new Date(at).getTime() > threeHours;
     }).length,
+    sourceCounts: {
+      direct: wallets.filter((wallet) => wallet.source === "direct").length,
+      public: wallets.filter((wallet) => wallet.source !== "direct").length,
+    },
     tokenSource: state.onchainBreakdown?.tokenSource ?? null,
     tokenCount: state.onchainBreakdown?.tokens?.length ?? 0,
     dappCount: state.onchainBreakdown?.dapps?.length ?? 0,

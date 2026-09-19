@@ -71,6 +71,11 @@ function collectDeltas(state: PortfolioState, prev: SnapshotPoint, cur: Snapshot
     // 任一侧是 Zerion 兜底读数就不记账：「公共源 → 兜底 → 公共源」的估值口径切换
     // 不是真实资金变动，记进去会制造假流水。
     if (prev.zerionWallets?.includes(address) || cur.zerionWallets?.includes(address)) continue;
+    // 余额口径切换（公共源 ↔ 直连层）的那一轮同样不做归因：同一资产在两套估值
+    // 体系里的差异不是真实资金变动。口径稳定后（相邻两轮一致）恢复记账。
+    const prevBasis = prev.walletBasis?.[address] ?? "public";
+    const curBasis = cur.walletBasis?.[address] ?? "public";
+    if (prevBasis !== curBasis) continue;
     const before = Number(prev.wallets?.[address] ?? 0);
     const after = Number(cur.wallets?.[address] ?? before);
     const wallet = walletByAddress.get(address);

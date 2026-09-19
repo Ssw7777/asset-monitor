@@ -59,8 +59,8 @@ export interface Wallet {
   updatedAt?: string | null;
   /** Last successful refresh: timestamp + balance at that moment. */
   lastSuccess?: { at: string; balanceUsd: number } | null;
-  /** 最近一次成功读数的数据源:public = Rabby/DeBank 公共源;zerion = 公共源持续失败时的鉴权兜底。 */
-  source?: "public" | "zerion";
+  /** 最近一次成功读数的数据源:public = Rabby/DeBank 公共源;direct = Alchemy/Zerion 直连层;zerion = 历史兜底（已弃用）。 */
+  source?: "public" | "zerion" | "direct";
 }
 
 export interface ExchangeBalance {
@@ -91,6 +91,8 @@ export interface SnapshotPoint {
   suppressExchangeFlows?: string[];
   /** 本快照里这些地址的余额来自 Zerion 兜底读数；相邻快照任一侧为兜底值时不记流水（估值口径切换，不是真实资金变动）。 */
   zerionWallets?: string[];
+  /** 本快照每个地址的余额口径（public / direct）；某地址口径在相邻快照间切换的那一轮不记流水。 */
+  walletBasis?: Record<string, string>;
 }
 
 export type FlowDirection = "in" | "out" | "transfer";

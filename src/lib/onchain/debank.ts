@@ -13,6 +13,7 @@ import type {
   Wallet,
 } from "../types";
 import { activeTokenSource, fetchZerionTokens, normalizeChainId, type TokenSource } from "./token-providers";
+import { fetchDirectDetail, hasLongTailChains } from "./direct";
 
 interface ChainBalanceDetail {
   id: string;
@@ -308,6 +309,24 @@ async function fetchWalletDetail(
 
 type ProtocolCache = Record<string, WalletProtocolCacheEntry>;
 type ChainCache = Record<string, WalletChainCacheEntry>;
+
+/** 从协议缓存聚合单个地址的 DeFi 净值（与 refreshOnchainBreakdown 同一口径）。 */
+function dappNetUsdFromStore(store: ProtocolCache, address: string): number {
+  const protocols = store[address.toLowerCase()]?.protocols ?? [];
+  let net = 0;
+  for (const protocol of protocols) {
+    const items = Array.isArray(protocol.portfolio_item_list)
+      ? protocol.portfolio_item_list.filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+      : [];
+    for (const item of items) {
+      const stats = item.stats && typeof item.stats === "object" ? (item.stats as Record<string, unknown>) : {};
+      const assetUsd = number(stats.asset_usd_value);
+      const debtUsd = Math.abs(number(stats.debt_usd_value));
+      net += stats.net_usd_value == null ? assetUsd - debtUsd : number(stats.net_usd_value);
+    }
+  }
+  return net;
+}
 
 async function fetchComplexProtocols(
   address: string,
@@ -633,9 +652,57 @@ export async function refreshWallets(
       .map((wallet) => wallet.address.toLowerCase())
   );
   const refreshed = await mapPool(targets, CONCURRENCY, async (wallet) => {
-    if (Date.now() >= stopAt - 10_000 || publicBlocked()) return wallet;
     const attemptedAt = new Date().toISOString();
     const previous = wallet.balanceUsd;
+    const addressLower = wallet.address.toLowerCase();
+
+    // ── 直连层优先：Alchemy（七链全代币）+ Zerion（Abstract / 长尾链）。
+    // 走鉴权 Key，不受 Rabby 公共接口 429 影响；DeFi 净值由协议缓存叠加。
+    const knownChains = new Set(wallet.chain === "EVM" ? ["eth"] : ["abs"]);
+    for (const chain of chainStore[addressLower]?.chains ?? []) knownChains.add(chain.id);
+    const chainIds = [...knownChains];
+    const direct = await fetchDirectDetail(wallet.address, {
+      knownChains: chainIds,
+      wantZerion: hasLongTailChains(chainIds),
+      deadlineMs: stopAt,
+    });
+    const wantsTokenDetail = tokenTargets.has(addressLower);
+    const wantsProtocolDetail = protocolTargets.has(addressLower);
+    const hasDetailTime = () => Date.now() < stopAt - 10_000;
+
+    if (direct) {
+      // 先补协议明细（预算内），再叠加 DeFi 净值 —— 这样余额口径与紧随其后的
+      // onchainBreakdown 重算完全一致，不会出现「钱包余额」和「协议仓位」的瞬时漂移。
+      if (direct.tokenUsd >= 0.01 && wantsProtocolDetail && hasDetailTime() && !publicBlocked()) {
+        await fetchComplexProtocols(wallet.address, protocolStore);
+      }
+      if (wantsTokenDetail && hasDetailTime()) {
+        await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true, stopAt);
+      }
+      const dappUsd = dappNetUsdFromStore(protocolStore, addressLower);
+      const usd = Math.round((direct.tokenUsd + dappUsd) * 100) / 100;
+      cache.set(addressLower, {
+        detail: { totalUsd: usd, chains: direct.chains },
+        at: Date.now(),
+      });
+      chainStore[addressLower] = {
+        at: attemptedAt,
+        totalUsd: direct.tokenUsd,
+        chains: direct.chains.map((chain) => ({ ...chain })),
+      };
+      return {
+        ...wallet,
+        balanceUsd: usd,
+        lastUpdated: attemptedAt,
+        updatedAt: attemptedAt,
+        lastSuccess: { at: attemptedAt, balanceUsd: usd },
+        status: "ok" as const,
+        source: "direct" as const,
+      };
+    }
+
+    // ── 公共源兜底（Rabby / DeBank）：直连层整体失败时才使用 ──
+    if (Date.now() >= stopAt - 10_000 || publicBlocked()) return wallet;
     const { usd, status, attempted } = await fetchWalletUsd(wallet.address, { force: true });
     if (!attempted) return wallet;
     const memoryDetail = cache.get(wallet.address.toLowerCase());
@@ -646,9 +713,6 @@ export async function refreshWallets(
         chains: memoryDetail.detail.chains.map((chain) => ({ ...chain })),
       };
     }
-    const wantsTokenDetail = tokenTargets.has(wallet.address.toLowerCase());
-    const wantsProtocolDetail = protocolTargets.has(wallet.address.toLowerCase());
-    const hasDetailTime = () => Date.now() < stopAt - 10_000 && !publicBlocked();
     if (status === "ok") {
       if (usd >= 0.01 && wantsProtocolDetail && hasDetailTime()) {
         // Same task, right after the total: avoids a second request storm and keeps
