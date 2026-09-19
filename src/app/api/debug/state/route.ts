@@ -2,10 +2,31 @@ import { NextRequest, NextResponse } from "next/server";
 import { hasCronAuthorization } from "@/lib/cron-auth";
 import { readStore } from "@/lib/store";
 import { fetchZerionTokens } from "@/lib/onchain/token-providers";
+import { fetchDirectDetail } from "@/lib/onchain/direct";
 import { nextZerionKey } from "@/lib/onchain/zerion-keys";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
+
+/** 单钱包直连层诊断：返回 fetchDirectDetail 的内部中间量。 */
+async function debugOne(address: string, state: Awaited<ReturnType<typeof readStore>>) {
+  const addressLower = address.toLowerCase();
+  const knownChains = new Set<string>(["eth"]);
+  for (const chain of state.chainCache?.[addressLower]?.chains ?? []) knownChains.add(chain.id);
+  for (const chain of state.longtailCache?.[addressLower]?.chains ?? []) knownChains.add(chain.id);
+  const longtailEntry = state.longtailCache?.[addressLower] ?? null;
+  const direct = await fetchDirectDetail(address, {
+    knownChains: [...knownChains],
+    longtail: longtailEntry,
+    allowZerion: true,
+  });
+  return {
+    knownChains: [...knownChains],
+    longtailAt: longtailEntry?.at ?? null,
+    direct,
+    stored: state.wallets.find((w) => w.address.toLowerCase() === addressLower)?.balanceUsd ?? null,
+  };
+}
 
 /**
  * 临时对账接口（只接受云端定时任务鉴权）：
@@ -16,7 +37,13 @@ export async function GET(req: NextRequest) {
   if (!(await hasCronAuthorization(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
+  const url = new URL(req.url);
   const state = await readStore();
+  const oneAddress = (url.searchParams.get("debugone") || "").trim();
+  if (oneAddress) {
+    const result = await debugOne(oneAddress, state);
+    return NextResponse.json(result);
+  }
   const rows: Array<Record<string, unknown>> = [];
   for (const wallet of state.wallets) {
     const address = wallet.address;
