@@ -395,7 +395,9 @@ export async function fetchDirectDetail(
     }
   }
 
-  if (!pending.length && !longtailChains.size) return null;
+  // 注意：AlCHEMY 对个别链（如 Abstract）可能返回空列表，此时 zerionChainTotals
+  // 仍持有该链的独立估值 —— 不能在这里返回 null，交由下方链级对账采纳。
+  if (!pending.length && !longtailChains.size && !zerionChainTotals.size) return null;
 
   // ── 定价：稳定币 $1 → 原生币（币安）→ Zerion 隐含价 → CoinGecko ────
   const needCoingecko = new Map<string, Set<string>>();

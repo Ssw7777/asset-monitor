@@ -7,7 +7,7 @@ import { acquireRefreshLease, releaseRefreshLease } from "@/lib/store";
 /** Prefer Hong Kong for Binance (US regions are geo-blocked). */
 export const preferredRegion = ["hkg1"];
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   const denied = await requireAuth();

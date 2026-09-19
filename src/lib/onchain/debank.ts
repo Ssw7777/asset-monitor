@@ -579,7 +579,8 @@ export async function refreshWallets(
 ): Promise<Wallet[]> {
   if (!wallets.length) return [];
   const originalOrder = new Map(wallets.map((wallet, index) => [wallet.id, index]));
-  const stopAt = Date.now() + 40_000;
+  // 实时模式预算放宽到 50 秒（函数上限 60s）：25 钱包 × 全链 + 串行 Zerion 需要更多时间
+  const stopAt = Date.now() + (opts.live ? 50_000 : 40_000);
   /**
    * 每个小批次按「成功时间最旧优先」选址：超过 20 分钟没更新的地址会排在最前，
    * 每轮滚动批次都优先单独检查它们；从未成功过的地址永远最优先。
