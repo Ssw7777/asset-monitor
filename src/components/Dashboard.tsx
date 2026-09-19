@@ -94,7 +94,7 @@ export function Dashboard() {
   const [error, setError] = useState("");
   const [rateDraft, setRateDraft] = useState("");
   const [rateSaving, setRateSaving] = useState(false);
-  const [range, setRange] = useState<ChangeRangeKey>("24h");
+  const [range, setRange] = useState<ChangeRangeKey>("1h");
   const [changes, setChanges] = useState<ChangeSummary | null>(null);
   const [changesLoading, setChangesLoading] = useState(false);
   const [chainFilter, setChainFilter] = useState("all");
@@ -110,7 +110,7 @@ export function Dashboard() {
   const failStreakRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
-  const rangeRef = useRef<ChangeRangeKey>("24h");
+  const rangeRef = useRef<ChangeRangeKey>("1h");
   const flowRangeRef = useRef<FlowRangeKey>("24h");
   const flowMinRef = useRef(50);
   const lastFullRef = useRef(Date.now());
@@ -423,90 +423,92 @@ export function Dashboard() {
           </section>
         </div>
         <div className="overview-duo">
-        <PortfolioChart
-          snapshots={snapshots}
-          usdCnyRate={rate}
-          range={range}
-          summary={changes}
-          onRangeChange={setRange}
-        />
-        <FlowSection
-          summary={flows}
-          loading={flowsLoading}
-          range={flowRange}
-          minUsd={flowMin}
-          onRangeChange={setFlowRange}
-          onMinChange={setFlowMin}
-        />
-        </div>
+          <div className="overview-col">
+            <PortfolioChart
+              snapshots={snapshots}
+              usdCnyRate={rate}
+              range={range}
+              summary={changes}
+              onRangeChange={setRange}
+            />
 
-        <section className="section" id="chains">
-          <div className="section-head">
-            <div className="section-title">
-              <h2>链上分布</h2>
-              <span className="hint">
-                {chains.length} 条链 · 点击链卡片可筛选下方代币
-              </span>
-            </div>
-            <span className="section-total num">{usd(onchainUsd)}</span>
-          </div>
-          {chains.length ? (
-            <div className="chain-strip">
-              <button
-                type="button"
-                className={`chain-card${chainFilter === "all" ? " active" : ""}`}
-                style={{ ["--chain-color" as string]: "#b3bcd2" }}
-                onClick={() => setChainFilter("all")}
-              >
-                <span className="icon-fallback">ALL</span>
-                <span style={{ minWidth: 0, flex: 1 }}>
-                  <span className="name" style={{ display: "block" }}>
-                    全部链
+            <section className="section" id="chains">
+              <div className="section-head">
+                <div className="section-title">
+                  <h2>链上分布</h2>
+                  <span className="hint">
+                    {chains.length} 条链 · 点击链卡片可筛选下方代币
                   </span>
-                  <span className="value num" style={{ display: "block" }}>
-                    {usd(onchainUsd)}
-                  </span>
-                </span>
-              </button>
-              {(allChainsShown ? chains : chains.slice(0, 8)).map((chain) => (
-                <button
-                  key={chain.id}
-                  type="button"
-                  className={`chain-card${chainFilter === chain.id ? " active" : ""}`}
-                  style={{ ["--chain-color" as string]: CHAIN_COLOR[chain.id] || "#b3bcd2" }}
-                  onClick={() => setChainFilter(chainFilter === chain.id ? "all" : chain.id)}
-                >
-                  <ChainIcon chain={chain} />
-                  <span style={{ minWidth: 0, flex: 1 }}>
-                    <span className="name" style={{ display: "block" }}>
-                      {chain.name}
+                </div>
+                <span className="section-total num">{usd(onchainUsd)}</span>
+              </div>
+              {chains.length ? (
+                <div className="chain-strip">
+                  <button
+                    type="button"
+                    className={`chain-card${chainFilter === "all" ? " active" : ""}`}
+                    style={{ ["--chain-color" as string]: "#b3bcd2" }}
+                    onClick={() => setChainFilter("all")}
+                  >
+                    <span className="icon-fallback">ALL</span>
+                    <span style={{ minWidth: 0, flex: 1 }}>
+                      <span className="name" style={{ display: "block" }}>
+                        全部链
+                      </span>
+                      <span className="value num" style={{ display: "block" }}>
+                        {usd(onchainUsd)}
+                      </span>
                     </span>
-                    <span className="value num" style={{ display: "block" }}>
-                      {usd(chain.valueUsd)}
-                    </span>
-                  </span>
-                  <span className="pct num">
-                    {onchainUsd > 0 ? `${((chain.valueUsd / onchainUsd) * 100).toFixed(1)}%` : "—"}
-                  </span>
-                </button>
-              ))}
-              {chains.length > 8 && (
-                <button
-                  type="button"
-                  className="chain-card"
-                  style={{ ["--chain-color" as string]: "transparent", justifyContent: "center" }}
-                  onClick={() => setAllChainsShown((value) => !value)}
-                >
-                  <span className="name" style={{ color: "var(--ink-2)" }}>
-                    {allChainsShown ? "收起链列表" : `展开全部 ${chains.length} 条链`}
-                  </span>
-                </button>
+                  </button>
+                  {(allChainsShown ? chains : chains.slice(0, 8)).map((chain) => (
+                    <button
+                      key={chain.id}
+                      type="button"
+                      className={`chain-card${chainFilter === chain.id ? " active" : ""}`}
+                      style={{ ["--chain-color" as string]: CHAIN_COLOR[chain.id] || "#b3bcd2" }}
+                      onClick={() => setChainFilter(chainFilter === chain.id ? "all" : chain.id)}
+                    >
+                      <ChainIcon chain={chain} />
+                      <span style={{ minWidth: 0, flex: 1 }}>
+                        <span className="name" style={{ display: "block" }}>
+                          {chain.name}
+                        </span>
+                        <span className="value num" style={{ display: "block" }}>
+                          {usd(chain.valueUsd)}
+                        </span>
+                      </span>
+                      <span className="pct num">
+                        {onchainUsd > 0 ? `${((chain.valueUsd / onchainUsd) * 100).toFixed(1)}%` : "—"}
+                      </span>
+                    </button>
+                  ))}
+                  {chains.length > 8 && (
+                    <button
+                      type="button"
+                      className="chain-card"
+                      style={{ ["--chain-color" as string]: "transparent", justifyContent: "center" }}
+                      onClick={() => setAllChainsShown((value) => !value)}
+                    >
+                      <span className="name" style={{ color: "var(--ink-2)" }}>
+                        {allChainsShown ? "收起链列表" : `展开全部 ${chains.length} 条链`}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="empty">还没有链上明细：点击右上角刷新获取</div>
               )}
-            </div>
-          ) : (
-            <div className="empty">还没有链上明细：点击右上角刷新获取</div>
-          )}
-        </section>
+            </section>
+          </div>
+          <FlowSection
+            summary={flows}
+            loading={flowsLoading}
+            range={flowRange}
+            minUsd={flowMin}
+            onRangeChange={setFlowRange}
+            onMinChange={setFlowMin}
+          />
+        </div>
 
         <TokenTable
           tokens={breakdown?.tokens ?? []}

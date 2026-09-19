@@ -34,7 +34,7 @@
 html,
 body {
   min-height: 100%;
-  background: #fff;
+  background: #f6f7fb;
   color: var(--ink);
   overflow-x: hidden;
   -webkit-text-size-adjust: 100%;
@@ -135,7 +135,7 @@ a {
   border-radius: 14px;
   padding: 18px;
   background: #ffffff;
-  box-shadow: 0 4px 16px rgba(25, 35, 60, 0.035);
+  box-shadow: 0 1px 3px rgba(25, 35, 60, 0.04);
 }
 
 .section-surface {
@@ -144,11 +144,11 @@ a {
 
 .summary-panel {
   margin-top: 24px;
-  border: 1px solid #d8e1ec;
+  border: 1px solid var(--line);
   border-radius: 14px;
-  background: #f7f9fc;
+  background: #ffffff;
   padding: 16px 22px;
-  box-shadow: 0 4px 16px rgba(25, 35, 60, 0.035);
+  box-shadow: 0 1px 3px rgba(25, 35, 60, 0.04);
 }
 
 /* 单行总览：头像 + 五项统计与总额同一行，面板高度收紧 */
@@ -175,11 +175,22 @@ a {
 
 .overview-duo {
   display: grid;
-  /* 资产趋势占大头（6），资金流水收窄（4），流水表格内部滚动消化纵向空间 */
+  /* 左列（趋势 + 链上分布）6，右列（流水）4，两列等高、底部对齐 */
   grid-template-columns: minmax(0, 6fr) minmax(0, 4fr);
-  align-items: start;
+  align-items: stretch;
   gap: 20px;
   margin-top: 34px;
+}
+
+.overview-col {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.overview-col > .section {
+  margin-top: 0;
 }
 
 .overview-duo > .section {
@@ -188,54 +199,40 @@ a {
   margin-top: 0;
 }
 
-#trend {
-  border-color: #cbd8f0;
-  background: #f5f8ff;
-}
-
-#chains {
-  border-color: #c9e3df;
-  background: #f2faf7;
-}
-
+/* 流水卡撑满右列高度：内部表格 flex 拉伸，表头固定 */
 .section-flows {
-  border-color: #c9ddf5;
-  background: #f2f8ff;
+  display: flex;
+  flex-direction: column;
 }
 
-.section-tokens {
-  border-color: #d9d0ef;
-  background: #f8f5ff;
+.section-flows .table {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
 }
 
-.section-exchanges {
-  border-color: #c9e2d7;
-  background: #f2faf5;
+@media (min-width: 1121px) {
+  .section-flows .flow-scroll {
+    max-height: none;
+    flex: 1 1 auto;
+    min-height: 220px;
+  }
 }
 
-#defi {
-  border-color: #ead5c5;
-  background: #fff7f0;
-}
-
-#manual {
-  border-color: #eadfbc;
-  background: #fff9ec;
-}
-
-#changes {
-  border-color: #ead4df;
-  background: #fff4f8;
-}
-
-#addresses {
-  border-color: #d8e1e7;
-  background: #f5f8fa;
-}
-
+/* 全站统一白卡：板块底色不再使用低饱和彩色，只靠边框和排版区分 */
+#trend,
+#chains,
+.section-flows,
+.section-tokens,
+.section-exchanges,
+#defi,
+#manual,
+#changes,
+#addresses,
 #export {
-  border-color: #e4e6ea;
-  background: #fcfcfd;
+  border-color: var(--line);
+  background: #ffffff;
 }
 
 .section-head {
@@ -781,10 +778,35 @@ textarea.field {
     minmax(140px, 1fr) minmax(120px, 0.85fr) minmax(150px, 0.9fr);
 }
 
-/* 资金流水表：右卡片收窄后收紧列宽与间距，消灭列间大片空档 */
+/* 资金流水表：右列收窄后用紧凑列宽 + 小字号，绝不横向滚动 */
 .grid-flow {
-  grid-template-columns: minmax(70px, 0.6fr) minmax(96px, 0.75fr) minmax(126px, 1.05fr) minmax(108px, 0.85fr);
-  gap: 10px;
+  grid-template-columns: minmax(56px, 0.5fr) minmax(84px, 0.7fr) minmax(96px, 1.15fr) minmax(88px, 0.8fr);
+  gap: 8px;
+}
+
+.section-flows .thead,
+.section-flows .trow {
+  padding: 7px 10px;
+  gap: 8px;
+}
+
+.section-flows .thead {
+  font-size: 11px;
+}
+
+.section-flows .cell-token-text b {
+  font-size: 12px;
+}
+
+.section-flows .cell-token-text span {
+  font-size: 11px;
+}
+
+.section-flows .cell-main,
+.section-flows .cell-sub,
+.flow-balance {
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 /* 代币卡片：桌面双列，压缩纵向空间，同时保留完整价格、数量和分布信息。 */
@@ -1157,7 +1179,7 @@ textarea.field {
 }
 
 .exchange-change-panel {
-  border: 1px solid #cfe2da;
+  border: 1px solid var(--line);
   border-radius: 10px;
   background: #fff;
   padding: 14px;

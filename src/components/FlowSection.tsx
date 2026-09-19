@@ -85,10 +85,6 @@ export function FlowSection({
           {net > 0 ? "+" : net < 0 ? "-" : ""}
           {usd(Math.abs(net))}
         </strong>
-        <span className="flow-summary-sub num">
-          流入 <b className="pos">+{usd(summary?.totalIn ?? 0)}</b> · 流出{" "}
-          <b className="neg">-{usd(summary?.totalOut ?? 0)}</b> · 共 {events.length} 条
-        </span>
       </div>
 
       {events.length ? (
@@ -133,9 +129,6 @@ export function FlowSection({
                 </div>
               );
             })}
-          </div>
-          <div className="table-foot">
-            <span>{summary?.note}</span>
           </div>
         </div>
       ) : (
