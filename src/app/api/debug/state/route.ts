@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { hasCronAuthorization } from "@/lib/cron-auth";
 import { readStore } from "@/lib/store";
+import { fetchZerionTokens } from "@/lib/onchain/token-providers";
+import { nextZerionKey } from "@/lib/onchain/zerion-keys";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 /**
  * 临时对账接口（只接受云端定时任务鉴权）：
- * 对每个钱包用 Rabby 官方接口（独立于 Alchemy/Zerion 直连层）读一次总额，
- * 与看板存储值对比，标记偏差超过 30% 的地址。对账完成后删除。
+ * 对每个钱包用 Zerion 全仓位估值（独立定价 + 独立链覆盖）与看板直连层总额对比。
+ * ours << zerion（<0.7）说明直连层漏了链或代币 → DIVERGENT。对账完成后删除。
  */
 export async function GET(req: NextRequest) {
   if (!(await hasCronAuthorization(req))) {
@@ -18,42 +20,38 @@ export async function GET(req: NextRequest) {
   const rows: Array<Record<string, unknown>> = [];
   for (const wallet of state.wallets) {
     const address = wallet.address;
-    let rabbyTotal: number | null = null;
-    let rabbyStatus: number | null = null;
+    let zerionTotal: number | null = null;
+    let zerionChains = 0;
     try {
-      const response = await fetch(`https://api.rabby.io/v1/user/total_balance?id=${address}`, {
-        headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
-        cache: "no-store",
-        signal: AbortSignal.timeout(15_000),
-      });
-      rabbyStatus = response.status;
-      if (response.ok) {
-        const body = (await response.json()) as { data?: { total_usd_value?: unknown } };
-        const value = Number(body.data?.total_usd_value);
-        if (Number.isFinite(value) && value >= 0) rabbyTotal = value;
+      const detail = await fetchZerionTokens(address, { deadlineMs: Date.now() + 20_000 });
+      if (detail) {
+        zerionTotal = Math.round(detail.tokens.reduce((sum, token) => sum + token.valueUsd, 0) * 100) / 100;
+        zerionChains = new Set(detail.tokens.map((token) => token.chain)).size;
       }
     } catch {
-      rabbyStatus = 0;
+      /* 保持 null */
     }
+    void nextZerionKey;
     const ours = wallet.balanceUsd;
-    const ratio = rabbyTotal != null && rabbyTotal > 0 ? ours / rabbyTotal : null;
+    const defiNet = state.zerionDefi?.[address.toLowerCase()]?.netUsd ?? 0;
+    const ratio = zerionTotal != null && zerionTotal > 0 ? ours / zerionTotal : null;
     let flag = "ok";
-    if (rabbyTotal == null) flag = "source-fail";
-    else if (ratio != null && Math.abs(ratio - 1) > 0.3) flag = "DIVERGENT";
+    if (zerionTotal == null) flag = "source-fail";
+    else if (ratio != null && ratio < 0.7) flag = "DIVERGENT-LOW";
     rows.push({
       name: wallet.name,
       address,
       ours: Math.round(ours * 100) / 100,
-      rabby: rabbyTotal == null ? null : Math.round(rabbyTotal * 100) / 100,
-      rabbyStatus,
+      zerion: zerionTotal,
+      zerionChains,
       ratio: ratio == null ? null : Math.round(ratio * 100) / 100,
       flag,
       chains: state.chainCache?.[address.toLowerCase()]?.chains.length ?? 0,
-      defiNet: state.zerionDefi?.[address.toLowerCase()]?.netUsd ?? 0,
+      defiNet,
     });
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await new Promise((resolve) => setTimeout(resolve, 300));
   }
-  const divergent = rows.filter((row) => row.flag === "DIVERGENT");
+  const divergent = rows.filter((row) => row.flag !== "ok");
   return NextResponse.json({
     walletCount: rows.length,
     divergentCount: divergent.length,
