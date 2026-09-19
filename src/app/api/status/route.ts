@@ -48,6 +48,11 @@ export async function GET(req: NextRequest) {
       direct: wallets.filter((wallet) => wallet.source === "direct").length,
       public: wallets.filter((wallet) => wallet.source !== "direct").length,
     },
+    walletsTotalUsd: Math.round(wallets.reduce((sum, wallet) => sum + wallet.balanceUsd, 0) * 100) / 100,
+    zerionDefiNetUsd: Math.round(
+      Object.values(state.zerionDefi ?? {}).reduce((sum, entry) => sum + entry.netUsd, 0) * 100
+    ) / 100,
+    zerionDefiWallets: Object.keys(state.zerionDefi ?? {}).length,
     tokenSource: state.onchainBreakdown?.tokenSource ?? null,
     tokenCount: state.onchainBreakdown?.tokens?.length ?? 0,
     dappCount: state.onchainBreakdown?.dapps?.length ?? 0,
