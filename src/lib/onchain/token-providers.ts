@@ -12,6 +12,8 @@ export interface ProviderResult {
   unpricedCount: number;
   unpricedByChain: Record<string, number>;
   coveredChains: string[];
+  /** 全部原始仓位行（含 position_type），供直连层做仓位代币分类。 */
+  raw?: Array<{ symbol: string; chain: string; type: string; amount: number; valueUsd: number }>;
 }
 
 const STABLE_SYMBOLS = new Set([
@@ -148,7 +150,9 @@ export function activeTokenSource(): TokenSource {
   return "rabby-public";
 }
 
-function collect(rows: Array<Omit<ProviderToken, "kind" | "isCore"> & { isCore?: boolean }>) {
+function collect(
+  rows: Array<Omit<ProviderToken, "kind" | "isCore"> & { isCore?: boolean }>
+): ProviderResult {
   const tokens: ProviderToken[] = [];
   const unpricedByChain: Record<string, number> = {};
   let unpricedCount = 0;
@@ -184,15 +188,16 @@ function collect(rows: Array<Omit<ProviderToken, "kind" | "isCore"> & { isCore?:
  */
 export async function fetchZerionTokens(
   address: string,
-  opts: { deadlineMs?: number } = {}
+  opts: { deadlineMs?: number; includeAllPositions?: boolean } = {}
 ): Promise<ProviderResult | null> {
   const key = nextZerionKey();
   if (!key) return null;
   const remainingMs = opts.deadlineMs == null ? 20_000 : opts.deadlineMs - Date.now();
   if (remainingMs < 750) return null;
   try {
+    const filter = opts.includeAllPositions ? "" : "&filter[positions]=only_simple";
     const response = await fetch(
-      `https://api.zerion.io/v1/wallets/${address}/positions/?currency=usd&filter[positions]=only_simple&page[size]=100`,
+      `https://api.zerion.io/v1/wallets/${address}/positions/?currency=usd&page[size]=100${filter}`,
       {
         headers: {
           Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`,
@@ -207,6 +212,7 @@ export async function fetchZerionTokens(
       data?: Array<{
         id?: string;
         attributes?: {
+          position_type?: string;
           quantity?: { float?: number };
           value?: number;
           price?: number;
@@ -227,6 +233,7 @@ export async function fetchZerionTokens(
           symbol,
           amount,
           valueUsd,
+          type: String(attributes.position_type || "wallet"),
           tokenId: String(item.id || symbol),
           logoUrl: attributes.fungible_info?.icon?.url,
           chain: normalizeChainId(String(item.relationships?.chain?.data?.id || "unknown")),
@@ -235,6 +242,13 @@ export async function fetchZerionTokens(
       .filter((row) => row.symbol);
     const result = collect(rows);
     result.coveredChains = ["*"];
+    result.raw = rows.map((row) => ({
+      symbol: row.symbol,
+      chain: row.chain,
+      type: row.type,
+      amount: row.amount,
+      valueUsd: row.valueUsd,
+    }));
     return result;
   } catch {
     return null;

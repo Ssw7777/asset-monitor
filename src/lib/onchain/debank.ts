@@ -670,6 +670,7 @@ export async function refreshWallets(
       longtailStore[addressLower] = {
         at: attemptedAt,
         chains: direct.longtailFetched,
+        skipKeys: direct.skipKeysFetched,
       };
     }
     const wantsTokenDetail = tokenTargets.has(addressLower);
