@@ -254,7 +254,10 @@ export async function runRefresh(
     exchanges: Object.fromEntries(latest.exchanges.map((item) => [item.exchange, item.balanceUsd])),
     wallets: Object.fromEntries(latest.wallets.map((wallet) => [wallet.address.toLowerCase(), wallet.balanceUsd])),
     walletBasis: Object.fromEntries(
-      latest.wallets.map((wallet) => [wallet.address.toLowerCase(), wallet.source ?? "public"])
+      latest.wallets.map((wallet) => [
+        wallet.address.toLowerCase(),
+        wallet.source === "direct" ? "token" : wallet.source ?? "public",
+      ])
     ),
     zerionWallets: latest.wallets
       .filter((wallet) => wallet.source === "zerion")

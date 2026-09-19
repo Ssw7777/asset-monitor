@@ -310,24 +310,6 @@ async function fetchWalletDetail(
 type ProtocolCache = Record<string, WalletProtocolCacheEntry>;
 type ChainCache = Record<string, WalletChainCacheEntry>;
 
-/** 从协议缓存聚合单个地址的 DeFi 净值（与 refreshOnchainBreakdown 同一口径）。 */
-function dappNetUsdFromStore(store: ProtocolCache, address: string): number {
-  const protocols = store[address.toLowerCase()]?.protocols ?? [];
-  let net = 0;
-  for (const protocol of protocols) {
-    const items = Array.isArray(protocol.portfolio_item_list)
-      ? protocol.portfolio_item_list.filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
-      : [];
-    for (const item of items) {
-      const stats = item.stats && typeof item.stats === "object" ? (item.stats as Record<string, unknown>) : {};
-      const assetUsd = number(stats.asset_usd_value);
-      const debtUsd = Math.abs(number(stats.debt_usd_value));
-      net += stats.net_usd_value == null ? assetUsd - debtUsd : number(stats.net_usd_value);
-    }
-  }
-  return net;
-}
-
 async function fetchComplexProtocols(
   address: string,
   store: ProtocolCache
@@ -671,16 +653,16 @@ export async function refreshWallets(
     const hasDetailTime = () => Date.now() < stopAt - 10_000;
 
     if (direct) {
-      // 先补协议明细（预算内），再叠加 DeFi 净值 —— 这样余额口径与紧随其后的
-      // onchainBreakdown 重算完全一致，不会出现「钱包余额」和「协议仓位」的瞬时漂移。
+      // 先补协议明细（预算内）——协议数据只用于 DeFi 展示板块，不并入钱包余额：
+      // 免费协议源（Rabby 逆向接口）曾给出比真实值高出 11k 的过期仓位，
+      // 掺进总额会把 79U 的钱包算成 1.1 万。余额 = 链上代币+原生币净值（直连层）。
       if (direct.tokenUsd >= 0.01 && wantsProtocolDetail && hasDetailTime() && !publicBlocked()) {
         await fetchComplexProtocols(wallet.address, protocolStore);
       }
       if (wantsTokenDetail && hasDetailTime()) {
         await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true, stopAt);
       }
-      const dappUsd = dappNetUsdFromStore(protocolStore, addressLower);
-      const usd = Math.round((direct.tokenUsd + dappUsd) * 100) / 100;
+      const usd = Math.round(direct.tokenUsd * 100) / 100;
       cache.set(addressLower, {
         detail: { totalUsd: usd, chains: direct.chains },
         at: Date.now(),
@@ -1098,7 +1080,8 @@ export async function refreshOnchainBreakdown(
         name: chain.name,
         logoUrl: chain.logoUrl,
         valueUsd: rounded(chain.valueUsd),
-        walletUsd: rounded(chain.valueUsd - dappUsd),
+        // 直连层口径：链总额 = 代币+原生币净值；DeFi 只做展示不并入（防过期仓位污染总额）
+        walletUsd: rounded(chain.valueUsd),
         dappUsd: rounded(dappUsd),
         walletCount: walletsForChain.length,
         wallets: walletsForChain,
