@@ -452,7 +452,6 @@ export async function fetchDirectDetail(
   }
 
   // ── 链级对账：已查询链上「我们的合计」与「Zerion 合计」偏差出界时采用 Zerion 值 ──
-  let adjusted = 0;
   for (const [chainId, zerionValue] of zerionChainTotals) {
     if (!queriedChains.has(chainId)) continue; // 未查询链已直接采用 Zerion 值
     const ours = chainValues.get(chainId) ?? 0;
@@ -460,12 +459,11 @@ export async function fetchDirectDetail(
     const ratio = zerionValue > 0 ? ours / zerionValue : 0;
     if (ratio < 0.6 || ratio > 2.5) {
       chainValues.set(chainId, zerionValue);
-      adjusted += 1;
     }
   }
-  void adjusted;
 
-  const total = tokenUsd + [...longtailChains.values()].reduce((sum, v) => sum + v, 0);
+  // 总额 = 对账后各链合计（修正必须反映进总额）
+  const total = [...chainValues.values()].reduce((sum, v) => sum + v, 0);
   const chains = [...chainValues.entries()]
     .map(([id, valueUsd]) => ({ id, name: chainName(id), valueUsd }))
     .filter((chain) => chain.valueUsd >= 0.01)
