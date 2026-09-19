@@ -10,6 +10,7 @@ import type {
   WalletProtocolCacheEntry,
   WalletChainCacheEntry,
   WalletTokenCacheEntry,
+  ZerionDefiCacheEntry,
   Wallet,
 } from "./types";
 import { deriveFlowEventsFromSnapshots, PERSISTED_FLOW_LIMIT, PERSISTED_FLOW_MIN_USD } from "./flows";
@@ -227,6 +228,10 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
     chainCache:
       raw.chainCache && typeof raw.chainCache === "object"
         ? (raw.chainCache as Record<string, WalletChainCacheEntry>)
+        : {},
+    zerionDefi:
+      raw.zerionDefi && typeof raw.zerionDefi === "object"
+        ? (raw.zerionDefi as Record<string, ZerionDefiCacheEntry>)
         : {},
     encryptedSecrets: raw.encryptedSecrets ?? null,
     lastFullRefreshAt: typeof raw.lastFullRefreshAt === "string" ? raw.lastFullRefreshAt : null,
