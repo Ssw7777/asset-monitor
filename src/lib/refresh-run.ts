@@ -71,13 +71,14 @@ async function refreshOnchainSlice(
   const protocolCache = { ...(state.protocolCache || {}) };
   const chainCache = { ...(state.chainCache || {}) };
   const defiCache = { ...(state.zerionDefi || {}) };
+  const longtailCache = { ...(state.longtailCache || {}) };
   const previousSuccessById = new Map(
     state.wallets.map((wallet) => [wallet.id, wallet.lastSuccess?.at ?? null])
   );
   const previousAttemptById = new Map(
     state.wallets.map((wallet) => [wallet.id, wallet.updatedAt ?? null])
   );
-  const wallets = await refreshWallets(state.wallets, chainCache, tokenCache, protocolCache, defiCache, {
+  const wallets = await refreshWallets(state.wallets, chainCache, tokenCache, protocolCache, defiCache, longtailCache, {
     budget: walletBudget,
     only: selection.walletIds,
     staleMinutes: selection.staleMinutes,
@@ -137,6 +138,7 @@ async function refreshOnchainSlice(
   state.protocolCache = protocolCache;
   state.chainCache = chainCache;
   state.zerionDefi = defiCache;
+  state.longtailCache = longtailCache;
   state.onchainBreakdown = breakdown;
   if (succeededThisBatch) state.lastFullRefreshAt = now;
   await writeStore(state);

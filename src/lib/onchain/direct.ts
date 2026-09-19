@@ -34,8 +34,7 @@ const ALCHEMY_CHAINS: Record<string, AlchemyChainSpec> = {
   abs: { net: "abstract-mainnet", nativeSymbol: "ETH", binanceTicker: "ETHUSDT", coingeckoPlatform: "abstract" },
 };
 
-/** 单钱包单轮最多查询的链数：控制 Alchemy 计算单元消耗在免费额度内。 */
-const MAX_CHAINS_PER_WALLET = 5;
+/** 钱包已知链全部查询（不再截断）：Alchemy 免费额度足够 25 钱包 × 全链。 */
 
 const STABLES = new Set([
   "USDT", "USDC", "USDG", "USDE", "USD1", "USDT0", "USD0", "DAI", "FDUSD", "TUSD",
@@ -176,6 +175,8 @@ const metadataCache = new Map<string, { symbol: string; decimals: number }>();
 const tickerCache = new Map<string, { at: number; usd: number }>();
 const contractPriceCache = new Map<string, { at: number; usd: number }>();
 const PRICE_TTL_MS = 10 * 60 * 1000;
+/** 长尾链（Zerion）结果缓存 1 小时：25 钱包轮换 ≈ 300 次/天，落在 4 把 Key 池内。 */
+const LONGTAIL_TTL_MS = 60 * 60 * 1000;
 
 async function alchemyRpc(net: string, calls: Array<{ method: string; params: unknown[] }>) {
   const key = process.env.ALCHEMY_API_KEY;
@@ -276,34 +277,50 @@ function isStable(symbol: string) {
 }
 
 /**
- * 直连读取一个钱包：Alchemy 链（原生 + 全代币）+ Zerion（Abstract / 长尾链）。
- * `knownChains` 来自持久化链分布缓存决定查哪些链（新钱包默认 eth）；
- * `wantZerion` 为 true 时才花 Zerion 额度（Abstract 钱包或存在长尾链持仓）。
+ * 直连读取一个钱包：Alchemy 链（原生 + 全代币，已知链全部查询）+ Zerion（长尾链与未发现链）。
+ * `longtail` 为上一轮缓存的 Zerion 长尾结果（1 小时 TTL，由调用方轮换刷新）；
+ * Zerion 本轮若被调用，未查询链上的代币直接并入总额（链发现自愈），已查询链仅用于隐含价格。
  */
 export async function fetchDirectDetail(
   address: string,
-  opts: { knownChains: string[]; wantZerion: boolean; deadlineMs?: number }
-): Promise<DirectDetail | null> {
+  opts: {
+    knownChains: string[];
+    longtail?: { at: string; chains: Array<{ id: string; name: string; valueUsd: number }> } | null;
+    allowZerion: boolean;
+    deadlineMs?: number;
+  }
+): Promise<(DirectDetail & { longtailFetched?: Array<{ id: string; name: string; valueUsd: number }> }) | null> {
   const hasAlchemy = !!process.env.ALCHEMY_API_KEY;
-  if (!hasAlchemy && !opts.wantZerion) return null;
+  if (!hasAlchemy && !opts.allowZerion) return null;
 
-  // ── Zerion 层：Abstract 与 Alchemy 覆盖不到的长尾链 ─────────────────
-  const zerionResult = opts.wantZerion
-    ? await fetchZerionTokens(address, { deadlineMs: opts.deadlineMs })
-    : null;
+  const queriedChains = new Set(opts.knownChains.filter((id) => ALCHEMY_CHAINS[id]));
+
+  // ── Zerion 层：长尾链 + 链发现（未查询链上的代币直接并入）──────────
+  let longtailFetched: Array<{ id: string; name: string; valueUsd: number }> | undefined;
+  const longtailChains = new Map<string, number>();
   const impliedPrices = new Map<string, number>();
-  const longTailChains = new Map<string, number>();
-  if (zerionResult) {
-    for (const token of zerionResult.tokens) {
-      if (ALCHEMY_CHAINS[token.chain]) continue; // 这些链交给 Alchemy 层
-      longTailChains.set(token.chain, (longTailChains.get(token.chain) || 0) + token.valueUsd);
-      if (token.amount > 0) {
-        impliedPrices.set(`${token.chain}:${token.symbol.toUpperCase()}`, token.valueUsd / token.amount);
+  const cached = opts.longtail;
+  const cachedFresh = !!cached && Date.now() - new Date(cached.at).getTime() < LONGTAIL_TTL_MS;
+  if (cachedFresh && cached) {
+    for (const chain of cached.chains) longtailChains.set(chain.id, chain.valueUsd);
+  } else if (opts.allowZerion) {
+    const zerionResult = await fetchZerionTokens(address, { deadlineMs: opts.deadlineMs });
+    if (zerionResult) {
+      for (const token of zerionResult.tokens) {
+        if (token.amount > 0) {
+          impliedPrices.set(`${token.chain}:${token.symbol.toUpperCase()}`, token.valueUsd / token.amount);
+        }
+        if (queriedChains.has(token.chain)) continue; // 已查询链：仅用于隐含价格，避免双计
+        // 未查询链（长尾或新发现）：直接并入
+        longtailChains.set(token.chain, (longtailChains.get(token.chain) || 0) + token.valueUsd);
       }
+      longtailFetched = [...longtailChains.entries()]
+        .filter(([, valueUsd]) => valueUsd >= 0.01)
+        .map(([id, valueUsd]) => ({ id, name: chainName(id), valueUsd: Math.round(valueUsd * 100) / 100 }));
     }
   }
 
-  // ── Alchemy 层：原生 + 全部代币（余额 + 元数据）─────────────────────
+  // ── Alchemy 层：原生 + 全部代币（余额 + 元数据），已知链全部查询 ────
   interface PendingToken {
     chain: string;
     net: string;
@@ -313,8 +330,7 @@ export async function fetchDirectDetail(
     amount: number;
   }
   const pending: PendingToken[] = [];
-  const chainsToQuery = [...new Set(opts.knownChains.filter((id) => ALCHEMY_CHAINS[id]))]
-    .slice(0, MAX_CHAINS_PER_WALLET);
+  const chainsToQuery = [...queriedChains];
   for (const chainId of chainsToQuery) {
     if (opts.deadlineMs != null && Date.now() >= opts.deadlineMs - 3000) break;
     const spec = ALCHEMY_CHAINS[chainId];
@@ -358,7 +374,7 @@ export async function fetchDirectDetail(
     }
   }
 
-  if (!pending.length && !longTailChains.size) return null;
+  if (!pending.length && !longtailChains.size) return null;
 
   // ── 定价：稳定币 $1 → 原生币（币安）→ Zerion 隐含价 → CoinGecko ────
   const needCoingecko = new Map<string, Set<string>>();
@@ -402,8 +418,7 @@ export async function fetchDirectDetail(
   };
 
   let tokenUsd = 0;
-  const chainValues = new Map<string, number>(longTailChains);
-  for (const chainId of longTailChains.keys()) chainValues.set(chainId, longTailChains.get(chainId) || 0);
+  const chainValues = new Map<string, number>(longtailChains);
   let unpricedCount = 0;
   for (const token of pending) {
     const price = priceOf(token);
@@ -417,7 +432,7 @@ export async function fetchDirectDetail(
     chainValues.set(token.chain, (chainValues.get(token.chain) || 0) + value);
   }
 
-  const total = tokenUsd + [...longTailChains.values()].reduce((sum, v) => sum + v, 0);
+  const total = tokenUsd + [...longtailChains.values()].reduce((sum, v) => sum + v, 0);
   const chains = [...chainValues.entries()]
     .map(([id, valueUsd]) => ({ id, name: chainName(id), valueUsd }))
     .filter((chain) => chain.valueUsd >= 0.01)
@@ -427,5 +442,6 @@ export async function fetchDirectDetail(
     tokenUsd: Math.round(total * 100) / 100,
     chains,
     unpricedCount,
+    longtailFetched,
   };
 }

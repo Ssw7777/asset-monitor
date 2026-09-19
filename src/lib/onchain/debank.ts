@@ -8,13 +8,14 @@ import type {
   TokenLine,
   TokenHolding,
   WalletChainCacheEntry,
+  WalletLongtailCacheEntry,
   WalletProtocolCacheEntry,
   WalletTokenCacheEntry,
   ZerionDefiCacheEntry,
   Wallet,
 } from "../types";
 import { activeTokenSource, fetchZerionTokens, normalizeChainId, type TokenSource } from "./token-providers";
-import { fetchDirectDetail, fetchZerionDefi, hasLongTailChains } from "./direct";
+import { fetchDirectDetail, fetchZerionDefi } from "./direct";
 
 interface ChainBalanceDetail {
   id: string;
@@ -316,6 +317,8 @@ type ChainCache = Record<string, WalletChainCacheEntry>;
 
 /** Zerion DeFi 仓位后台 3 小时刷新一次（25×8≈200 次/天）；打开页面/手动刷新时实时全量。 */
 const ZERION_DEFI_TTL = 3 * 60 * 60 * 1000;
+/** 长尾链（Zerion 代币层）1 小时轮换：25×24≈600 次/天，4 把 Key 池内。 */
+const LONGTAIL_TTL_MS = 60 * 60 * 1000;
 
 /** 把 Zerion DeFi 仓位按链并入链分布，让「链上分布」卡片与钱包总额保持同一口径。 */
 function mergeDefiIntoChains(
@@ -563,6 +566,7 @@ export async function refreshWallets(
   tokenStore: TokenCache,
   protocolStore: ProtocolCache,
   defiStore: Record<string, ZerionDefiCacheEntry>,
+  longtailStore: Record<string, WalletLongtailCacheEntry>,
   opts: {
     budget?: number;
     /** 只刷这些钱包（id 或小写地址），用于单地址手动检查。 */
@@ -618,8 +622,9 @@ export async function refreshWallets(
     )
     .slice(0, budget);
   const targetIds = new Set(targets.map((wallet) => wallet.id));
-  /** 后台每批最多给 2 个地址补 DeFi；实时模式一次性补全部（打开页面即全量）。 */
+  /** 后台每批最多给 2 个地址补 DeFi / 长尾链（实时模式一次性补全部）。 */
   let defiBudget = opts.live ? targets.length : 2;
+  let longtailBudget = opts.live ? targets.length : 2;
   /**
    * 本轮要补代币明细的地址：优先“从来没取过”的地址（例如余额抓取失败的币安钱包，
    * 里面的 PONS / stonks 只能靠代币明细补出来），其次按余额从大到小。
@@ -641,19 +646,53 @@ export async function refreshWallets(
     const previous = wallet.balanceUsd;
     const addressLower = wallet.address.toLowerCase();
 
-    // ── 直连层优先：Alchemy（九链全代币）+ Zerion（xlayer 等长尾链代币）。
+    // ── 直连层优先：Alchemy（已知链全部查询）+ Zerion（长尾链与链发现）。
     const knownChains = new Set(wallet.chain === "EVM" ? ["eth"] : ["abs"]);
     for (const chain of chainStore[addressLower]?.chains ?? []) knownChains.add(chain.id);
+    for (const chain of longtailStore[addressLower]?.chains ?? []) knownChains.add(chain.id);
     const chainIds = [...knownChains];
+
+    // 长尾链 1 小时 TTL 轮换：后台每批 2 个，实时模式全量
+    const hasDetailTime = () => Date.now() < stopAt - 10_000;
+    const longtailEntry = longtailStore[addressLower];
+    const longtailFresh =
+      !!longtailEntry && Date.now() - new Date(longtailEntry.at).getTime() < LONGTAIL_TTL_MS;
+    const allowZerion = !longtailFresh && longtailBudget > 0 && hasDetailTime();
+
     const direct = await fetchDirectDetail(wallet.address, {
       knownChains: chainIds,
-      wantZerion: hasLongTailChains(chainIds),
+      longtail: longtailEntry ?? null,
+      allowZerion,
       deadlineMs: stopAt,
     });
+    if (allowZerion && direct?.longtailFetched) {
+      longtailBudget -= 1;
+      longtailStore[addressLower] = {
+        at: attemptedAt,
+        chains: direct.longtailFetched,
+      };
+    }
     const wantsTokenDetail = tokenTargets.has(addressLower);
-    const hasDetailTime = () => Date.now() < stopAt - 10_000;
 
     if (direct) {
+      // 链发现自愈：Zerion 看到的未查询链写回 chainStore，下一轮走 Alchemy 链上直读
+      const cachedChains = chainStore[addressLower]?.chains ?? [];
+      const mergedChainMap = new Map(cachedChains.map((chain) => [chain.id, chain]));
+      for (const chain of direct.chains) {
+        const existing = mergedChainMap.get(chain.id);
+        if (!existing || existing.valueUsd < chain.valueUsd) {
+          mergedChainMap.set(chain.id, { ...chain });
+        }
+      }
+      // DeFi 净值按链并入，保证「链分布之和 = 钱包总额」
+      for (const position of defiStore[addressLower]?.positions ?? []) {
+        if (position.valueUsd <= 0) continue;
+        const chainId = normalizeChainId(position.chain);
+        const current = mergedChainMap.get(chainId) ?? { id: chainId, name: chainName(chainId), valueUsd: 0 };
+        current.valueUsd += position.valueUsd;
+        mergedChainMap.set(chainId, current);
+      }
+      const mergedChains = [...mergedChainMap.values()].sort((l, r) => r.valueUsd - l.valueUsd);
       if (wantsTokenDetail && hasDetailTime()) {
         await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true, stopAt);
       }
@@ -677,7 +716,6 @@ export async function refreshWallets(
       }
       const defiNet = defiStore[addressLower]?.netUsd ?? 0;
       const usd = Math.round((direct.tokenUsd + defiNet) * 100) / 100;
-      const mergedChains = mergeDefiIntoChains(direct.chains, defiStore[addressLower]?.positions ?? []);
       cache.set(addressLower, {
         detail: { totalUsd: usd, chains: mergedChains },
         at: Date.now(),

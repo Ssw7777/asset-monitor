@@ -243,6 +243,12 @@ export interface ZerionDefiCacheEntry {
   positions: Array<{ name: string; chain: string; valueUsd: number }>;
 }
 
+/** 某个地址的 Zerion 长尾链代币缓存（1 小时 TTL，负责链发现与长尾估值）。 */
+export interface WalletLongtailCacheEntry {
+  at: string;
+  chains: Array<{ id: string; name: string; valueUsd: number }>;
+}
+
 /** Per-wallet chain allocation persisted across serverless cold starts. */
 export interface WalletChainCacheEntry {
   at: string;
@@ -276,8 +282,10 @@ export interface PortfolioState {
   protocolCache?: Record<string, WalletProtocolCacheEntry>;
   /** 逐地址的链分布缓存（服务端专用，避免 Serverless 冷启动丢失其他批次） */
   chainCache?: Record<string, WalletChainCacheEntry>;
-  /** 逐地址的 Zerion 实时 DeFi 仓位缓存（服务端专用，1 小时 TTL） */
+  /** 逐地址的 Zerion 实时 DeFi 仓位缓存（服务端专用，3 小时 TTL） */
   zerionDefi?: Record<string, ZerionDefiCacheEntry>;
+  /** 逐地址的 Zerion 长尾链缓存（服务端专用，1 小时 TTL，负责链发现） */
+  longtailCache?: Record<string, WalletLongtailCacheEntry>;
   /** Zerion 兜底当日用量计数 { date: YYYY-MM-DD, count }，硬上限防止免费额度被单日故障打爆。 */
   zerionFallback?: { date: string; count: number };
   /** Optional encrypted CEX keys at rest (server-only) */

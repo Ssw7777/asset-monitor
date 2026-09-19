@@ -11,6 +11,7 @@ import type {
   WalletChainCacheEntry,
   WalletTokenCacheEntry,
   ZerionDefiCacheEntry,
+  WalletLongtailCacheEntry,
   Wallet,
 } from "./types";
 import { deriveFlowEventsFromSnapshots, PERSISTED_FLOW_LIMIT, PERSISTED_FLOW_MIN_USD } from "./flows";
@@ -232,6 +233,10 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
     zerionDefi:
       raw.zerionDefi && typeof raw.zerionDefi === "object"
         ? (raw.zerionDefi as Record<string, ZerionDefiCacheEntry>)
+        : {},
+    longtailCache:
+      raw.longtailCache && typeof raw.longtailCache === "object"
+        ? (raw.longtailCache as Record<string, WalletLongtailCacheEntry>)
         : {},
     encryptedSecrets: raw.encryptedSecrets ?? null,
     lastFullRefreshAt: typeof raw.lastFullRefreshAt === "string" ? raw.lastFullRefreshAt : null,
@@ -590,6 +595,7 @@ export function publicState(s: PortfolioState) {
     protocolCache: _omitProtocolCache,
     chainCache: _omitChainCache,
     zerionDefi: _omitZerionDefi,
+    longtailCache: _omitLongtailCache,
     flowEvents: _omitFlowEvents,
     cexValuationVersions: _omitCexValuationVersions,
     ...rest
@@ -599,6 +605,7 @@ export function publicState(s: PortfolioState) {
   void _omitProtocolCache;
   void _omitChainCache;
   void _omitZerionDefi;
+  void _omitLongtailCache;
   void _omitFlowEvents;
   void _omitCexValuationVersions;
   const snapshots = s.snapshots.map((point) => ({
