@@ -197,18 +197,13 @@ a {
   margin-top: 0;
 }
 
-/* 右列流水卡撑满高度，与左列（汇总+趋势）底部对齐 */
-.overview-col > .section-flows {
-  flex: 1 1 auto;
-}
-
 .overview-duo > .section {
   min-width: 0;
   height: auto;
   margin-top: 0;
 }
 
-/* 流水卡撑满右列高度：内部表格 flex 拉伸，表头固定 */
+/* 流水卡高度收紧：不随列拉伸，减少约三分之一，让下方内容上移 */
 .section-flows {
   display: flex;
   flex-direction: column;
@@ -216,16 +211,13 @@ a {
 
 .section-flows .table {
   display: flex;
-  flex: 1 1 auto;
   min-height: 0;
   flex-direction: column;
 }
 
 @media (min-width: 1121px) {
   .section-flows .flow-scroll {
-    max-height: none;
-    flex: 1 1 auto;
-    min-height: 220px;
+    max-height: 330px;
   }
 }
 
@@ -1613,7 +1605,7 @@ textarea.field {
 }
 
 .chart-canvas {
-  height: 300px;
+  height: 240px;
   width: 100%;
 }
 
