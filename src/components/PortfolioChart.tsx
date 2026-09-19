@@ -109,8 +109,9 @@ export function PortfolioChart({
     const values = data.map((point) => point.v);
     const min = Math.min(...values);
     const max = Math.max(...values);
-    const pad = Math.max((max - min) * 0.15, Math.abs(max) * 0.005, 1);
-    return [Math.floor(min - pad), Math.ceil(max + pad)];
+    // 紧贴曲线实际波动区间：只留 8% 呼吸空间，波动一眼可见
+    const pad = Math.max((max - min) * 0.08, Math.abs(max) * 0.0015, 0.5);
+    return [min - pad, max + pad];
   }, [data]);
 
   const total = summary?.total ?? null;
@@ -165,7 +166,7 @@ export function PortfolioChart({
         )}
       </div>
 
-      {summary && !summary.enoughData && (
+      {summary && !summary.enoughData && total != null && (
         <div className="notice" style={{ marginBottom: 10 }}>
           {summary.reason}
           {summary.partial ? " · 部分数据使用上次成功记录" : ""}
@@ -186,8 +187,8 @@ export function PortfolioChart({
           >
             <defs>
               <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#5089ff" stopOpacity={0.18} />
-                <stop offset="100%" stopColor="#5089ff" stopOpacity={0} />
+                <stop offset="0%" stopColor="#5089ff" stopOpacity={0.22} />
+                <stop offset="100%" stopColor="#5089ff" stopOpacity={0.02} />
               </linearGradient>
             </defs>
             <XAxis
@@ -223,7 +224,9 @@ export function PortfolioChart({
               type="monotone"
               dataKey="v"
               stroke="#5089ff"
-              strokeWidth={2}
+              strokeWidth={2.25}
+              strokeLinecap="round"
+              strokeLinejoin="round"
               dot={false}
               activeDot={{ r: 4, stroke: "#fff", strokeWidth: 2, fill: "#5089ff" }}
               isAnimationActive={false}

@@ -361,10 +361,10 @@ export function Dashboard() {
       </header>
 
       <div className="container" id="top">
-        <div className="summary-panel">
-          <section className="profile">
-            <div className="profile-left">
-              <Image src="/avatar.jpg" alt="0xStudy" width={52} height={52} className="avatar" />
+        <div className="overview-duo">
+          <div className="overview-col">
+            <section className="summary-panel">
+              <Image src="/avatar.jpg" alt="0xStudy" width={48} height={48} className="avatar" />
               <div className="stats">
                 <div>
                   <div className="stat-label">链上资产</div>
@@ -389,44 +389,40 @@ export function Dashboard() {
                   </div>
                 </div>
               </div>
-            </div>
-            <div className="profile-right">
-              <div className="profile-status">
-                <span
-                  className={`tag ${
-                    error || data.refreshStatus === "failed" ? "neg" : data.refreshStatus === "partial" ? "warn" : "pos"
-                  }`}
-                >
-                  {error || data.refreshStatus === "failed"
-                    ? "数据获取失败"
-                    : data.refreshStatus === "partial"
-                      ? "部分数据沿用缓存"
-                      : "数据刷新成功"}
-                </span>
-                <span className="small">{rateSaving ? "汇率保存中…" : "快照每 5 分钟"}</span>
+              <div className="profile-right">
+                <div className="profile-status">
+                  <span
+                    className={`tag ${
+                      error || data.refreshStatus === "failed" ? "neg" : data.refreshStatus === "partial" ? "warn" : "pos"
+                    }`}
+                  >
+                    {error || data.refreshStatus === "failed"
+                      ? "数据获取失败"
+                      : data.refreshStatus === "partial"
+                        ? "部分数据沿用缓存"
+                        : "数据刷新成功"}
+                  </span>
+                  <span className="small">{rateSaving ? "汇率保存中…" : "快照每 5 分钟"}</span>
+                </div>
+                <div className="networth-value num">{usd(totals.totalUsd)}</div>
+                <div className="networth-cny num">{cny(totals.totalUsd * rate)}</div>
+                <div className="networth-rate">
+                  <label htmlFor="usd-cny-rate">USD/CNY</label>
+                  <input
+                    id="usd-cny-rate"
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={rateDraft}
+                    onChange={(event) => setRateDraft(event.target.value)}
+                    onBlur={() => saveRate()}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") event.currentTarget.blur();
+                    }}
+                  />
+                </div>
               </div>
-              <div className="networth-value num">{usd(totals.totalUsd)}</div>
-              <div className="networth-cny num">{cny(totals.totalUsd * rate)}</div>
-              <div className="networth-rate">
-                <label htmlFor="usd-cny-rate">USD/CNY</label>
-                <input
-                  id="usd-cny-rate"
-                  type="number"
-                  step="0.01"
-                  inputMode="decimal"
-                  value={rateDraft}
-                  onChange={(event) => setRateDraft(event.target.value)}
-                  onBlur={() => saveRate()}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") event.currentTarget.blur();
-                  }}
-                />
-              </div>
-            </div>
-          </section>
-        </div>
-        <div className="overview-duo">
-          <div className="overview-col">
+            </section>
             <PortfolioChart
               snapshots={snapshots}
               usdCnyRate={rate}
@@ -434,17 +430,27 @@ export function Dashboard() {
               summary={changes}
               onRangeChange={setRange}
             />
+          </div>
+          <FlowSection
+            summary={flows}
+            loading={flowsLoading}
+            range={flowRange}
+            minUsd={flowMin}
+            onRangeChange={setFlowRange}
+            onMinChange={setFlowMin}
+          />
+        </div>
 
-            <section className="section" id="chains">
-              <div className="section-head">
-                <div className="section-title">
-                  <h2>链上分布</h2>
-                  <span className="hint">
-                    {chains.length} 条链 · 点击链卡片可筛选下方代币
-                  </span>
-                </div>
-                <span className="section-total num">{usd(onchainUsd)}</span>
-              </div>
+        <section className="section" id="chains">
+          <div className="section-head">
+            <div className="section-title">
+              <h2>链上分布</h2>
+              <span className="hint">
+                {chains.length} 条链 · 点击链卡片可筛选下方代币
+              </span>
+            </div>
+            <span className="section-total num">{usd(onchainUsd)}</span>
+          </div>
               {chains.length ? (
                 <div className="chain-strip">
                   <button
@@ -463,7 +469,7 @@ export function Dashboard() {
                       </span>
                     </span>
                   </button>
-                  {(allChainsShown ? chains : chains.slice(0, 8)).map((chain) => (
+                  {(allChainsShown ? chains : chains.slice(0, 14)).map((chain) => (
                     <button
                       key={chain.id}
                       type="button"
@@ -476,16 +482,16 @@ export function Dashboard() {
                         <span className="name" style={{ display: "block" }}>
                           {chain.name}
                         </span>
-                        <span className="value num" style={{ display: "block" }}>
-                          {usd(chain.valueUsd)}
+                        <span className="value-row">
+                          <span className="value num">{usd(chain.valueUsd)}</span>
+                          <span className="pct num">
+                            {onchainUsd > 0 ? `${((chain.valueUsd / onchainUsd) * 100).toFixed(1)}%` : "—"}
+                          </span>
                         </span>
-                      </span>
-                      <span className="pct num">
-                        {onchainUsd > 0 ? `${((chain.valueUsd / onchainUsd) * 100).toFixed(1)}%` : "—"}
                       </span>
                     </button>
                   ))}
-                  {chains.length > 8 && (
+                  {chains.length > 14 && (
                     <button
                       type="button"
                       className="chain-card"
@@ -502,16 +508,6 @@ export function Dashboard() {
                 <div className="empty">还没有链上明细：点击右上角刷新获取</div>
               )}
             </section>
-          </div>
-          <FlowSection
-            summary={flows}
-            loading={flowsLoading}
-            range={flowRange}
-            minUsd={flowMin}
-            onRangeChange={setFlowRange}
-            onMinChange={setFlowMin}
-          />
-        </div>
 
         <TokenTable
           tokens={breakdown?.tokens ?? []}

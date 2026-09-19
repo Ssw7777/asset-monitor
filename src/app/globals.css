@@ -143,27 +143,28 @@ a {
   position: relative;
 }
 
+/* 紧凑汇总卡：头像 + 五项统计 + 总资产，位于左列顶部 */
 .summary-panel {
-  margin-top: 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: #ffffff;
-  padding: 16px 22px;
+  padding: 14px 16px;
   box-shadow: 0 1px 3px rgba(25, 35, 60, 0.04);
 }
 
-/* 单行总览：头像 + 五项统计与总额同一行，面板高度收紧 */
-.summary-panel .profile {
-  padding: 0;
+.summary-panel .stats {
+  margin-top: 0;
+  gap: 18px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
-.summary-panel .stats {
-  border-top: 0;
-  padding-top: 0;
-  margin-top: 0;
-  gap: 26px;
-  align-items: center;
+.summary-panel .profile-right {
+  margin-left: auto;
+  flex: 0 0 auto;
 }
 
 .profile-status {
@@ -190,8 +191,15 @@ a {
   gap: 20px;
 }
 
-.overview-col > .section {
+.overview-col > .section,
+.overview-col > .summary-panel,
+.overview-col > .total-panel {
   margin-top: 0;
+}
+
+/* 右列流水卡撑满高度，与左列（汇总+趋势）底部对齐 */
+.overview-col > .section-flows {
+  flex: 1 1 auto;
 }
 
 .overview-duo > .section {
@@ -527,8 +535,8 @@ textarea.field {
 }
 
 .avatar {
-  width: 52px;
-  height: 52px;
+  width: 48px;
+  height: 48px;
   flex: 0 0 auto;
   border-radius: 50%;
   object-fit: cover;
@@ -1290,17 +1298,11 @@ textarea.field {
   font-size: 13px;
 }
 
-/* ── 链卡片横排（DeBank 归集卡）：固定 5 列，收起态两行正好对称 ────── */
+/* ── 链卡片横排（全宽板块，卡片足够宽，链名绝不截断） ──────────────── */
 .chain-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 8px;
-}
-
-@media (max-width: 1240px) {
-  .chain-strip {
-    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-  }
 }
 
 .chain-card {
@@ -1347,6 +1349,14 @@ textarea.field {
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chain-card .value-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
 }
 
 .chain-card .value {
@@ -1603,7 +1613,7 @@ textarea.field {
 }
 
 .chart-canvas {
-  height: 240px;
+  height: 300px;
   width: 100%;
 }
 
