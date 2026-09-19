@@ -49,6 +49,29 @@ export async function GET(req: NextRequest) {
   }
 
   const state = await readStore();
+  const protoAddr = (url.searchParams.get("protocols") || "").trim().toLowerCase();
+  if (protoAddr) {
+    const entry = state.protocolCache?.[protoAddr] ?? null;
+    const simplified = entry
+      ? {
+          at: entry.at,
+          lastAttemptAt: entry.lastAttemptAt ?? null,
+          protocols: entry.protocols.map((protocol) => {
+            let net = 0;
+            const items = Array.isArray(protocol.portfolio_item_list) ? protocol.portfolio_item_list : [];
+            for (const item of items) {
+              const stats = (item as Record<string, unknown>).stats as Record<string, unknown> | undefined;
+              if (!stats) continue;
+              const asset = Number(stats.asset_usd_value) || 0;
+              const debt = Math.abs(Number(stats.debt_usd_value) || 0);
+              net += stats.net_usd_value == null ? asset - debt : Number(stats.net_usd_value) || 0;
+            }
+            return { id: protocol.id, name: protocol.name, chain: protocol.chain, items: items.length, net: Math.round(net * 100) / 100 };
+          }),
+        }
+      : null;
+    return NextResponse.json({ address: protoAddr, protocolCache: simplified });
+  }
   const wallets = state.wallets.map((wallet) => {
     const addressLower = wallet.address.toLowerCase();
     const protocols = state.protocolCache?.[addressLower]?.protocols ?? [];
