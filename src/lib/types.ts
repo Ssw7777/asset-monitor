@@ -243,12 +243,12 @@ export interface ZerionDefiCacheEntry {
   positions: Array<{ name: string; chain: string; valueUsd: number }>;
 }
 
-/** 某个地址的 Zerion 长尾链代币缓存（1 小时 TTL，负责链发现与仓位代币分类）。 */
+/** 某个地址的 Zerion 长尾链代币缓存（1 小时 TTL，负责链发现与链级对账）。 */
 export interface WalletLongtailCacheEntry {
   at: string;
   chains: Array<{ id: string; name: string; valueUsd: number }>;
-  /** 被分类为 DeFi 仓位代币（deposit/staked/loan…）的 chain:symbol 键，钱包余额中跳过。 */
-  skipKeys?: string[];
+  /** Zerion 每链合计快照：缓存期内继续做链级对账。 */
+  chainSnapshot?: Record<string, number>;
 }
 
 /** Per-wallet chain allocation persisted across serverless cold starts. */

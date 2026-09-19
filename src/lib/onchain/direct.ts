@@ -177,11 +177,6 @@ const contractPriceCache = new Map<string, { at: number; usd: number }>();
 const PRICE_TTL_MS = 10 * 60 * 1000;
 /** 长尾链（Zerion 代币层）结果缓存 1 小时：25 钱包轮换 ≈ 300 次/天，落在 4 把 Key 池内。 */
 const LONGTAIL_TTL_MS = 60 * 60 * 1000;
-/**
- * Zerion 未收录代币的信任上限：单枚价值超过该值且 Zerion 没有收录时，
- * 视为不可信定价（协议凭证/垃圾币），不计入总额。
- */
-const UNVERIFIED_TOKEN_TRUST_CAP = 500;
 
 async function alchemyRpc(net: string, calls: Array<{ method: string; params: unknown[] }>) {
   const key = process.env.ALCHEMY_API_KEY;
@@ -282,9 +277,10 @@ function isStable(symbol: string) {
 }
 
 /**
- * 直连读取一个钱包：Alchemy 链（原生 + 全代币，已知链全部查询）+ Zerion（长尾链与未发现链）。
- * `longtail` 为上一轮缓存的 Zerion 长尾结果（1 小时 TTL，由调用方轮换刷新）；
- * Zerion 本轮若被调用，未查询链上的代币直接并入总额（链发现自愈），已查询链仅用于隐含价格。
+ * 直连读取一个钱包：Alchemy 链（原生 + 全代币，已知链全部查询）+ Zerion（长尾链与链级对账）。
+ * `longtail` 为上一轮缓存的 Zerion 快照（1 小时 TTL，由调用方轮换刷新）。
+ * 链级对账：某条链上「我们算的」与「Zerion 算的」偏差超出 [0.6, 2.5] 时采用 Zerion 值——
+ * 向下保护（漏链/漏价）与向上保护（协议凭证代币被误定价）双向兜底。
  */
 export async function fetchDirectDetail(
   address: string,
@@ -293,51 +289,53 @@ export async function fetchDirectDetail(
     longtail?: {
       at: string;
       chains: Array<{ id: string; name: string; valueUsd: number }>;
-      skipKeys?: string[];
+      chainSnapshot?: Record<string, number>;
     } | null;
     allowZerion: boolean;
     deadlineMs?: number;
   }
-): Promise<(DirectDetail & { longtailFetched?: Array<{ id: string; name: string; valueUsd: number }>; skipKeysFetched?: string[] }) | null> {
+): Promise<
+  | (DirectDetail & {
+      longtailFetched?: Array<{ id: string; name: string; valueUsd: number }>;
+      chainSnapshotFetched?: Record<string, number>;
+    })
+  | null
+> {
   const hasAlchemy = !!process.env.ALCHEMY_API_KEY;
   if (!hasAlchemy && !opts.allowZerion) return null;
 
   const queriedChains = new Set(opts.knownChains.filter((id) => ALCHEMY_CHAINS[id]));
 
-  // ── Zerion 层：长尾链 + 链发现 + 仓位代币分类（debt/deposit 不进钱包余额）──
+  // ── Zerion 层：长尾链（未查询链直接并入）+ 每链快照（对账用）────────
   let longtailFetched: Array<{ id: string; name: string; valueUsd: number }> | undefined;
-  let skipKeysFetched: string[] | undefined;
+  let chainSnapshotFetched: Record<string, number> | undefined;
   const longtailChains = new Map<string, number>();
   const impliedPrices = new Map<string, number>();
-  const walletIndex = new Set<string>();
-  let positionTypes = new Map<string, string>();
+  let zerionChainTotals = new Map<string, number>();
   const cached = opts.longtail;
   const cachedFresh = !!cached && Date.now() - new Date(cached.at).getTime() < LONGTAIL_TTL_MS;
   if (cachedFresh && cached) {
     for (const chain of cached.chains) longtailChains.set(chain.id, chain.valueUsd);
-    positionTypes = new Map((cached.skipKeys ?? []).map((key) => [key, "position"]));
+    zerionChainTotals = new Map(Object.entries(cached.chainSnapshot ?? {}));
   } else if (opts.allowZerion) {
-    const zerionResult = await fetchZerionTokens(address, {
-      deadlineMs: opts.deadlineMs,
-      includeAllPositions: true,
-    });
+    const zerionResult = await fetchZerionTokens(address, { deadlineMs: opts.deadlineMs });
     if (zerionResult) {
-      for (const row of zerionResult.raw ?? []) {
-        const key = `${row.chain}:${row.symbol.toUpperCase()}`;
-        if (row.type === "wallet") walletIndex.add(key);
-        else positionTypes.set(key, row.type);
-        if (row.type !== "loan" && !queriedChains.has(row.chain)) {
-          // 未查询链（长尾或新发现）：除借贷外全部并入
-          longtailChains.set(row.chain, (longtailChains.get(row.chain) || 0) + row.valueUsd);
+      for (const token of zerionResult.tokens) {
+        if (token.amount > 0) {
+          impliedPrices.set(`${token.chain}:${token.symbol.toUpperCase()}`, token.valueUsd / token.amount);
         }
-        if (row.amount > 0 && row.valueUsd > 0) {
-          impliedPrices.set(key, row.valueUsd / row.amount);
+        zerionChainTotals.set(token.chain, (zerionChainTotals.get(token.chain) || 0) + token.valueUsd);
+        if (!queriedChains.has(token.chain)) {
+          // 未查询链（长尾或新发现）：直接并入
+          longtailChains.set(token.chain, (longtailChains.get(token.chain) || 0) + token.valueUsd);
         }
       }
       longtailFetched = [...longtailChains.entries()]
         .filter(([, valueUsd]) => valueUsd >= 0.01)
         .map(([id, valueUsd]) => ({ id, name: chainName(id), valueUsd: Math.round(valueUsd * 100) / 100 }));
-      skipKeysFetched = [...positionTypes.keys()];
+      chainSnapshotFetched = Object.fromEntries(
+        [...zerionChainTotals.entries()].map(([id, value]) => [id, Math.round(value * 100) / 100])
+      );
     }
   }
 
@@ -441,16 +439,7 @@ export async function fetchDirectDetail(
   let tokenUsd = 0;
   const chainValues = new Map<string, number>(longtailChains);
   let unpricedCount = 0;
-  let skippedPositions = 0;
   for (const token of pending) {
-    const key = `${token.chain}:${token.symbol.toUpperCase()}`;
-    // Aave/借贷等协议的凭证与债务代币：属于 DeFi 仓位，不进钱包余额
-    // （债务代币被误定价曾把 79U 钱包算成 1.7 万）
-    const ptype = positionTypes.get(key);
-    if (ptype && ptype !== "wallet") {
-      skippedPositions += 1;
-      continue;
-    }
     const price = priceOf(token);
     if (price == null || price <= 0) {
       unpricedCount += 1;
@@ -458,18 +447,23 @@ export async function fetchDirectDetail(
     }
     const value = token.amount * price;
     if (value < 0.01) continue;
-    // Zerion 未收录的代币：单枚价值超过信任上限时不计入（防垃圾定价），如实计入 unpriced
-    const verified =
-      walletIndex.has(key) || token.contract === "" || token.symbol.toUpperCase() === "WETH" ||
-      token.symbol.toUpperCase() === "WBNB";
-    if (!verified && value > UNVERIFIED_TOKEN_TRUST_CAP) {
-      unpricedCount += 1;
-      continue;
-    }
     tokenUsd += value;
     chainValues.set(token.chain, (chainValues.get(token.chain) || 0) + value);
   }
-  void skippedPositions;
+
+  // ── 链级对账：已查询链上「我们的合计」与「Zerion 合计」偏差出界时采用 Zerion 值 ──
+  let adjusted = 0;
+  for (const [chainId, zerionValue] of zerionChainTotals) {
+    if (!queriedChains.has(chainId)) continue; // 未查询链已直接采用 Zerion 值
+    const ours = chainValues.get(chainId) ?? 0;
+    if (zerionValue <= 0.01) continue;
+    const ratio = zerionValue > 0 ? ours / zerionValue : 0;
+    if (ratio < 0.6 || ratio > 2.5) {
+      chainValues.set(chainId, zerionValue);
+      adjusted += 1;
+    }
+  }
+  void adjusted;
 
   const total = tokenUsd + [...longtailChains.values()].reduce((sum, v) => sum + v, 0);
   const chains = [...chainValues.entries()]
@@ -482,6 +476,6 @@ export async function fetchDirectDetail(
     chains,
     unpricedCount,
     longtailFetched,
-    skipKeysFetched,
+    chainSnapshotFetched,
   };
 }
