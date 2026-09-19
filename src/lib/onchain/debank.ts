@@ -653,8 +653,9 @@ export async function refreshWallets(
     for (const chain of longtailStore[addressLower]?.chains ?? []) knownChains.add(chain.id);
     const chainIds = [...knownChains];
 
-    // 长尾链 1 小时 TTL 轮换：后台每批 2 个；实时模式（打开页面/手动）无视 TTL 全量读取
-    const hasDetailTime = () => Date.now() < stopAt - 10_000;
+    // 长尾链 1 小时 TTL 轮换：后台每批 2 个；实时模式无视 TTL 与时间截止
+    //（队列尾部的钱包也必须拿到 Zerion 对账数据，否则链级修正永远轮不到它们）
+    const hasDetailTime = () => opts.live || Date.now() < stopAt - 10_000;
     const longtailEntry = longtailStore[addressLower];
     const longtailFresh =
       !opts.live && !!longtailEntry && Date.now() - new Date(longtailEntry.at).getTime() < LONGTAIL_TTL_MS;
