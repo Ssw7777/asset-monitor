@@ -652,11 +652,11 @@ export async function refreshWallets(
     for (const chain of longtailStore[addressLower]?.chains ?? []) knownChains.add(chain.id);
     const chainIds = [...knownChains];
 
-    // 长尾链 1 小时 TTL 轮换：后台每批 2 个，实时模式全量
+    // 长尾链 1 小时 TTL 轮换：后台每批 2 个；实时模式（打开页面/手动）无视 TTL 全量读取
     const hasDetailTime = () => Date.now() < stopAt - 10_000;
     const longtailEntry = longtailStore[addressLower];
     const longtailFresh =
-      !!longtailEntry && Date.now() - new Date(longtailEntry.at).getTime() < LONGTAIL_TTL_MS;
+      !opts.live && !!longtailEntry && Date.now() - new Date(longtailEntry.at).getTime() < LONGTAIL_TTL_MS;
     const allowZerion = !longtailFresh && longtailBudget > 0 && hasDetailTime();
 
     const direct = await fetchDirectDetail(wallet.address, {
