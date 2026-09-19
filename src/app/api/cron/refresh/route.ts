@@ -39,6 +39,7 @@ async function handle(req: NextRequest) {
       ? Math.min(1440, staleMinutesParam)
       : undefined;
   const walletId = (searchParams.get("walletId") || "").trim();
+  const live = searchParams.get("live") === "1" || searchParams.get("live") === "true";
   const leaseOwner = req.headers.get("x-idempotency-key") || randomUUID();
   const acquired = await acquireRefreshLease(leaseOwner);
   if (!acquired) {
@@ -54,10 +55,11 @@ async function handle(req: NextRequest) {
               walletBudget,
               staleMinutes,
               walletIds: walletId ? [walletId] : undefined,
+              live,
             })
         : mode === "full"
-          ? await runRefresh({ walletBudget })
-          : await runRefresh({ auto: true, walletBudget });
+          ? await runRefresh({ walletBudget, live })
+          : await runRefresh({ auto: true, walletBudget, live });
     const refreshStatus = result.payload.refreshStatus;
     return NextResponse.json(
       {
