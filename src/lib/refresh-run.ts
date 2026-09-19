@@ -65,21 +65,23 @@ async function refreshOnchainSlice(
   state: PortfolioState,
   walletBudget: number | undefined,
   now: string,
-  selection: { staleMinutes?: number; walletIds?: string[] } = {}
+  selection: { staleMinutes?: number; walletIds?: string[]; live?: boolean } = {}
 ) {
   const tokenCache = { ...(state.tokenCache || {}) };
   const protocolCache = { ...(state.protocolCache || {}) };
   const chainCache = { ...(state.chainCache || {}) };
+  const defiCache = { ...(state.zerionDefi || {}) };
   const previousSuccessById = new Map(
     state.wallets.map((wallet) => [wallet.id, wallet.lastSuccess?.at ?? null])
   );
   const previousAttemptById = new Map(
     state.wallets.map((wallet) => [wallet.id, wallet.updatedAt ?? null])
   );
-  const wallets = await refreshWallets(state.wallets, chainCache, tokenCache, protocolCache, {
+  const wallets = await refreshWallets(state.wallets, chainCache, tokenCache, protocolCache, defiCache, {
     budget: walletBudget,
     only: selection.walletIds,
     staleMinutes: selection.staleMinutes,
+    live: selection.live,
   });
   let partial = wallets.some((wallet) => wallet.status !== "ok");
   let breakdown = state.onchainBreakdown ?? null;
@@ -98,7 +100,8 @@ async function refreshOnchainSlice(
       wallets,
       chainCache,
       tokenCache,
-      protocolCache
+      protocolCache,
+      defiCache
     );
     const previous = state.onchainBreakdown ?? null;
     // 限流时不要用“更少的成功地址”覆盖上一轮完整明细：保留旧明细，只更新限流状态。
@@ -133,6 +136,7 @@ async function refreshOnchainSlice(
   state.tokenCache = tokenCache;
   state.protocolCache = protocolCache;
   state.chainCache = chainCache;
+  state.zerionDefi = defiCache;
   state.onchainBreakdown = breakdown;
   if (succeededThisBatch) state.lastFullRefreshAt = now;
   await writeStore(state);
@@ -147,13 +151,14 @@ async function refreshOnchainSlice(
  * `walletIds` 指定单个地址立即检查（地址管理页的「检查」按钮）。
  */
 export async function runWalletBatch(
-  opts: { walletBudget?: number; staleMinutes?: number; walletIds?: string[] } = {}
+  opts: { walletBudget?: number; staleMinutes?: number; walletIds?: string[]; live?: boolean } = {}
 ): Promise<RefreshResult> {
   const state = await readStore();
   const now = new Date().toISOString();
   const onchain = await refreshOnchainSlice(state, opts.walletBudget, now, {
     staleMinutes: opts.staleMinutes,
     walletIds: opts.walletIds,
+    live: opts.live,
   });
   const finalState = onchain.state;
   const walletOk = finalState.wallets.filter((wallet) => wallet.status === "ok").length;
@@ -195,7 +200,7 @@ export async function runWalletBatch(
  * - full：交易所 + 一小批轮转地址余额 + DApp / 代币缓存补齐；云端任务连续分批调用。
  */
 export async function runRefresh(
-  opts: { fast?: boolean; auto?: boolean; walletBudget?: number } = {}
+  opts: { fast?: boolean; auto?: boolean; walletBudget?: number; live?: boolean } = {}
 ): Promise<RefreshResult> {
   const state = await readStore();
   // auto：用略短于 5 分钟的容差判断是否全量，避免定时器提前数秒时误判为快速刷新。
@@ -237,7 +242,7 @@ export async function runRefresh(
   let breakdown = latest.onchainBreakdown ?? null;
 
   if (!fast) {
-    const onchain = await refreshOnchainSlice(latest, opts.walletBudget, now);
+    const onchain = await refreshOnchainSlice(latest, opts.walletBudget, now, { live: opts.live });
     latest = onchain.state;
     partial = onchain.partial;
     breakdown = onchain.breakdown;
@@ -256,7 +261,7 @@ export async function runRefresh(
     walletBasis: Object.fromEntries(
       latest.wallets.map((wallet) => [
         wallet.address.toLowerCase(),
-        wallet.source === "direct" ? "token" : wallet.source ?? "public",
+        wallet.source === "direct" ? "defi" : wallet.source ?? "public",
       ])
     ),
     zerionWallets: latest.wallets

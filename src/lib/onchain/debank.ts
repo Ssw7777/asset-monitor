@@ -10,10 +10,11 @@ import type {
   WalletChainCacheEntry,
   WalletProtocolCacheEntry,
   WalletTokenCacheEntry,
+  ZerionDefiCacheEntry,
   Wallet,
 } from "../types";
 import { activeTokenSource, fetchZerionTokens, normalizeChainId, type TokenSource } from "./token-providers";
-import { fetchDirectDetail, hasLongTailChains } from "./direct";
+import { fetchDirectDetail, fetchZerionDefi, hasLongTailChains } from "./direct";
 
 interface ChainBalanceDetail {
   id: string;
@@ -46,8 +47,11 @@ const PROTOCOL_RETRY_TTL = 30 * 60 * 1000;
 const PROTOCOL_WALLET_BUDGET = 1;
 /** Five widely spaced batches of five cover all 25 configured wallets in about ten minutes. */
 const MAX_PUBLIC_REQUESTS_PER_RUN = 5;
-/** Keep wallet work fully sequential so Rabby requests never overlap. */
-const CONCURRENCY = 1;
+/**
+ * 直连层（Alchemy/Zerion 鉴权接口）可以并行：无公共接口的 3 秒串行限制。
+ * 公共源兜底请求仍会被 waitForPublicSlot 全局串行化，互不冲突。
+ */
+const CONCURRENCY = 6;
 /**
  * Rabby / DeBank 公共接口严格串行，并让相邻请求至少间隔 3 秒。
  * 每个云端小批次最多 5 个钱包；批次之间由调度器留出约 135 秒。
@@ -310,6 +314,24 @@ async function fetchWalletDetail(
 type ProtocolCache = Record<string, WalletProtocolCacheEntry>;
 type ChainCache = Record<string, WalletChainCacheEntry>;
 
+/** Zerion DeFi 仓位后台 3 小时刷新一次（25×8≈200 次/天）；打开页面/手动刷新时实时全量。 */
+const ZERION_DEFI_TTL = 3 * 60 * 60 * 1000;
+
+/** 把 Zerion DeFi 仓位按链并入链分布，让「链上分布」卡片与钱包总额保持同一口径。 */
+function mergeDefiIntoChains(
+  tokenChains: Array<{ id: string; name: string; valueUsd: number; logoUrl?: string }>,
+  positions: Array<{ name: string; chain: string; valueUsd: number }>
+) {
+  const merged = new Map(tokenChains.map((chain) => [chain.id, { ...chain }]));
+  for (const position of positions) {
+    if (!position.chain || position.chain === "unknown" || position.valueUsd <= 0) continue;
+    const current = merged.get(position.chain) ?? { id: position.chain, name: chainName(position.chain), valueUsd: 0 };
+    current.valueUsd += position.valueUsd;
+    merged.set(position.chain, current);
+  }
+  return [...merged.values()].sort((left, right) => right.valueUsd - left.valueUsd);
+}
+
 async function fetchComplexProtocols(
   address: string,
   store: ProtocolCache
@@ -540,12 +562,15 @@ export async function refreshWallets(
   chainStore: ChainCache,
   tokenStore: TokenCache,
   protocolStore: ProtocolCache,
+  defiStore: Record<string, ZerionDefiCacheEntry>,
   opts: {
     budget?: number;
     /** 只刷这些钱包（id 或小写地址），用于单地址手动检查。 */
     only?: string[];
     /** 只刷「成功时间超过 N 分钟」的地址（从未成功的地址永远符合），供调度器补查批次使用。 */
     staleMinutes?: number;
+    /** 实时模式：全部钱包 + DeFi 仓位强制读取（无视 TTL），用于打开页面/手动刷新。 */
+    live?: boolean;
   } = {}
 ): Promise<Wallet[]> {
   if (!wallets.length) return [];
@@ -558,10 +583,9 @@ export async function refreshWallets(
    * 协议明细按 6 小时、代币明细按 3 小时缓存轮换补，避免把公共接口额度一次用光。
    */
   /** Failed reads retain the last good value; updatedAt advances so one bad address cannot starve the queue. */
-  const budget = Math.max(
-    1,
-    Math.min(opts.budget ?? MAX_PUBLIC_REQUESTS_PER_RUN, MAX_PUBLIC_REQUESTS_PER_RUN)
-  );
+  const budget = opts.live
+    ? Math.max(1, Math.min(opts.budget ?? wallets.length, wallets.length))
+    : Math.max(1, Math.min(opts.budget ?? MAX_PUBLIC_REQUESTS_PER_RUN, MAX_PUBLIC_REQUESTS_PER_RUN));
   const nowMs = Date.now();
   const successTs = (wallet: Wallet) => {
     const raw = wallet.lastSuccess?.at;
@@ -594,29 +618,8 @@ export async function refreshWallets(
     )
     .slice(0, budget);
   const targetIds = new Set(targets.map((wallet) => wallet.id));
-  /** 本轮补协议明细的地址（6 小时缓存），优先最久没补过的。 */
-  const protocolTargets = new Set(
-    [...targets]
-      .filter((wallet) => {
-        const hit = protocolStore[wallet.address.toLowerCase()];
-        if (!hit) return true;
-        const successAt = hit.at ? new Date(hit.at).getTime() : 0;
-        const attemptedAt = hit.lastAttemptAt ? new Date(hit.lastAttemptAt).getTime() : 0;
-        const successStale = !successAt || Date.now() - successAt >= PROTOCOL_TTL;
-        const retryReady = !attemptedAt || Date.now() - attemptedAt >= PROTOCOL_RETRY_TTL;
-        return successStale && retryReady;
-      })
-      .sort((left, right) => {
-        const leftEntry = protocolStore[left.address.toLowerCase()];
-        const rightEntry = protocolStore[right.address.toLowerCase()];
-        const leftAt = new Date(leftEntry?.lastAttemptAt || leftEntry?.at || 0).getTime();
-        const rightAt = new Date(rightEntry?.lastAttemptAt || rightEntry?.at || 0).getTime();
-        if (leftAt !== rightAt) return leftAt - rightAt;
-        return right.balanceUsd - left.balanceUsd;
-      })
-      .slice(0, PROTOCOL_WALLET_BUDGET)
-      .map((wallet) => wallet.address.toLowerCase())
-  );
+  /** 后台每批最多给 2 个地址补 DeFi；实时模式一次性补全部（打开页面即全量）。 */
+  let defiBudget = opts.live ? targets.length : 2;
   /**
    * 本轮要补代币明细的地址：优先“从来没取过”的地址（例如余额抓取失败的币安钱包，
    * 里面的 PONS / stonks 只能靠代币明细补出来），其次按余额从大到小。
@@ -638,8 +641,7 @@ export async function refreshWallets(
     const previous = wallet.balanceUsd;
     const addressLower = wallet.address.toLowerCase();
 
-    // ── 直连层优先：Alchemy（七链全代币）+ Zerion（Abstract / 长尾链）。
-    // 走鉴权 Key，不受 Rabby 公共接口 429 影响；DeFi 净值由协议缓存叠加。
+    // ── 直连层优先：Alchemy（九链全代币）+ Zerion（xlayer 等长尾链代币）。
     const knownChains = new Set(wallet.chain === "EVM" ? ["eth"] : ["abs"]);
     for (const chain of chainStore[addressLower]?.chains ?? []) knownChains.add(chain.id);
     const chainIds = [...knownChains];
@@ -649,28 +651,41 @@ export async function refreshWallets(
       deadlineMs: stopAt,
     });
     const wantsTokenDetail = tokenTargets.has(addressLower);
-    const wantsProtocolDetail = protocolTargets.has(addressLower);
     const hasDetailTime = () => Date.now() < stopAt - 10_000;
 
     if (direct) {
-      // 先补协议明细（预算内）——协议数据只用于 DeFi 展示板块，不并入钱包余额：
-      // 免费协议源（Rabby 逆向接口）曾给出比真实值高出 11k 的过期仓位，
-      // 掺进总额会把 79U 的钱包算成 1.1 万。余额 = 链上代币+原生币净值（直连层）。
-      if (direct.tokenUsd >= 0.01 && wantsProtocolDetail && hasDetailTime() && !publicBlocked()) {
-        await fetchComplexProtocols(wallet.address, protocolStore);
-      }
       if (wantsTokenDetail && hasDetailTime()) {
         await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true, stopAt);
       }
-      const usd = Math.round(direct.tokenUsd * 100) / 100;
+      // ── Zerion DeFi 层：后台 3 小时 TTL、每批最多 2 个地址；实时模式强制全量读取。
+      // 只计 deposit/staked/reward，loan/投资不并入（语义不稳定，实测曾出现几小时内
+      // 消失的 3.5 万 loan 仓位）。
+      const defiEntry = defiStore[addressLower];
+      const defiFresh =
+        !opts.live && !!defiEntry && Date.now() - new Date(defiEntry.at).getTime() < ZERION_DEFI_TTL;
+      if (!defiFresh && defiBudget > 0 && hasDetailTime()) {
+        defiBudget -= 1;
+        const fetched = await fetchZerionDefi(wallet.address, { deadlineMs: stopAt });
+        const at = new Date().toISOString();
+        if (fetched) {
+          defiStore[addressLower] = { at, netUsd: fetched.netUsd, positions: fetched.positions };
+        } else {
+          defiStore[addressLower] = defiEntry
+            ? { ...defiEntry, at }
+            : { at, netUsd: 0, positions: [] };
+        }
+      }
+      const defiNet = defiStore[addressLower]?.netUsd ?? 0;
+      const usd = Math.round((direct.tokenUsd + defiNet) * 100) / 100;
+      const mergedChains = mergeDefiIntoChains(direct.chains, defiStore[addressLower]?.positions ?? []);
       cache.set(addressLower, {
-        detail: { totalUsd: usd, chains: direct.chains },
+        detail: { totalUsd: usd, chains: mergedChains },
         at: Date.now(),
       });
       chainStore[addressLower] = {
         at: attemptedAt,
-        totalUsd: direct.tokenUsd,
-        chains: direct.chains.map((chain) => ({ ...chain })),
+        totalUsd: direct.tokenUsd + defiNet,
+        chains: mergedChains,
       };
       return {
         ...wallet,
@@ -696,11 +711,6 @@ export async function refreshWallets(
       };
     }
     if (status === "ok") {
-      if (usd >= 0.01 && wantsProtocolDetail && hasDetailTime()) {
-        // Same task, right after the total: avoids a second request storm and keeps
-        // the total request from eating the rate limit before DApp/token detail loads.
-        await fetchComplexProtocols(wallet.address, protocolStore);
-      }
       if (wantsTokenDetail && hasDetailTime()) {
         await fetchWalletTokens(
           wallet.address,
@@ -723,9 +733,6 @@ export async function refreshWallets(
       };
     }
     if (status === "cached") {
-      if (usd >= 0.01 && wantsProtocolDetail && hasDetailTime()) {
-        await fetchComplexProtocols(wallet.address, protocolStore);
-      }
       // 公共 DeBank 接口失败时，代币明细仍可能从 Zerion 拿到，所以这里也尝试补一次
       if (wantsTokenDetail && hasDetailTime()) {
         await fetchWalletTokens(
@@ -861,7 +868,8 @@ export async function refreshOnchainBreakdown(
   wallets: Wallet[],
   chainStore: ChainCache,
   tokenStore: TokenCache,
-  protocolStore: ProtocolCache
+  protocolStore: ProtocolCache,
+  defiStore: Record<string, ZerionDefiCacheEntry>
 ): Promise<OnchainBreakdown> {
   const chainMap = new Map<string, {
     id: string;
@@ -886,6 +894,7 @@ export async function refreshOnchainBreakdown(
   >();
   let successfulWallets = 0;
   let cachedWallets = 0;
+  const dappSource = new Map<string, "zerion" | "audit">();
 
   await mapPool(wallets, CONCURRENCY, async (wallet) => {
     // refreshWallets runs immediately before this and fills the cache. Avoid a second
@@ -894,7 +903,11 @@ export async function refreshOnchainBreakdown(
     const persistedDetail = chainStore[normalizedAddress] ?? null;
     const detail = persistedDetail ?? cache.get(normalizedAddress)?.detail ?? null;
     // 协议缓存持久化后不再依赖本次函数实例里的余额缓存；冷启动也能聚合全部钱包。
-    const protocols = protocolStore[wallet.address.toLowerCase()]?.protocols ?? null;
+    // 只保留 Kona 审计快照（Rabby 反向接口的协议数据曾严重失真，不再展示）。
+    const cachedProtocols = protocolStore[wallet.address.toLowerCase()]?.protocols ?? null;
+    const protocols = cachedProtocols
+      ? cachedProtocols.filter((protocol) => String(protocol.name || "").toLowerCase() === "kona")
+      : null;
     const tokenDetail = tokenStore[wallet.address.toLowerCase()] ?? null;
     if (wallet.status === "cached" || wallet.status === "error" || wallet.status === "stale") {
       cachedWallets += 1;
@@ -989,9 +1002,7 @@ export async function refreshOnchainBreakdown(
         for (const entry of chainMap.values()) entry.tokenCovered = true;
       }
     }
-    if (!protocols) return;
-
-    for (const protocol of protocols) {
+    for (const protocol of protocols ?? []) {
       const items = Array.isArray(protocol.portfolio_item_list)
         ? protocol.portfolio_item_list.filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
         : [];
@@ -1047,7 +1058,45 @@ export async function refreshOnchainBreakdown(
       addWalletShare(chain.wallets, wallet, assetUsd, debtUsd, netUsd, tokens);
       current.chains.set(protocolChain, chain);
       dappMap.set(key, current);
+      dappSource.set(key, "audit");
       dappByChain.set(protocolChain, (dappByChain.get(protocolChain) || 0) + netUsd);
+    }
+
+    // Zerion 实时 DeFi 仓位并入 DApp 展示（deposit/staked/reward；借贷不计入）
+    const zerionPositions = defiStore[wallet.address.toLowerCase()]?.positions ?? [];
+    for (const position of zerionPositions) {
+      if (position.valueUsd <= 0.005) continue;
+      const name = canonicalDappName(position.name);
+      const key = name.toLowerCase();
+      const current = dappMap.get(key) || {
+        id: key,
+        name,
+        siteUrl: "",
+        logoUrl: undefined,
+        assetUsd: 0,
+        debtUsd: 0,
+        netUsd: 0,
+        chains: new Map(),
+        wallets: new Map(),
+      };
+      const chain = current.chains.get(position.chain) || {
+        id: position.chain,
+        name: chainName(position.chain),
+        assetUsd: 0,
+        debtUsd: 0,
+        netUsd: 0,
+        wallets: new Map(),
+      };
+      current.assetUsd += position.valueUsd;
+      current.netUsd += position.valueUsd;
+      chain.assetUsd += position.valueUsd;
+      chain.netUsd += position.valueUsd;
+      addWalletShare(current.wallets, wallet, position.valueUsd, 0, position.valueUsd, []);
+      addWalletShare(chain.wallets, wallet, position.valueUsd, 0, position.valueUsd, []);
+      current.chains.set(position.chain, chain);
+      dappMap.set(key, current);
+      dappSource.set(key, "zerion");
+      dappByChain.set(position.chain, (dappByChain.get(position.chain) || 0) + position.valueUsd);
     }
   });
 
@@ -1080,8 +1129,8 @@ export async function refreshOnchainBreakdown(
         name: chain.name,
         logoUrl: chain.logoUrl,
         valueUsd: rounded(chain.valueUsd),
-        // 直连层口径：链总额 = 代币+原生币净值；DeFi 只做展示不并入（防过期仓位污染总额）
-        walletUsd: rounded(chain.valueUsd),
+        // 链总额 = 代币+原生币+实时 DeFi（链分布缓存已并入）；walletUsd 为扣除 DeFi 后的钱包内净值
+        walletUsd: rounded(chain.valueUsd - dappUsd),
         dappUsd: rounded(dappUsd),
         walletCount: walletsForChain.length,
         wallets: walletsForChain,
@@ -1127,6 +1176,7 @@ export async function refreshOnchainBreakdown(
           wallets: [...chain.wallets.values()].map(finalizeWallet).sort((left, right) => right.netUsd - left.netUsd),
         }))
         .sort((left, right) => right.netUsd - left.netUsd),
+      source: dappSource.get(dapp.name.toLowerCase()) ?? "audit",
     }))
     .sort((left, right) => right.netUsd - left.netUsd);
 

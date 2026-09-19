@@ -131,6 +131,7 @@ a {
 
 .section {
   margin-top: 34px;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 18px;
@@ -606,7 +607,7 @@ textarea.field {
 }
 
 .networth-value {
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 700;
   line-height: 1.15;
   letter-spacing: -0.02em;
@@ -778,10 +779,22 @@ textarea.field {
     minmax(140px, 1fr) minmax(120px, 0.85fr) minmax(150px, 0.9fr);
 }
 
-/* 资金流水表：右列收窄后用紧凑列宽 + 小字号，绝不横向滚动 */
+/* 资金流水表：三列紧凑版（时间/变动/钱包），余额变化列彻底移除，绝不横向滚动 */
 .grid-flow {
-  grid-template-columns: minmax(56px, 0.5fr) minmax(84px, 0.7fr) minmax(96px, 1.15fr) minmax(88px, 0.8fr);
+  grid-template-columns: minmax(56px, 0.55fr) minmax(88px, 0.75fr) minmax(0, 1.3fr);
   gap: 8px;
+}
+
+.grid-flow .flow-balance {
+  display: none;
+}
+
+/* 流水净额并入标题行：小号、与标题同行 */
+.flow-net {
+  margin-left: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .section-flows .thead,
@@ -1546,38 +1559,13 @@ textarea.field {
 }
 
 .chart-delta strong {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.01em;
 }
 
 .chart-delta span {
   font-size: 14px;
-  font-weight: 600;
-}
-
-/* 流水卡摘要行：净额大数字 + 流入/流出小字 */
-.flow-summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 14px;
-  padding: 2px 0 12px;
-}
-
-.flow-summary strong {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
-}
-
-.flow-summary-sub {
-  color: var(--ink-3);
-  font-size: 12px;
-}
-
-.flow-summary-sub b {
   font-weight: 600;
 }
 

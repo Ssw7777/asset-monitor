@@ -82,6 +82,7 @@ export function ProtocolSections({
         <div className="section-head">
           <div className="section-title">
             <h2>DeFi 仓位</h2>
+            <span className="hint">打开页面即实时读取 · 审计快照仅展示不并入总额</span>
           </div>
         </div>
         <div className="empty">没有读到协议仓位：点击右上角刷新</div>
@@ -113,6 +114,9 @@ export function ProtocolSections({
               size={24}
             />
             <h3>{dapp.name}</h3>
+            <span className={`tag ${dapp.source === "zerion" ? "pos" : "line"}`}>
+              {dapp.source === "zerion" ? "实时" : "审计快照"}
+            </span>
             {site && (
               <a href={site} target="_blank" rel="noopener noreferrer">
                 官网 ↗

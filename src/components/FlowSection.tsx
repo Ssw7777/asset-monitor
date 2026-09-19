@@ -51,6 +51,10 @@ export function FlowSection({
       <div className="section-head">
         <div className="section-title">
           <h2>资金变动流水</h2>
+          <strong className={`flow-net num ${net >= 0 ? "pos" : "neg"}`}>
+            {net > 0 ? "+" : net < 0 ? "-" : ""}
+            {usd(Math.abs(net))}
+          </strong>
         </div>
         <div className="inline">
           <span className="seg">
@@ -80,13 +84,6 @@ export function FlowSection({
         </div>
       </div>
 
-      <div className="flow-summary">
-        <strong className={`num ${net >= 0 ? "pos" : "neg"}`}>
-          {net > 0 ? "+" : net < 0 ? "-" : ""}
-          {usd(Math.abs(net))}
-        </strong>
-      </div>
-
       {events.length ? (
         <div className="table">
           <div className="flow-scroll">
@@ -94,7 +91,7 @@ export function FlowSection({
               <div>时间</div>
               <div className="right">变动</div>
               <div className="hide-md">变动钱包/交易所</div>
-              <div className="right hide-md">余额变化</div>
+              <div className="right flow-balance">余额变化</div>
             </div>
             {events.map((event) => {
               const direction = DIRECTION[event.direction];
@@ -118,7 +115,7 @@ export function FlowSection({
                       {event.entityAddress ? shortAddr(event.entityAddress) : event.entityLabel}
                     </span>
                   </div>
-                  <div className="right cell-sub num flow-balance hide-md">
+                  <div className="right cell-sub num flow-balance">
                     {amountNum(event.before)} → {usd(event.after)}
                   </div>
                   <div className="flow-meta cell-sub">

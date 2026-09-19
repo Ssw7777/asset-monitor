@@ -584,6 +584,7 @@ export function publicState(s: PortfolioState) {
     tokenCache: _omitTokenCache,
     protocolCache: _omitProtocolCache,
     chainCache: _omitChainCache,
+    zerionDefi: _omitZerionDefi,
     flowEvents: _omitFlowEvents,
     cexValuationVersions: _omitCexValuationVersions,
     ...rest
@@ -592,6 +593,7 @@ export function publicState(s: PortfolioState) {
   void _omitTokenCache;
   void _omitProtocolCache;
   void _omitChainCache;
+  void _omitZerionDefi;
   void _omitFlowEvents;
   void _omitCexValuationVersions;
   const snapshots = s.snapshots.map((point) => ({

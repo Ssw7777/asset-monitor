@@ -113,7 +113,8 @@ export async function POST(req: NextRequest) {
     state.wallets,
     state.chainCache ?? {},
     state.tokenCache ?? {},
-    cache
+    cache,
+    state.zerionDefi ?? {}
   );
   await updateOnchainBreakdown(breakdown);
   const kona = breakdown.dapps.find((dapp) => dapp.name.toLowerCase() === "kona");

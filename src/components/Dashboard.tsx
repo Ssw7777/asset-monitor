@@ -220,7 +220,10 @@ export function Dashboard() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+    // 打开页面即做一次全量实时刷新：全部钱包余额 + DeFi 仓位立刻读取，不用等调度器
+    if (!mountedRef.current) mountedRef.current = true;
+    void quietRefresh("full", false);
+  }, [load, quietRefresh]);
 
   useEffect(() => {
     rangeRef.current = range;
@@ -241,8 +244,8 @@ export function Dashboard() {
       const delay =
         streak === 0 ? AUTO_TICK_MS : Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * Math.pow(2, streak - 1));
       timerRef.current = setTimeout(async () => {
-        const full = Date.now() - lastFullRef.current >= AUTO_FULL_EVERY_MS;
-        await quietRefresh(full ? "full" : "fast", false);
+        // 后台每 5 分钟只刷交易所+快照；钱包余额由云端调度器每 10 分钟滚动刷新
+        await quietRefresh("fast", false);
         if (mountedRef.current) schedule();
       }, delay);
     };
