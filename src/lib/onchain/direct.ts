@@ -1,5 +1,5 @@
 import { fetchZerionTokens, normalizeChainId } from "./token-providers";
-import { nextZerionKey } from "./zerion-keys";
+import { nextZerionKey, zerionRequest } from "./zerion-keys";
 
 /**
  * 直连数据源层：不经 Rabby/DeBank 公共接口，直接向官方基础设施查询钱包余额。
@@ -105,62 +105,64 @@ export async function fetchZerionDefi(
   const COUNTED = new Set(["deposit", "staked", "reward", "claimable", "locker"]);
   const remainingMs = opts.deadlineMs == null ? 20_000 : opts.deadlineMs - Date.now();
   if (remainingMs < 2_000) return null;
-  try {
-    const response = await fetch(
-      `https://api.zerion.io/v1/wallets/${address}/positions/?currency=usd&filter[positions]=no_filter&page[size]=100`,
-      {
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`,
-          Accept: "application/json",
-        },
-        cache: "no-store",
-        signal: AbortSignal.timeout(Math.min(20_000, remainingMs)),
+  return zerionRequest(async () => {
+    try {
+      const response = await fetch(
+        `https://api.zerion.io/v1/wallets/${address}/positions/?currency=usd&filter[positions]=no_filter&page[size]=100`,
+        {
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`,
+            Accept: "application/json",
+          },
+          cache: "no-store",
+          signal: AbortSignal.timeout(Math.min(20_000, remainingMs)),
+        }
+      );
+      if (!response.ok) return null;
+      const body = (await response.json()) as {
+        data?: Array<{
+          attributes?: { position_type?: string; value?: unknown; fungible_info?: { symbol?: string } };
+          relationships?: { chain?: { data?: { id?: string } }; dapp?: { data?: { id?: string } } };
+        }>;
+      };
+      if (!Array.isArray(body.data)) return null;
+
+      const dappIds = new Set<string>();
+      const raw: Array<{ type: string; symbol: string; chain: string; dappId: string; valueUsd: number }> = [];
+      for (const item of body.data) {
+        const type = String(item.attributes?.position_type || "");
+        if (type === "wallet" || !COUNTED.has(type)) continue;
+        const valueUsd = number(item.attributes?.value);
+        if (valueUsd <= 0.005) continue;
+        const chain = normalizeChainId(String(item.relationships?.chain?.data?.id || "unknown"));
+        const dappId = String(item.relationships?.dapp?.data?.id || "");
+        if (dappId) dappIds.add(dappId);
+        raw.push({
+          type,
+          symbol: String(item.attributes?.fungible_info?.symbol || ""),
+          chain,
+          dappId,
+          valueUsd,
+        });
       }
-    );
-    if (!response.ok) return null;
-    const body = (await response.json()) as {
-      data?: Array<{
-        attributes?: { position_type?: string; value?: unknown; fungible_info?: { symbol?: string } };
-        relationships?: { chain?: { data?: { id?: string } }; dapp?: { data?: { id?: string } } };
-      }>;
-    };
-    if (!Array.isArray(body.data)) return null;
+      if (!raw.length) return { netUsd: 0, positions: [] };
 
-    const dappIds = new Set<string>();
-    const raw: Array<{ type: string; symbol: string; chain: string; dappId: string; valueUsd: number }> = [];
-    for (const item of body.data) {
-      const type = String(item.attributes?.position_type || "");
-      if (type === "wallet" || !COUNTED.has(type)) continue;
-      const valueUsd = number(item.attributes?.value);
-      if (valueUsd <= 0.005) continue;
-      const chain = normalizeChainId(String(item.relationships?.chain?.data?.id || "unknown"));
-      const dappId = String(item.relationships?.dapp?.data?.id || "");
-      if (dappId) dappIds.add(dappId);
-      raw.push({
-        type,
-        symbol: String(item.attributes?.fungible_info?.symbol || ""),
-        chain,
-        dappId,
-        valueUsd,
-      });
+      const names = new Map<string, string>();
+      for (const dappId of dappIds) {
+        names.set(dappId, await resolveDappName(dappId));
+      }
+      const positions: ZerionDefiPosition[] = [];
+      let netUsd = 0;
+      for (const entry of raw) {
+        netUsd += entry.valueUsd;
+        const base = names.get(entry.dappId) || (entry.type === "deposit" && entry.symbol ? `${entry.symbol} 存款` : entry.dappId || entry.type);
+        positions.push({ name: base, chain: entry.chain, valueUsd: Math.round(entry.valueUsd * 100) / 100 });
+      }
+      return { netUsd: Math.round(netUsd * 100) / 100, positions };
+    } catch {
+      return null;
     }
-    if (!raw.length) return { netUsd: 0, positions: [] };
-
-    const names = new Map<string, string>();
-    for (const dappId of dappIds) {
-      names.set(dappId, await resolveDappName(dappId));
-    }
-    const positions: ZerionDefiPosition[] = [];
-    let netUsd = 0;
-    for (const entry of raw) {
-      netUsd += entry.valueUsd;
-      const base = names.get(entry.dappId) || (entry.type === "deposit" && entry.symbol ? `${entry.symbol} 存款` : entry.dappId || entry.type);
-      positions.push({ name: base, chain: entry.chain, valueUsd: Math.round(entry.valueUsd * 100) / 100 });
-    }
-    return { netUsd: Math.round(netUsd * 100) / 100, positions };
-  } catch {
-    return null;
-  }
+  });
 }
 
 const number = (v: unknown) => {

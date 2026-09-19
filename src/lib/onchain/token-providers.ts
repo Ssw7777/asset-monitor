@@ -1,5 +1,5 @@
 import type { TokenLine } from "../types";
-import { nextZerionKey, zerionKeys } from "./zerion-keys";
+import { nextZerionKey, zerionKeys, zerionRequest } from "./zerion-keys";
 
 export type TokenSource = "debank" | "zerion" | "rabby-public" | "none";
 
@@ -194,63 +194,65 @@ export async function fetchZerionTokens(
   if (!key) return null;
   const remainingMs = opts.deadlineMs == null ? 20_000 : opts.deadlineMs - Date.now();
   if (remainingMs < 750) return null;
-  try {
-    const filter = opts.includeAllPositions ? "" : "&filter[positions]=only_simple";
-    const response = await fetch(
-      `https://api.zerion.io/v1/wallets/${address}/positions/?currency=usd&page[size]=100${filter}`,
-      {
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`,
-          Accept: "application/json",
-        },
-        cache: "no-store",
-        signal: AbortSignal.timeout(Math.min(20_000, remainingMs)),
-      }
-    );
-    if (!response.ok) return null;
-    const body = (await response.json()) as {
-      data?: Array<{
-        id?: string;
-        attributes?: {
-          position_type?: string;
-          quantity?: { float?: number };
-          value?: number;
-          price?: number;
-          fungible_info?: { symbol?: string; name?: string; icon?: { url?: string } };
-        };
-        relationships?: { chain?: { data?: { id?: string } } };
-      }>;
-    };
-    if (!Array.isArray(body.data)) return null;
-    const rows = body.data
-      .map((item) => {
-        const attributes = item.attributes || {};
-        const symbol = String(attributes.fungible_info?.symbol || "");
-        const amount = number(attributes.quantity?.float);
-        const price = number(attributes.price);
-        const valueUsd = number(attributes.value) || Math.abs(amount * price);
-        return {
-          symbol,
-          amount,
-          valueUsd,
-          type: String(attributes.position_type || "wallet"),
-          tokenId: String(item.id || symbol),
-          logoUrl: attributes.fungible_info?.icon?.url,
-          chain: normalizeChainId(String(item.relationships?.chain?.data?.id || "unknown")),
-        };
-      })
-      .filter((row) => row.symbol);
-    const result = collect(rows);
-    result.coveredChains = ["*"];
-    result.raw = rows.map((row) => ({
-      symbol: row.symbol,
-      chain: row.chain,
-      type: row.type,
-      amount: row.amount,
-      valueUsd: row.valueUsd,
-    }));
-    return result;
-  } catch {
-    return null;
-  }
+  return zerionRequest(async () => {
+    try {
+      const filter = opts.includeAllPositions ? "" : "&filter[positions]=only_simple";
+      const response = await fetch(
+        `https://api.zerion.io/v1/wallets/${address}/positions/?currency=usd&page[size]=100${filter}`,
+        {
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`,
+            Accept: "application/json",
+          },
+          cache: "no-store",
+          signal: AbortSignal.timeout(Math.min(20_000, remainingMs)),
+        }
+      );
+      if (!response.ok) return null;
+      const body = (await response.json()) as {
+        data?: Array<{
+          id?: string;
+          attributes?: {
+            position_type?: string;
+            quantity?: { float?: number };
+            value?: number;
+            price?: number;
+            fungible_info?: { symbol?: string; name?: string; icon?: { url?: string } };
+          };
+          relationships?: { chain?: { data?: { id?: string } } };
+        }>;
+      };
+      if (!Array.isArray(body.data)) return null;
+      const rows = body.data
+        .map((item) => {
+          const attributes = item.attributes || {};
+          const symbol = String(attributes.fungible_info?.symbol || "");
+          const amount = number(attributes.quantity?.float);
+          const price = number(attributes.price);
+          const valueUsd = number(attributes.value) || Math.abs(amount * price);
+          return {
+            symbol,
+            amount,
+            valueUsd,
+            type: String(attributes.position_type || "wallet"),
+            tokenId: String(item.id || symbol),
+            logoUrl: attributes.fungible_info?.icon?.url,
+            chain: normalizeChainId(String(item.relationships?.chain?.data?.id || "unknown")),
+          };
+        })
+        .filter((row) => row.symbol);
+      const result = collect(rows);
+      result.coveredChains = ["*"];
+      result.raw = rows.map((row) => ({
+        symbol: row.symbol,
+        chain: row.chain,
+        type: row.type,
+        amount: row.amount,
+        valueUsd: row.valueUsd,
+      }));
+      return result;
+    } catch {
+      return null;
+    }
+  });
 }

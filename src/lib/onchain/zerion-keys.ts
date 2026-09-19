@@ -24,3 +24,17 @@ export function nextZerionKey(): string | null {
   rotation += 1;
   return key;
 }
+
+/**
+ * Zerion 请求全局串行 + 相邻间隔 250ms：避免并发触发限流，
+ * 4 把 Key 轮转下实际速率 ≈ 16 次/秒的 1/4，安全落在免费额度内。
+ */
+let zerionQueue: Promise<void> = Promise.resolve();
+
+export function zerionRequest<T>(fn: () => Promise<T>): Promise<T> {
+  const run = zerionQueue.then(fn, fn);
+  zerionQueue = run
+    .catch(() => undefined)
+    .then(() => new Promise<void>((resolve) => setTimeout(resolve, 250)));
+  return run;
+}
