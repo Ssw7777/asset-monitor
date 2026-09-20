@@ -467,7 +467,8 @@ export async function fetchDirectDetail(
     }
     const ours = chainValues.get(chainId) ?? 0;
     const ratio = ours / zerionValue;
-    if (ratio < 0.6 || ratio > 2.5) {
+    // 0.7 下限：链上枚举漏代币/漏价时（如 Abstract 上的持仓），采用 Zerion 独立估值
+    if (ratio < 0.7 || ratio > 2.5) {
       chainValues.set(chainId, zerionValue);
     }
   }
