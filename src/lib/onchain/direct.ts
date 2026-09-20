@@ -315,7 +315,9 @@ export async function fetchDirectDetail(
   const impliedPrices = new Map<string, number>();
   let zerionChainTotals = new Map<string, number>();
   const cached = opts.longtail;
-  const cachedFresh = !!cached && Date.now() - new Date(cached.at).getTime() < LONGTAIL_TTL_MS;
+  // 缓存必须带 chainSnapshot（链级对账基准）；旧格式缓存视为过期，强制重取
+  const cachedFresh =
+    !!cached && !!cached.chainSnapshot && Date.now() - new Date(cached.at).getTime() < LONGTAIL_TTL_MS;
   if (cachedFresh && cached) {
     for (const chain of cached.chains) longtailChains.set(chain.id, chain.valueUsd);
     zerionChainTotals = new Map(Object.entries(cached.chainSnapshot ?? {}));
