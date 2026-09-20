@@ -215,12 +215,6 @@ a {
   flex-direction: column;
 }
 
-@media (min-width: 1121px) {
-  .section-flows .flow-scroll {
-    max-height: 330px;
-  }
-}
-
 /* 全站统一白卡：板块底色不再使用低饱和彩色，只靠边框和排版区分 */
 #trend,
 #chains,
@@ -1149,26 +1143,8 @@ textarea.field {
 }
 
 .flow-scroll {
-  max-height: 240px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
-.flow-scroll .thead {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  border-radius: 0;
-}
-
-.flow-scroll::-webkit-scrollbar {
-  width: 7px;
-}
-
-.flow-scroll::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: #cbd7e8;
+  /* 流水直接随页面滚动，不再内置滚动条，内容铺满卡片 */
+  max-height: none;
 }
 
 .section-flows .table,
@@ -1774,10 +1750,6 @@ textarea.field {
     flex-wrap: wrap;
     justify-content: flex-start;
     margin-left: 0;
-  }
-
-  .flow-scroll {
-    max-height: 390px;
   }
 
   .token-card-head {

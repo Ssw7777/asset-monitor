@@ -98,7 +98,6 @@ export function Dashboard() {
   const [changes, setChanges] = useState<ChangeSummary | null>(null);
   const [changesLoading, setChangesLoading] = useState(false);
   const [chainFilter, setChainFilter] = useState("all");
-  const [allChainsShown, setAllChainsShown] = useState(false);
   const [exporting, setExporting] = useState("");
   const [flows, setFlows] = useState<FlowSummary | null>(null);
   const [protocolPerf, setProtocolPerf] = useState<ProtocolPerformanceSummary | null>(null);
@@ -302,6 +301,8 @@ export function Dashboard() {
 
   const breakdown = data?.onchainBreakdown ?? null;
   const chains = useMemo(() => breakdown?.chains ?? [], [breakdown]);
+  // 链卡片动态可见性：≥50 USDT 显示，跌破自动隐藏（<1 USDT 的链本来就进不了分布）
+  const visibleChains = useMemo(() => chains.filter((chain) => chain.valueUsd >= 50), [chains]);
 
   if (loading || !data) {
     return (
@@ -446,68 +447,53 @@ export function Dashboard() {
             <div className="section-title">
               <h2>链上分布</h2>
               <span className="hint">
-                {chains.length} 条链 · 点击链卡片可筛选下方代币
+                {visibleChains.length} 条链 · 点击链卡片可筛选下方代币
               </span>
             </div>
             <span className="section-total num">{usd(onchainUsd)}</span>
           </div>
-              {chains.length ? (
-                <div className="chain-strip">
-                  <button
-                    type="button"
-                    className={`chain-card${chainFilter === "all" ? " active" : ""}`}
-                    style={{ ["--chain-color" as string]: "#b3bcd2" }}
-                    onClick={() => setChainFilter("all")}
-                  >
-                    <span className="icon-fallback">ALL</span>
-                    <span style={{ minWidth: 0, flex: 1 }}>
-                      <span className="name" style={{ display: "block" }}>
-                        全部链
-                      </span>
-                      <span className="value num" style={{ display: "block" }}>
-                        {usd(onchainUsd)}
-                      </span>
+          {visibleChains.length ? (
+            <div className="chain-strip">
+              <button
+                type="button"
+                className={`chain-card${chainFilter === "all" ? " active" : ""}`}
+                style={{ ["--chain-color" as string]: "#b3bcd2" }}
+                onClick={() => setChainFilter("all")}
+              >
+                <span className="icon-fallback">ALL</span>
+                <span style={{ minWidth: 0, flex: 1 }}>
+                  <span className="name" style={{ display: "block" }}>
+                    全部链
+                  </span>
+                  <span className="value num" style={{ display: "block" }}>
+                    {usd(onchainUsd)}
+                  </span>
+                </span>
+              </button>
+              {visibleChains.map((chain) => (
+                <button
+                  key={chain.id}
+                  type="button"
+                  className={`chain-card${chainFilter === chain.id ? " active" : ""}`}
+                  style={{ ["--chain-color" as string]: CHAIN_COLOR[chain.id] || "#b3bcd2" }}
+                  onClick={() => setChainFilter(chainFilter === chain.id ? "all" : chain.id)}
+                >
+                  <ChainIcon chain={chain} />
+                  <span style={{ minWidth: 0, flex: 1 }}>
+                    <span className="name" style={{ display: "block" }}>
+                      {chain.name === "Robinhood Chain" ? "Robinhood" : chain.name}
                     </span>
-                  </button>
-                  {(allChainsShown ? chains : chains.slice(0, 14)).map((chain) => (
-                    <button
-                      key={chain.id}
-                      type="button"
-                      className={`chain-card${chainFilter === chain.id ? " active" : ""}`}
-                      style={{ ["--chain-color" as string]: CHAIN_COLOR[chain.id] || "#b3bcd2" }}
-                      onClick={() => setChainFilter(chainFilter === chain.id ? "all" : chain.id)}
-                    >
-                      <ChainIcon chain={chain} />
-                      <span style={{ minWidth: 0, flex: 1 }}>
-                        <span className="name" style={{ display: "block" }}>
-                          {chain.name}
-                        </span>
-                        <span className="value-row">
-                          <span className="value num">{usd(chain.valueUsd)}</span>
-                          <span className="pct num">
-                            {onchainUsd > 0 ? `${((chain.valueUsd / onchainUsd) * 100).toFixed(1)}%` : "—"}
-                          </span>
-                        </span>
-                      </span>
-                    </button>
-                  ))}
-                  {chains.length > 14 && (
-                    <button
-                      type="button"
-                      className="chain-card"
-                      style={{ ["--chain-color" as string]: "transparent", justifyContent: "center" }}
-                      onClick={() => setAllChainsShown((value) => !value)}
-                    >
-                      <span className="name" style={{ color: "var(--ink-2)" }}>
-                        {allChainsShown ? "收起链列表" : `展开全部 ${chains.length} 条链`}
-                      </span>
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <div className="empty">还没有链上明细：点击右上角刷新获取</div>
-              )}
-            </section>
+                    <span className="value num" style={{ display: "block" }}>
+                      {usd(chain.valueUsd)}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty">还没有链上明细：点击右上角刷新获取</div>
+          )}
+        </section>
 
         <TokenTable
           tokens={breakdown?.tokens ?? []}
