@@ -457,12 +457,16 @@ export async function fetchDirectDetail(
     chainValues.set(token.chain, (chainValues.get(token.chain) || 0) + value);
   }
 
-  // ── 链级对账：已查询链上「我们的合计」与「Zerion 合计」偏差出界时采用 Zerion 值 ──
+  // ── 链级对账：偏差出界时采用 Zerion 值 ──
   for (const [chainId, zerionValue] of zerionChainTotals) {
-    if (!queriedChains.has(chainId)) continue; // 未查询链已直接采用 Zerion 值
-    const ours = chainValues.get(chainId) ?? 0;
     if (zerionValue <= 0.01) continue;
-    const ratio = zerionValue > 0 ? ours / zerionValue : 0;
+    if (!queriedChains.has(chainId)) {
+      // 未查询链（包括缓存 .chains 列表漏掉的链）：直接采用 Zerion 值
+      chainValues.set(chainId, Math.max(chainValues.get(chainId) ?? 0, zerionValue));
+      continue;
+    }
+    const ours = chainValues.get(chainId) ?? 0;
+    const ratio = ours / zerionValue;
     if (ratio < 0.6 || ratio > 2.5) {
       chainValues.set(chainId, zerionValue);
     }
