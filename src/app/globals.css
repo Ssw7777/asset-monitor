@@ -1317,6 +1317,50 @@ textarea.field {
   background: var(--fill-2);
 }
 
+.chain-dust-card {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 11px;
+  min-height: 58px;
+  border: 1px dashed #cbd5e4;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: var(--ink-2);
+  padding: 10px 13px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chain-dust-card:hover {
+  border-color: #aebed6;
+  background: #f2f6fb;
+}
+
+.chain-dust-card > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.chain-dust-card .name,
+.chain-dust-card .value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chain-dust-card .name {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.chain-dust-card .value {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
 .chain-card .icon {
   width: 26px;
   height: 26px;

@@ -98,6 +98,7 @@ export function Dashboard() {
   const [changes, setChanges] = useState<ChangeSummary | null>(null);
   const [changesLoading, setChangesLoading] = useState(false);
   const [chainFilter, setChainFilter] = useState("all");
+  const [smallChainsOpen, setSmallChainsOpen] = useState(false);
   const [exporting, setExporting] = useState("");
   const [flows, setFlows] = useState<FlowSummary | null>(null);
   const [protocolPerf, setProtocolPerf] = useState<ProtocolPerformanceSummary | null>(null);
@@ -301,8 +302,16 @@ export function Dashboard() {
 
   const breakdown = data?.onchainBreakdown ?? null;
   const chains = useMemo(() => breakdown?.chains ?? [], [breakdown]);
-  // 链卡片动态可见性：≥50 USDT 显示，跌破自动隐藏（<1 USDT 的链本来就进不了分布）
-  const visibleChains = useMemo(() => chains.filter((chain) => chain.valueUsd >= 50), [chains]);
+  // 链卡片动态可见性：主列表为 ≥50 U；1–50 U 折叠；<1 U 永不显示。
+  const mainChains = useMemo(() => chains.filter((chain) => chain.valueUsd >= 50), [chains]);
+  const smallChains = useMemo(
+    () => chains.filter((chain) => chain.valueUsd >= 1 && chain.valueUsd < 50),
+    [chains]
+  );
+  const displayedChains = useMemo(
+    () => (smallChainsOpen ? [...mainChains, ...smallChains] : mainChains),
+    [mainChains, smallChains, smallChainsOpen]
+  );
 
   if (loading || !data) {
     return (
@@ -446,12 +455,14 @@ export function Dashboard() {
             <div className="section-title">
               <h2>链上分布</h2>
               <span className="hint">
-                {visibleChains.length} 条链 · 点击链卡片可筛选下方代币
+                {displayedChains.length} 条链
+                {smallChains.length ? ` · ${smallChains.length} 条小额链${smallChainsOpen ? "已展开" : "已收起"}` : ""}
+                {" · 点击链卡片可筛选下方代币"}
               </span>
             </div>
             <span className="section-total num">{usd(onchainUsd)}</span>
           </div>
-          {visibleChains.length ? (
+          {displayedChains.length || smallChains.length ? (
             <div className="chain-strip">
               <button
                 type="button"
@@ -469,7 +480,7 @@ export function Dashboard() {
                   </span>
                 </span>
               </button>
-              {visibleChains.map((chain) => (
+              {displayedChains.map((chain) => (
                 <button
                   key={chain.id}
                   type="button"
@@ -488,6 +499,20 @@ export function Dashboard() {
                   </span>
                 </button>
               ))}
+              {smallChains.length > 0 && (
+                <button
+                  type="button"
+                  className="chain-dust-card"
+                  onClick={() => setSmallChainsOpen((open) => !open)}
+                  aria-expanded={smallChainsOpen}
+                >
+                  <span className="icon-fallback">⋯</span>
+                  <span>
+                    <span className="name">小额链 {smallChains.length} 条</span>
+                    <span className="value num">每条 1–50 USDT · {smallChainsOpen ? "点击收起" : "点击展开"}</span>
+                  </span>
+                </button>
+              )}
             </div>
           ) : (
             <div className="empty">还没有链上明细：点击右上角刷新获取</div>
