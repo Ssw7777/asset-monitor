@@ -678,24 +678,6 @@ export async function refreshWallets(
     const wantsTokenDetail = tokenTargets.has(addressLower);
 
     if (direct) {
-      // 链发现自愈：Zerion 看到的未查询链写回 chainStore，下一轮走 Alchemy 链上直读
-      const cachedChains = chainStore[addressLower]?.chains ?? [];
-      const mergedChainMap = new Map(cachedChains.map((chain) => [chain.id, chain]));
-      for (const chain of direct.chains) {
-        const existing = mergedChainMap.get(chain.id);
-        if (!existing || existing.valueUsd < chain.valueUsd) {
-          mergedChainMap.set(chain.id, { ...chain });
-        }
-      }
-      // DeFi 净值按链并入，保证「链分布之和 = 钱包总额」
-      for (const position of defiStore[addressLower]?.positions ?? []) {
-        if (position.valueUsd <= 0) continue;
-        const chainId = normalizeChainId(position.chain);
-        const current = mergedChainMap.get(chainId) ?? { id: chainId, name: chainName(chainId), valueUsd: 0 };
-        current.valueUsd += position.valueUsd;
-        mergedChainMap.set(chainId, current);
-      }
-      const mergedChains = [...mergedChainMap.values()].sort((l, r) => r.valueUsd - l.valueUsd);
       if (wantsTokenDetail && hasDetailTime()) {
         await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true, stopAt);
       }
@@ -718,6 +700,22 @@ export async function refreshWallets(
         }
       }
       const defiNet = defiStore[addressLower]?.netUsd ?? 0;
+
+      // 链分布必须在 DeFi 缓存更新后重建：若把上一轮仓位先并入、再更新钱包总额，
+      // 就会出现「钱包总额已变，链上分布仍是旧仓位」的严重不一致。
+      const finalChainMap = new Map(
+        direct.chains.map((chain) => [chain.id, { ...chain }])
+      );
+      for (const position of defiStore[addressLower]?.positions ?? []) {
+        if (position.valueUsd <= 0) continue;
+        const chainId = normalizeChainId(position.chain);
+        const current = finalChainMap.get(chainId) ?? { id: chainId, name: chainName(chainId), valueUsd: 0 };
+        current.valueUsd += position.valueUsd;
+        finalChainMap.set(chainId, current);
+      }
+      const mergedChains = [...finalChainMap.values()]
+        .map((chain) => ({ ...chain, valueUsd: Math.round(chain.valueUsd * 100) / 100 }))
+        .sort((left, right) => right.valueUsd - left.valueUsd);
       const usd = Math.round((direct.tokenUsd + defiNet) * 100) / 100;
       cache.set(addressLower, {
         detail: { totalUsd: usd, chains: mergedChains },
