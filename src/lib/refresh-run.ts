@@ -84,7 +84,9 @@ async function refreshOnchainSlice(
     staleMinutes: selection.staleMinutes,
     live: selection.live,
   });
-  let partial = wallets.some((wallet) => wallet.status !== "ok");
+  let partial = wallets.some(
+    (wallet) => wallet.status !== "ok" || wallet.source === "public-partial"
+  );
   let breakdown = state.onchainBreakdown ?? null;
   const batchAttempted = wallets.filter(
     (wallet) => (wallet.updatedAt ?? null) !== previousAttemptById.get(wallet.id)
@@ -240,7 +242,9 @@ export async function runRefresh(
   ];
   let latest = await updateExchanges(exchanges);
 
-  let partial = latest.wallets.some((wallet) => wallet.status !== "ok");
+  let partial = latest.wallets.some(
+    (wallet) => wallet.status !== "ok" || wallet.source === "public-partial"
+  );
   let breakdown = latest.onchainBreakdown ?? null;
 
   if (!fast) {

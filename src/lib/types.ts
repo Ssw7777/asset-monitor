@@ -59,8 +59,8 @@ export interface Wallet {
   updatedAt?: string | null;
   /** Last successful refresh: timestamp + balance at that moment. */
   lastSuccess?: { at: string; balanceUsd: number } | null;
-  /** 最近一次成功读数的数据源:public = Rabby/DeBank 公共源;direct = Alchemy/Zerion 直连层;zerion = 历史兜底（已弃用）。 */
-  source?: "public" | "zerion" | "direct";
+  /** public = DeBank/Rabby 完整口径；public-partial = App 接口限流时暂缺 App 资产。 */
+  source?: "public" | "public-partial" | "zerion" | "direct";
 }
 
 export interface ExchangeBalance {
@@ -234,6 +234,10 @@ export interface WalletProtocolCacheEntry {
   /** Last upstream attempt, including failures, so one bad address cannot retry every minute. */
   lastAttemptAt?: string;
   protocols: Record<string, unknown>[];
+  /** DeBank App assets (for example Polymarket) are outside the normal chain total endpoint. */
+  appAt?: string;
+  appLastAttemptAt?: string;
+  apps?: Record<string, unknown>[];
 }
 
 /** 某个地址的 Zerion 实时 DeFi 仓位（deposit/staked/reward；loan 不并入）。 */
@@ -270,6 +274,10 @@ export interface PortfolioState {
   snapshots: SnapshotPoint[];
   /** Long-lived flow alerts. These survive the seven-day snapshot rotation. */
   flowEvents?: FlowEvent[];
+  /** Only snapshots at or after this instant may create/display inferred balance-change records. */
+  flowBaselineAt?: string | null;
+  /** Bumped when the balance basis changes so old inferred records stay archived, not mixed in. */
+  flowDataVersion?: number;
   onchainCacheUsd: number;
   lastRefresh: string | null;
   /** 最近一次「全量刷新」（链上 + DApp + 代币）的时间，用于自动判断该跑 fast 还是 full */

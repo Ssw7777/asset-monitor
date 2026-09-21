@@ -42,6 +42,11 @@ export const PERSISTED_FLOW_LIMIT = 10_000;
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
 
+function flowBaselineMs(state: PortfolioState): number {
+  const parsed = state.flowBaselineAt ? new Date(state.flowBaselineAt).getTime() : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function shortAddress(address: string) {
   if (!address || address.length < 10) return address;
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
@@ -250,8 +255,9 @@ export function deriveFlowEventsFromSnapshots(
   source: SnapshotPoint[] = state.snapshots,
   minUsd = PERSISTED_FLOW_MIN_USD
 ): FlowEvent[] {
+  const baselineMs = flowBaselineMs(state);
   const snapshots = source
-    .filter((point) => point.wallets)
+    .filter((point) => point.wallets && new Date(point.ts).getTime() >= baselineMs)
     .sort((left, right) => new Date(left.ts).getTime() - new Date(right.ts).getTime());
   const events: FlowEvent[] = [];
   for (let index = 1; index < snapshots.length; index += 1) {
@@ -277,11 +283,12 @@ export function buildFlowSummary(
   const minUsd = Math.max(0, opts.minUsd ?? 50);
   const limit = Math.max(1, opts.limit ?? 120);
   const now = Date.now();
+  const baselineMs = flowBaselineMs(state);
 
   // 只比较“真实刷新”写入的快照：演示基线快照没有逐钱包明细，
   // 拿它做基准会把“从 0 到当前值”误报成大额转入。
   const snapshots = state.snapshots
-    .filter((point) => point.wallets)
+    .filter((point) => point.wallets && new Date(point.ts).getTime() >= baselineMs)
     .sort((left, right) => new Date(left.ts).getTime() - new Date(right.ts).getTime());
 
   const recentEvents: FlowEvent[] = [];
@@ -304,7 +311,11 @@ export function buildFlowSummary(
   // preserve records created before this storage migration and deduplicate by stable id.
   const persistent = (state.flowEvents ?? []).filter((event) => {
     const ts = new Date(event.ts).getTime();
-    return event.amountUsd >= minUsd && (range.ms == null || ts >= now - range.ms);
+    return (
+      ts >= baselineMs &&
+      event.amountUsd >= minUsd &&
+      (range.ms == null || ts >= now - range.ms)
+    );
   });
   const byId = new Map<string, FlowEvent>();
   for (const event of [...persistent, ...recentEvents]) byId.set(event.id, event);

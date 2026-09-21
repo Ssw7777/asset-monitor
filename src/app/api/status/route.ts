@@ -46,7 +46,11 @@ export async function GET(req: NextRequest) {
     }).length,
     sourceCounts: {
       direct: wallets.filter((wallet) => wallet.source === "direct").length,
-      public: wallets.filter((wallet) => wallet.source !== "direct").length,
+      public: wallets.filter((wallet) => wallet.source === "public").length,
+      publicPartial: wallets.filter((wallet) => wallet.source === "public-partial").length,
+      other: wallets.filter(
+        (wallet) => wallet.source !== "direct" && wallet.source !== "public" && wallet.source !== "public-partial"
+      ).length,
     },
     walletsTotalUsd: Math.round(wallets.reduce((sum, wallet) => sum + wallet.balanceUsd, 0) * 100) / 100,
     zerionDefiNetUsd: Math.round(

@@ -14,8 +14,7 @@ import type {
   ZerionDefiCacheEntry,
   Wallet,
 } from "../types";
-import { activeTokenSource, fetchZerionTokens, normalizeChainId, type TokenSource } from "./token-providers";
-import { fetchDirectDetail, fetchZerionDefi } from "./direct";
+import { activeTokenSource, fetchZerionTokens, type TokenSource } from "./token-providers";
 
 interface ChainBalanceDetail {
   id: string;
@@ -29,6 +28,11 @@ interface TotalBalanceDetail {
   chains: ChainBalanceDetail[];
 }
 
+interface AppBalanceDetail {
+  chains: ChainBalanceDetail[];
+  protocols: Record<string, unknown>[];
+}
+
 /** Token lines for one wallet, already classified. `chain` is the DeBank chain id. */
 interface WalletTokenDetail {
   tokens: Array<TokenLine & { chain: string }>;
@@ -38,7 +42,7 @@ interface WalletTokenDetail {
   coveredChains: string[];
 }
 
-const cache = new Map<string, { detail: TotalBalanceDetail; at: number }>();
+const cache = new Map<string, { detail: TotalBalanceDetail; at: number; complete: boolean }>();
 const TTL = 5 * 60 * 1000;
 /** 协议明细缓存 6 小时；过期时一轮尝试补齐全部地址，失败则继续保留上次成功值。 */
 const PROTOCOL_TTL = 6 * 60 * 60 * 1000;
@@ -65,7 +69,6 @@ const PUBLIC_REQUEST_INTERVAL_MS = 3_000;
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
 const TOKEN_WALLET_BUDGET = 1;
 const TOKEN_CHAINS_PER_WALLET = 3;
-const TOKEN_MIN_WALLET_USD = 10;
 const TOKEN_MIN_CHAIN_USD = 5;
 const TOKEN_MIN_VALUE_USD = 0.01;
 
@@ -84,23 +87,36 @@ let nextPublicRequestAt = 0;
  * 公共接口（Rabby / DeBank 无 Key 路径）被限流后的全局冷却截止时间。
  * 冷却期内不再发新请求，直接沿用上次成功数据，避免把 429 变成请求轰炸。
  */
-let publicBlockedUntil = 0;
-/** 连续 429 计数：偶发一两次不该把整轮刷新锁死，连续多次才进入全局冷却。 */
-let publicConsecutive429 = 0;
+const publicBlockedUntilByHost = new Map<string, number>();
+/** 连续 429 按主机隔离：App 接口限流不能拖死 Rabby 的钱包总额。 */
+const publicConsecutive429ByHost = new Map<string, number>();
 
 export type WalletFetchStatus = "ok" | "cached" | "error";
 
 export function getPublicBlockedUntil(): number {
-  return publicBlockedUntil;
+  return Math.max(0, ...publicBlockedUntilByHost.values());
 }
 
-function publicBlocked(): boolean {
-  return Date.now() < publicBlockedUntil;
+function publicHost(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
 }
 
-function markPublicBlocked(ms: number) {
+function publicBlocked(url?: string): boolean {
+  if (url) return Date.now() < (publicBlockedUntilByHost.get(publicHost(url)) ?? 0);
+  return Date.now() < getPublicBlockedUntil();
+}
+
+function markPublicBlocked(url: string, ms: number) {
   const wait = Math.min(2 * 60_000, Math.max(15_000, ms));
-  publicBlockedUntil = Math.max(publicBlockedUntil, Date.now() + wait);
+  const host = publicHost(url);
+  publicBlockedUntilByHost.set(
+    host,
+    Math.max(publicBlockedUntilByHost.get(host) ?? 0, Date.now() + wait)
+  );
 }
 
 const number = (value: unknown) => {
@@ -155,6 +171,47 @@ function parseTotalDetail(data: unknown): TotalBalanceDetail | null {
   return { totalUsd, chains };
 }
 
+/**
+ * DeBank renders app-native assets (for example Polymarket) next to chain assets,
+ * but they are not included in `/user/total_balance`. Convert them into both a
+ * synthetic allocation and a protocol row so every view uses the same net worth.
+ */
+function parseAppDetail(data: unknown): AppBalanceDetail | null {
+  const body = unwrapObject(data);
+  if (!body || !Array.isArray(body.apps)) return null;
+  const chains: ChainBalanceDetail[] = [];
+  const protocols: Record<string, unknown>[] = [];
+  for (const raw of body.apps) {
+    if (!raw || typeof raw !== "object") continue;
+    const app = raw as Record<string, unknown>;
+    const items = Array.isArray(app.portfolio_item_list)
+      ? app.portfolio_item_list.filter(
+          (item): item is Record<string, unknown> => !!item && typeof item === "object"
+        )
+      : [];
+    const valueUsd = items.reduce((sum, item) => {
+      const stats = item.stats && typeof item.stats === "object"
+        ? (item.stats as Record<string, unknown>)
+        : {};
+      return sum + number(stats.net_usd_value ?? stats.asset_usd_value);
+    }, 0);
+    if (Math.abs(valueUsd) < 0.01) continue;
+    const id = String(app.id || app.name || "unknown");
+    const name = String(app.name || app.id || "Unknown App");
+    const logoUrl = typeof app.logo_url === "string" && app.logo_url ? app.logo_url : undefined;
+    chains.push({ id: `app:${id}`, name, valueUsd, logoUrl });
+    protocols.push({
+      ...app,
+      id: `app:${id}`,
+      chain: `app:${id}`,
+      chain_name: name,
+      _assetMonitorSource: "app",
+    });
+  }
+  chains.sort((left, right) => right.valueUsd - left.valueUsd);
+  return { chains, protocols };
+}
+
 const commonHeaders = { Accept: "application/json", "User-Agent": "asset-monitor/0.2" };
 
 function waitForPublicSlot(url: string) {
@@ -197,7 +254,7 @@ async function fetchJson(
 ): Promise<{ data: unknown | null; status: number; attempted: boolean }> {
   const publicEndpoint = isPublicEndpoint(url);
   // 冷却期内直接返回限流状态：不再发请求，调用方沿用上次成功数据。
-  if (publicEndpoint && publicBlocked()) return { data: null, status: 429, attempted: false };
+  if (publicEndpoint && publicBlocked(url)) return { data: null, status: 429, attempted: false };
   let attempted = false;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     if (deadlineMs != null && Date.now() >= deadlineMs - 500) {
@@ -217,15 +274,17 @@ async function fetchJson(
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (response.ok) {
-        if (publicEndpoint) publicConsecutive429 = 0;
+        if (publicEndpoint) publicConsecutive429ByHost.set(publicHost(url), 0);
         return { data: await response.json(), status: response.status, attempted };
       }
       if (response.status === 429) {
         const wait = retryDelay(response, attempt);
         if (publicEndpoint) {
-          publicConsecutive429 += 1;
+          const host = publicHost(url);
+          const consecutive = (publicConsecutive429ByHost.get(host) ?? 0) + 1;
+          publicConsecutive429ByHost.set(host, consecutive);
           // 偶发 429：先自己退避重试同一请求；只有连续多次才进入全局冷却
-          if (publicConsecutive429 >= 3) markPublicBlocked(wait);
+          if (consecutive >= 3) markPublicBlocked(url, wait);
           if (attempt < retries) {
             await sleep(wait);
             continue;
@@ -254,11 +313,29 @@ async function fetchJson(
   return { data: null, status: 0, attempted };
 }
 
-async function fetchDetailOnce(
+async function fetchAppDetailOnce(
   address: string
-): Promise<{ detail: TotalBalanceDetail | null; attempted: boolean }> {
+): Promise<{ detail: AppBalanceDetail | null; attempted: boolean }> {
+  const response = await fetchJson(
+    `https://api.debank.com/portfolio/app_list?user_id=${address}`,
+    { Origin: "https://debank.com", Referer: "https://debank.com/" },
+    0
+  );
+  return { detail: parseAppDetail(response.data), attempted: response.attempted };
+}
+
+async function fetchDetailOnce(
+  address: string,
+  previousAppChains: ChainBalanceDetail[] = []
+): Promise<{
+  detail: TotalBalanceDetail | null;
+  apps: Record<string, unknown>[] | null;
+  attempted: boolean;
+  complete: boolean;
+}> {
   const key = process.env.DEBANK_ACCESS_KEY;
   let attempted = false;
+  let base: TotalBalanceDetail | null = null;
   if (key) {
     const response = await fetchJson(
       `https://pro-openapi.debank.com/v1/user/total_balance?id=${address}`,
@@ -266,74 +343,75 @@ async function fetchDetailOnce(
       1
     );
     attempted = attempted || response.attempted;
-    const official = parseTotalDetail(
-      response.data
+    base = parseTotalDetail(response.data);
+  }
+  let rabbyStatus = 0;
+  if (!base) {
+    const rabbyResponse = await fetchJson(
+      `https://api.rabby.io/v1/user/total_balance?id=${address}`,
+      {},
+      0
     );
-    if (official) return { detail: official, attempted };
+    rabbyStatus = rabbyResponse.status;
+    attempted = attempted || rabbyResponse.attempted;
+    base = parseTotalDetail(rabbyResponse.data);
   }
-  const rabbyResponse = await fetchJson(
-    `https://api.rabby.io/v1/user/total_balance?id=${address}`,
-    {},
-    0
-  );
-  attempted = attempted || rabbyResponse.attempted;
-  const rabby = parseTotalDetail(rabbyResponse.data);
-  if (rabby) return { detail: rabby, attempted };
   // The legacy host is a last-resort fallback. Avoid doubling requests while Rabby is rate-limiting.
-  if (rabbyResponse.status === 429 || rabbyResponse.status === 0) {
-    return { detail: null, attempted };
+  if (!base && rabbyStatus !== 429 && rabbyStatus !== 0) {
+    const legacyResponse = await fetchJson(
+      `https://api.debank.com/user/total_balance?addr=${address}`,
+      { Origin: "https://debank.com", Referer: "https://debank.com/" },
+      0
+    );
+    attempted = attempted || legacyResponse.attempted;
+    base = parseTotalDetail(legacyResponse.data);
   }
-  const legacyResponse = await fetchJson(
-    `https://api.debank.com/user/total_balance?addr=${address}`,
-    { Origin: "https://debank.com", Referer: "https://debank.com/" },
-    0
-  );
-  attempted = attempted || legacyResponse.attempted;
-  return { detail: parseTotalDetail(legacyResponse.data), attempted };
+  if (!base) return { detail: null, apps: null, attempted, complete: false };
+
+  const appResult = await fetchAppDetailOnce(address);
+  attempted = attempted || appResult.attempted;
+  const appChains = appResult.detail?.chains ?? previousAppChains;
+  const appUsd = appChains.reduce((sum, chain) => sum + chain.valueUsd, 0);
+  return {
+    detail: {
+      totalUsd: base.totalUsd + appUsd,
+      chains: [...base.chains, ...appChains].sort((left, right) => right.valueUsd - left.valueUsd),
+    },
+    apps: appResult.detail?.protocols ?? null,
+    attempted,
+    complete: appResult.detail !== null || previousAppChains.length > 0,
+  };
 }
 
 async function fetchWalletDetail(
   address: string,
-  force = false
-): Promise<{ detail: TotalBalanceDetail | null; status: WalletFetchStatus; attempted: boolean }> {
+  force = false,
+  previousAppChains: ChainBalanceDetail[] = []
+): Promise<{
+  detail: TotalBalanceDetail | null;
+  apps: Record<string, unknown>[] | null;
+  complete: boolean;
+  status: WalletFetchStatus;
+  attempted: boolean;
+}> {
   const normalized = address.toLowerCase();
   const hit = cache.get(normalized);
   if (!force && hit && Date.now() - hit.at < TTL) {
-    return { detail: hit.detail, status: "cached", attempted: false };
+    return { detail: hit.detail, apps: null, complete: hit.complete, status: "cached", attempted: false };
   }
 
-  const { detail, attempted } = await fetchDetailOnce(normalized);
+  const { detail, apps, attempted, complete } = await fetchDetailOnce(normalized, previousAppChains);
   if (detail) {
-    cache.set(normalized, { detail, at: Date.now() });
-    return { detail, status: "ok", attempted };
+    cache.set(normalized, { detail, at: Date.now(), complete });
+    return { detail, apps, complete, status: "ok", attempted };
   }
   return hit
-    ? { detail: hit.detail, status: "cached", attempted }
-    : { detail: null, status: "error", attempted };
+    ? { detail: hit.detail, apps: null, complete: hit.complete, status: "cached", attempted }
+    : { detail: null, apps: null, complete: false, status: "error", attempted };
 }
 
 type ProtocolCache = Record<string, WalletProtocolCacheEntry>;
 type ChainCache = Record<string, WalletChainCacheEntry>;
-
-/** Zerion DeFi 仓位后台 8 小时刷新一次（25×3≈75 次/天）；手动刷新才实时全量。 */
-const ZERION_DEFI_TTL = 8 * 60 * 60 * 1000;
-/** 长尾链（Zerion 代币层）8 小时轮换：25×3≈75 次/天。三层合计约 200 次/天。 */
-const LONGTAIL_TTL_MS = 8 * 60 * 60 * 1000;
-
-/** 把 Zerion DeFi 仓位按链并入链分布，让「链上分布」卡片与钱包总额保持同一口径。 */
-function mergeDefiIntoChains(
-  tokenChains: Array<{ id: string; name: string; valueUsd: number; logoUrl?: string }>,
-  positions: Array<{ name: string; chain: string; valueUsd: number }>
-) {
-  const merged = new Map(tokenChains.map((chain) => [chain.id, { ...chain }]));
-  for (const position of positions) {
-    if (!position.chain || position.chain === "unknown" || position.valueUsd <= 0) continue;
-    const current = merged.get(position.chain) ?? { id: position.chain, name: chainName(position.chain), valueUsd: 0 };
-    current.valueUsd += position.valueUsd;
-    merged.set(position.chain, current);
-  }
-  return [...merged.values()].sort((left, right) => right.valueUsd - left.valueUsd);
-}
 
 async function fetchComplexProtocols(
   address: string,
@@ -365,7 +443,12 @@ async function fetchComplexProtocols(
     const response = await fetchJson(candidate.url, candidate.headers, 0);
     if (response.data !== null) {
       const protocols = unwrapArray(response.data);
-      store[normalized] = { protocols, at: attemptIso, lastAttemptAt: attemptIso };
+      store[normalized] = {
+        ...store[normalized],
+        protocols,
+        at: attemptIso,
+        lastAttemptAt: attemptIso,
+      };
       return protocols;
     }
   }
@@ -528,6 +611,13 @@ function tokenCacheStale(address: string, store: TokenCache) {
   return Date.now() - new Date(anchor).getTime() >= TOKEN_TTL_MS;
 }
 
+function protocolCacheStale(address: string, store: ProtocolCache) {
+  const hit = store[address.toLowerCase()];
+  if (!hit?.at) return true;
+  const successAt = new Date(hit.at).getTime();
+  return !Number.isFinite(successAt) || Date.now() - successAt >= PROTOCOL_TTL;
+}
+
 /** Chains worth a token request: the largest ones that actually hold value. */
 function tokenChainsFor(address: string): string[] {
   const detail = cache.get(address.toLowerCase())?.detail;
@@ -578,8 +668,13 @@ export async function refreshWallets(
   } = {}
 ): Promise<Wallet[]> {
   if (!wallets.length) return [];
+  // Kept in the persisted schema for backward compatibility. Canonical totals now
+  // come from DeBank/Rabby; these old estimator caches are no longer allowed to
+  // replace a successfully observed wallet net worth.
+  void defiStore;
+  void longtailStore;
   const originalOrder = new Map(wallets.map((wallet, index) => [wallet.id, index]));
-  // 实时模式预算放宽到 50 秒（函数上限 60s）：25 钱包 × 全链 + 串行 Zerion 需要更多时间
+  // Public DeBank-compatible requests are serialized, so stay inside the Vercel function budget.
   const stopAt = Date.now() + (opts.live ? 50_000 : 40_000);
   /**
    * 每个小批次按「成功时间最旧优先」选址：超过 20 分钟没更新的地址会排在最前，
@@ -623,9 +718,6 @@ export async function refreshWallets(
     )
     .slice(0, budget);
   const targetIds = new Set(targets.map((wallet) => wallet.id));
-  /** 后台每批最多给 2 个地址补 DeFi / 长尾链（实时模式一次性补全部）。 */
-  let defiBudget = opts.live ? targets.length : 2;
-  let longtailBudget = opts.live ? targets.length : 2;
   /**
    * 本轮要补代币明细的地址：优先“从来没取过”的地址（例如余额抓取失败的币安钱包，
    * 里面的 PONS / stonks 只能靠代币明细补出来），其次按余额从大到小。
@@ -642,114 +734,51 @@ export async function refreshWallets(
       .slice(0, TOKEN_WALLET_BUDGET)
       .map((wallet) => wallet.address.toLowerCase())
   );
+  const protocolTargets = new Set(
+    [...targets]
+      .filter((wallet) => protocolCacheStale(wallet.address, protocolStore))
+      .sort((left, right) => {
+        const leftAt = protocolStore[left.address.toLowerCase()]?.at || "";
+        const rightAt = protocolStore[right.address.toLowerCase()]?.at || "";
+        return new Date(leftAt || 0).getTime() - new Date(rightAt || 0).getTime();
+      })
+      .slice(0, PROTOCOL_WALLET_BUDGET)
+      .map((wallet) => wallet.address.toLowerCase())
+  );
   const refreshed = await mapPool(targets, CONCURRENCY, async (wallet) => {
     const attemptedAt = new Date().toISOString();
     const previous = wallet.balanceUsd;
     const addressLower = wallet.address.toLowerCase();
-
-    // ── 直连层优先：Alchemy（已知链全部查询）+ Zerion（长尾链与链发现）。
-    const knownChains = new Set(wallet.chain === "EVM" ? ["eth"] : ["abs"]);
-    for (const chain of chainStore[addressLower]?.chains ?? []) knownChains.add(chain.id);
-    for (const chain of longtailStore[addressLower]?.chains ?? []) knownChains.add(chain.id);
-    const chainIds = [...knownChains];
-
-    // 长尾链 8 小时 TTL 轮换：后台每批 2 个；实时模式无视 TTL 与时间截止
-    //（队列尾部的钱包也必须拿到 Zerion 对账数据，否则链级修正永远轮不到它们）
     const hasDetailTime = () => opts.live || Date.now() < stopAt - 10_000;
-    const longtailEntry = longtailStore[addressLower];
-    const longtailFresh =
-      !opts.live && !!longtailEntry && Date.now() - new Date(longtailEntry.at).getTime() < LONGTAIL_TTL_MS;
-    const allowZerion = !longtailFresh && longtailBudget > 0 && hasDetailTime();
-
-    const direct = await fetchDirectDetail(wallet.address, {
-      knownChains: chainIds,
-      longtail: longtailEntry ?? null,
-      allowZerion,
-      deadlineMs: stopAt,
-    });
-    if (allowZerion && direct?.longtailFetched) {
-      longtailBudget -= 1;
-      longtailStore[addressLower] = {
-        at: attemptedAt,
-        chains: direct.longtailFetched,
-        chainSnapshot: direct.chainSnapshotFetched,
-      };
-    }
     const wantsTokenDetail = tokenTargets.has(addressLower);
+    const previousAppChains = (chainStore[addressLower]?.chains ?? []).filter((chain) =>
+      chain.id.startsWith("app:")
+    );
+    const { detail, apps, complete, status, attempted } = await fetchWalletDetail(
+      wallet.address,
+      true,
+      previousAppChains
+    );
+    if (!attempted) return wallet;
 
-    if (direct) {
-      if (wantsTokenDetail && hasDetailTime()) {
-        await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true, stopAt);
-      }
-      // ── Zerion DeFi 层：后台 8 小时 TTL、每批最多 2 个地址；实时模式强制全量读取。
-      // 只计 deposit/staked/reward，loan/投资不并入（语义不稳定，实测曾出现几小时内
-      // 消失的 3.5 万 loan 仓位）。
-      const defiEntry = defiStore[addressLower];
-      const defiFresh =
-        !opts.live && !!defiEntry && Date.now() - new Date(defiEntry.at).getTime() < ZERION_DEFI_TTL;
-      if (!defiFresh && defiBudget > 0 && hasDetailTime()) {
-        defiBudget -= 1;
-        const fetched = await fetchZerionDefi(wallet.address, { deadlineMs: stopAt });
-        const at = new Date().toISOString();
-        if (fetched) {
-          defiStore[addressLower] = { at, netUsd: fetched.netUsd, positions: fetched.positions };
-        } else {
-          defiStore[addressLower] = defiEntry
-            ? { ...defiEntry, at }
-            : { at, netUsd: 0, positions: [] };
-        }
-      }
-      const defiNet = defiStore[addressLower]?.netUsd ?? 0;
-
-      // 链分布必须在 DeFi 缓存更新后重建：若把上一轮仓位先并入、再更新钱包总额，
-      // 就会出现「钱包总额已变，链上分布仍是旧仓位」的严重不一致。
-      const finalChainMap = new Map(
-        direct.chains.map((chain) => [chain.id, { ...chain }])
-      );
-      for (const position of defiStore[addressLower]?.positions ?? []) {
-        if (position.valueUsd <= 0) continue;
-        const chainId = normalizeChainId(position.chain);
-        const current = finalChainMap.get(chainId) ?? { id: chainId, name: chainName(chainId), valueUsd: 0 };
-        current.valueUsd += position.valueUsd;
-        finalChainMap.set(chainId, current);
-      }
-      const mergedChains = [...finalChainMap.values()]
-        .map((chain) => ({ ...chain, valueUsd: Math.round(chain.valueUsd * 100) / 100 }))
-        .sort((left, right) => right.valueUsd - left.valueUsd);
-      const usd = Math.round((direct.tokenUsd + defiNet) * 100) / 100;
-      cache.set(addressLower, {
-        detail: { totalUsd: usd, chains: mergedChains },
-        at: Date.now(),
-      });
+    if (status === "ok" && detail) {
       chainStore[addressLower] = {
         at: attemptedAt,
-        totalUsd: direct.tokenUsd + defiNet,
-        chains: mergedChains,
+        totalUsd: detail.totalUsd,
+        chains: detail.chains.map((chain) => ({ ...chain })),
       };
-      return {
-        ...wallet,
-        balanceUsd: usd,
-        lastUpdated: attemptedAt,
-        updatedAt: attemptedAt,
-        lastSuccess: { at: attemptedAt, balanceUsd: usd },
-        status: "ok" as const,
-        source: "direct" as const,
-      };
-    }
-
-    // ── 公共源兜底（Rabby / DeBank）：直连层整体失败时才使用 ──
-    if (Date.now() >= stopAt - 10_000 || publicBlocked()) return wallet;
-    const { usd, status, attempted } = await fetchWalletUsd(wallet.address, { force: true });
-    if (!attempted) return wallet;
-    const memoryDetail = cache.get(wallet.address.toLowerCase());
-    if (memoryDetail) {
-      chainStore[wallet.address.toLowerCase()] = {
-        at: status === "ok" ? attemptedAt : new Date(memoryDetail.at).toISOString(),
-        totalUsd: memoryDetail.detail.totalUsd,
-        chains: memoryDetail.detail.chains.map((chain) => ({ ...chain })),
-      };
-    }
-    if (status === "ok") {
+      if (apps !== null) {
+        const protocolEntry = protocolStore[addressLower] ?? { at: "", protocols: [] };
+        protocolStore[addressLower] = {
+          ...protocolEntry,
+          apps,
+          appAt: attemptedAt,
+          appLastAttemptAt: attemptedAt,
+        };
+      }
+      if (protocolTargets.has(addressLower) && hasDetailTime()) {
+        await fetchComplexProtocols(wallet.address, protocolStore);
+      }
       if (wantsTokenDetail && hasDetailTime()) {
         await fetchWalletTokens(
           wallet.address,
@@ -759,7 +788,7 @@ export async function refreshWallets(
           stopAt
         );
       }
-      const balanceUsd = Math.round(usd * 100) / 100;
+      const balanceUsd = Math.round(detail.totalUsd * 100) / 100;
       return {
         ...wallet,
         balanceUsd,
@@ -767,31 +796,12 @@ export async function refreshWallets(
         updatedAt: attemptedAt,
         lastSuccess: { at: attemptedAt, balanceUsd },
         status: "ok" as const,
-        // 余额一律来自公共源；显式重置，避免历史残留的 zerion 标记继续抑制流水
-        source: "public" as const,
+        source: complete ? ("public" as const) : ("public-partial" as const),
       };
     }
-    if (status === "cached") {
-      // 公共 DeBank 接口失败时，代币明细仍可能从 Zerion 拿到，所以这里也尝试补一次
-      if (wantsTokenDetail && hasDetailTime()) {
-        await fetchWalletTokens(
-          wallet.address,
-          tokenChainsFor(wallet.address),
-          tokenStore,
-          true,
-          stopAt
-        );
-      }
-      return {
-        ...wallet,
-        balanceUsd: Math.round((usd > 0 ? usd : previous) * 100) / 100,
-        updatedAt: attemptedAt,
-        status: "cached" as const,
-      };
-    }
-    // Never zero out on failure — keep the last known balance and say so.
-    // Zerion token detail is independent from Rabby's total endpoint, so a Rabby
-    // failure must not waste this batch's one bounded token-detail opportunity.
+
+    // Never switch valuation sources after a public read fails. Keeping the last
+    // confirmed balance prevents API/cache transitions from becoming fake flows.
     if (wantsTokenDetail && hasDetailTime()) {
       await fetchWalletTokens(
         wallet.address,
@@ -941,14 +951,19 @@ export async function refreshOnchainBreakdown(
     const normalizedAddress = wallet.address.toLowerCase();
     const persistedDetail = chainStore[normalizedAddress] ?? null;
     const detail = persistedDetail ?? cache.get(normalizedAddress)?.detail ?? null;
-    // 协议缓存持久化后不再依赖本次函数实例里的余额缓存；冷启动也能聚合全部钱包。
-    // 只保留 Kona 审计快照（Rabby 反向接口的协议数据曾严重失真，不再展示）。
-    const cachedProtocols = protocolStore[wallet.address.toLowerCase()]?.protocols ?? null;
-    const protocols = cachedProtocols
-      ? cachedProtocols.filter((protocol) => String(protocol.name || "").toLowerCase() === "kona")
+    // DeBank/Rabby protocol rows explain the canonical wallet total; App rows explain
+    // assets such as Polymarket that live outside the normal chain-total endpoint.
+    const protocolEntry = protocolStore[wallet.address.toLowerCase()] ?? null;
+    const protocols = protocolEntry
+      ? [...(protocolEntry.protocols ?? []), ...(protocolEntry.apps ?? [])]
       : null;
     const tokenDetail = tokenStore[wallet.address.toLowerCase()] ?? null;
-    if (wallet.status === "cached" || wallet.status === "error" || wallet.status === "stale") {
+    if (
+      wallet.status === "cached" ||
+      wallet.status === "error" ||
+      wallet.status === "stale" ||
+      wallet.source === "public-partial"
+    ) {
       cachedWallets += 1;
     }
     if (detail) {
@@ -1049,6 +1064,7 @@ export async function refreshOnchainBreakdown(
       const name = canonicalDappName(String(protocol.name || protocol.id || "Unknown DApp"));
       const key = name.toLowerCase();
       const protocolChain = String(protocol.chain || "unknown");
+      const protocolChainName = String(protocol.chain_name || chainName(protocolChain));
       const current = dappMap.get(key) || {
         id: String(protocol.id || key),
         name,
@@ -1065,7 +1081,7 @@ export async function refreshOnchainBreakdown(
       }
       const chain = current.chains.get(protocolChain) || {
         id: protocolChain,
-        name: chainName(protocolChain),
+        name: protocolChainName,
         assetUsd: 0,
         debtUsd: 0,
         netUsd: 0,
@@ -1102,7 +1118,9 @@ export async function refreshOnchainBreakdown(
     }
 
     // Zerion 实时 DeFi 仓位并入 DApp 展示（deposit/staked/reward；借贷不计入）
-    const zerionPositions = defiStore[wallet.address.toLowerCase()]?.positions ?? [];
+    const zerionPositions = protocols === null
+      ? (defiStore[wallet.address.toLowerCase()]?.positions ?? [])
+      : [];
     for (const position of zerionPositions) {
       if (position.valueUsd <= 0.005) continue;
       const name = canonicalDappName(position.name);
@@ -1253,6 +1271,6 @@ export async function refreshOnchainBreakdown(
     tokenSource: activeTokenSource(),
     cachedWallets,
     partial: cachedWallets > 0,
-    rateLimitedUntil: publicBlocked() ? new Date(publicBlockedUntil).toISOString() : null,
+    rateLimitedUntil: publicBlocked() ? new Date(getPublicBlockedUntil()).toISOString() : null,
   };
 }

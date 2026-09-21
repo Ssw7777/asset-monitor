@@ -24,6 +24,7 @@ const TMP_STORE = "/tmp/asset-monitor-store.json";
 const TURSO_ROW_KEY = "portfolio";
 /** 5 分钟一张快照 × 2016 ≈ 7 天历史。 */
 export const SNAPSHOT_LIMIT = 2016;
+const FLOW_DATA_VERSION = 2;
 /** 保留全部快照的逐钱包 / 逐 DApp 明细（2016 条 ≈ 7 天），这样 7 天窗口也能按钱包归因。 */
 const SNAPSHOT_DETAIL_KEEP = SNAPSHOT_LIMIT;
 
@@ -107,6 +108,8 @@ export function defaultState(): PortfolioState {
     exchanges: defaultExchanges(),
     snapshots: seedSnapshots(),
     flowEvents: [],
+    flowBaselineAt: new Date().toISOString(),
+    flowDataVersion: FLOW_DATA_VERSION,
     onchainCacheUsd: BASELINE.onchainUsd,
     lastRefresh: null,
     usdCnyRate: rate,
@@ -199,6 +202,11 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
   const rawSnapshots = Array.isArray(raw.snapshots)
     ? raw.snapshots.map(normalizeSnapshot).filter((point): point is SnapshotPoint => point !== null)
     : [];
+  const storedFlowVersion = Number(raw.flowDataVersion) || 1;
+  const flowBaselineAt =
+    storedFlowVersion >= FLOW_DATA_VERSION && typeof raw.flowBaselineAt === "string"
+      ? raw.flowBaselineAt
+      : new Date().toISOString();
   return {
     manual: Array.isArray(raw.manual) ? raw.manual : d.manual,
     // Migration runs on every read: newly required addresses appear without touching existing rows.
@@ -206,6 +214,8 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
     exchanges: Array.isArray(raw.exchanges) ? raw.exchanges : d.exchanges,
     snapshots: rawSnapshots.length ? trimSnapshots(rawSnapshots) : d.snapshots,
     flowEvents: Array.isArray(raw.flowEvents) ? raw.flowEvents : [],
+    flowBaselineAt,
+    flowDataVersion: FLOW_DATA_VERSION,
     onchainCacheUsd: Number(raw.onchainCacheUsd) || d.onchainCacheUsd,
     lastRefresh: raw.lastRefresh ?? null,
     usdCnyRate: Number(raw.usdCnyRate) || d.usdCnyRate,
