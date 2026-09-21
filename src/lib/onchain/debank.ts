@@ -350,7 +350,7 @@ async function fetchDetailOnce(
     const rabbyResponse = await fetchJson(
       `https://api.rabby.io/v1/user/total_balance?id=${address}`,
       {},
-      0
+      1
     );
     rabbyStatus = rabbyResponse.status;
     attempted = attempted || rabbyResponse.attempted;
