@@ -66,28 +66,22 @@ export interface ZerionDefiPosition {
   valueUsd: number;
 }
 
-const dappNameCache = new Map<string, string>();
-
-/** Zerion dapp id → 人类可读名称（实例级缓存，冷启动最多重建一次）。 */
-async function resolveDappName(dappId: string): Promise<string> {
-  const hit = dappNameCache.get(dappId);
-  if (hit) return hit;
-  try {
-    const key = nextZerionKey();
-    if (!key) return dappId;
-    const response = await fetch(`https://api.zerion.io/v1/dapps/${dappId}`, {
-      headers: { Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`, Accept: "application/json" },
-      cache: "no-store",
-      signal: AbortSignal.timeout(10_000),
+/**
+ * Zerion 的 dapp id 通常已是稳定的 slug（aave-v3 / pendle 等）。直接转成展示名，
+ * 避免每个仓位再额外请求一次 dapp 详情；否则“一个钱包一次 DeFi 读取”会膨胀成多次。
+ */
+function displayDappId(dappId: string) {
+  const words = dappId
+    .trim()
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => {
+      const upper = word.toUpperCase();
+      if (["AAVE", "OKX", "DEX", "LST", "LRT", "USDC", "USDT"].includes(upper)) return upper;
+      if (/^v\d+$/i.test(word)) return word.toUpperCase();
+      return `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`;
     });
-    if (!response.ok) return dappId;
-    const body = (await response.json()) as { data?: { attributes?: { name?: string } } };
-    const name = String(body.data?.attributes?.name || dappId);
-    dappNameCache.set(dappId, name);
-    return name;
-  } catch {
-    return dappId;
-  }
+  return words.join(" ") || "DApp";
 }
 
 /**
@@ -127,7 +121,6 @@ export async function fetchZerionDefi(
       };
       if (!Array.isArray(body.data)) return null;
 
-      const dappIds = new Set<string>();
       const raw: Array<{ type: string; symbol: string; chain: string; dappId: string; valueUsd: number }> = [];
       for (const item of body.data) {
         const type = String(item.attributes?.position_type || "");
@@ -136,7 +129,6 @@ export async function fetchZerionDefi(
         if (valueUsd <= 0.005) continue;
         const chain = normalizeChainId(String(item.relationships?.chain?.data?.id || "unknown"));
         const dappId = String(item.relationships?.dapp?.data?.id || "");
-        if (dappId) dappIds.add(dappId);
         raw.push({
           type,
           symbol: String(item.attributes?.fungible_info?.symbol || ""),
@@ -147,15 +139,15 @@ export async function fetchZerionDefi(
       }
       if (!raw.length) return { netUsd: 0, positions: [] };
 
-      const names = new Map<string, string>();
-      for (const dappId of dappIds) {
-        names.set(dappId, await resolveDappName(dappId));
-      }
       const positions: ZerionDefiPosition[] = [];
       let netUsd = 0;
       for (const entry of raw) {
         netUsd += entry.valueUsd;
-        const base = names.get(entry.dappId) || (entry.type === "deposit" && entry.symbol ? `${entry.symbol} 存款` : entry.dappId || entry.type);
+        const base = entry.dappId
+          ? displayDappId(entry.dappId)
+          : entry.type === "deposit" && entry.symbol
+            ? `${entry.symbol} 存款`
+            : entry.type;
         positions.push({ name: base, chain: entry.chain, valueUsd: Math.round(entry.valueUsd * 100) / 100 });
       }
       return { netUsd: Math.round(netUsd * 100) / 100, positions };
@@ -177,8 +169,8 @@ const metadataCache = new Map<string, { symbol: string; decimals: number }>();
 const tickerCache = new Map<string, { at: number; usd: number }>();
 const contractPriceCache = new Map<string, { at: number; usd: number }>();
 const PRICE_TTL_MS = 10 * 60 * 1000;
-/** 长尾链（Zerion 代币层）结果缓存 1 小时：25 钱包轮换 ≈ 300 次/天，落在 4 把 Key 池内。 */
-const LONGTAIL_TTL_MS = 60 * 60 * 1000;
+/** 与刷新层保持一致：长尾链缓存 8 小时，25 钱包最多约 75 次/天。 */
+const LONGTAIL_TTL_MS = 8 * 60 * 60 * 1000;
 
 async function alchemyRpc(net: string, calls: Array<{ method: string; params: unknown[] }>) {
   const key = process.env.ALCHEMY_API_KEY;

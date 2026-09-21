@@ -362,9 +362,7 @@ export function Dashboard() {
       </header>
 
       <div className="container" id="top">
-        <div className="overview-duo">
-          <div className="overview-col">
-            <section className="summary-panel">
+        <section className="summary-panel overview-summary">
               <Image src="/avatar.jpg" alt="0xStudy" width={48} height={48} className="avatar" />
               <div className="stats">
                 <div>
@@ -423,15 +421,16 @@ export function Dashboard() {
                   />
                 </div>
               </div>
-            </section>
-            <PortfolioChart
-              snapshots={snapshots}
-              usdCnyRate={rate}
-              range={range}
-              summary={changes}
-              onRangeChange={setRange}
-            />
-          </div>
+        </section>
+
+        <div className="overview-duo">
+          <PortfolioChart
+            snapshots={snapshots}
+            usdCnyRate={rate}
+            range={range}
+            summary={changes}
+            onRangeChange={setRange}
+          />
           <FlowSection
             summary={flows}
             loading={flowsLoading}

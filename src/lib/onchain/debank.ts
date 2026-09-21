@@ -59,10 +59,10 @@ const CONCURRENCY = 6;
  */
 const PUBLIC_REQUEST_INTERVAL_MS = 3_000;
 /**
- * 代币明细额度控制：每个地址最多每 3 小时尝试一次、每轮最多 1 个地址。
- * 25 个钱包稳定上限约 25 × 8 = 200 次/天；失败同样写 lastAttemptAt，避免重试风暴。
+ * 代币明细额度控制：每个地址最多每 12 小时尝试一次、每轮最多 1 个地址。
+ * 25 个钱包稳定上限约 25 × 2 = 50 次/天；失败同样写 lastAttemptAt，避免重试风暴。
  */
-const TOKEN_TTL_MS = 3 * 60 * 60 * 1000;
+const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
 const TOKEN_WALLET_BUDGET = 1;
 const TOKEN_CHAINS_PER_WALLET = 3;
 const TOKEN_MIN_WALLET_USD = 10;
@@ -315,10 +315,10 @@ async function fetchWalletDetail(
 type ProtocolCache = Record<string, WalletProtocolCacheEntry>;
 type ChainCache = Record<string, WalletChainCacheEntry>;
 
-/** Zerion DeFi 仓位后台 3 小时刷新一次（25×8≈200 次/天）；打开页面/手动刷新时实时全量。 */
-const ZERION_DEFI_TTL = 3 * 60 * 60 * 1000;
-/** 长尾链（Zerion 代币层）1 小时轮换：25×24≈600 次/天，4 把 Key 池内。 */
-const LONGTAIL_TTL_MS = 60 * 60 * 1000;
+/** Zerion DeFi 仓位后台 8 小时刷新一次（25×3≈75 次/天）；手动刷新才实时全量。 */
+const ZERION_DEFI_TTL = 8 * 60 * 60 * 1000;
+/** 长尾链（Zerion 代币层）8 小时轮换：25×3≈75 次/天。三层合计约 200 次/天。 */
+const LONGTAIL_TTL_MS = 8 * 60 * 60 * 1000;
 
 /** 把 Zerion DeFi 仓位按链并入链分布，让「链上分布」卡片与钱包总额保持同一口径。 */
 function mergeDefiIntoChains(
@@ -585,7 +585,7 @@ export async function refreshWallets(
    * 每个小批次按「成功时间最旧优先」选址：超过 20 分钟没更新的地址会排在最前，
    * 每轮滚动批次都优先单独检查它们；从未成功过的地址永远最优先。
    * 只有真实成功才更新 lastSuccess，失败继续保留缓存和原成功时间（于是下批继续优先重试）。
-   * 协议明细按 6 小时、代币明细按 3 小时缓存轮换补，避免把公共接口额度一次用光。
+   * 协议明细按 6 小时、代币明细按 12 小时缓存轮换补，避免把免费额度一次用光。
    */
   /** Failed reads retain the last good value; updatedAt advances so one bad address cannot starve the queue. */
   const budget = opts.live
@@ -653,7 +653,7 @@ export async function refreshWallets(
     for (const chain of longtailStore[addressLower]?.chains ?? []) knownChains.add(chain.id);
     const chainIds = [...knownChains];
 
-    // 长尾链 1 小时 TTL 轮换：后台每批 2 个；实时模式无视 TTL 与时间截止
+    // 长尾链 8 小时 TTL 轮换：后台每批 2 个；实时模式无视 TTL 与时间截止
     //（队列尾部的钱包也必须拿到 Zerion 对账数据，否则链级修正永远轮不到它们）
     const hasDetailTime = () => opts.live || Date.now() < stopAt - 10_000;
     const longtailEntry = longtailStore[addressLower];
@@ -699,7 +699,7 @@ export async function refreshWallets(
       if (wantsTokenDetail && hasDetailTime()) {
         await fetchWalletTokens(wallet.address, tokenChainsFor(wallet.address), tokenStore, true, stopAt);
       }
-      // ── Zerion DeFi 层：后台 3 小时 TTL、每批最多 2 个地址；实时模式强制全量读取。
+      // ── Zerion DeFi 层：后台 8 小时 TTL、每批最多 2 个地址；实时模式强制全量读取。
       // 只计 deposit/staked/reward，loan/投资不并入（语义不稳定，实测曾出现几小时内
       // 消失的 3.5 万 loan 仓位）。
       const defiEntry = defiStore[addressLower];
