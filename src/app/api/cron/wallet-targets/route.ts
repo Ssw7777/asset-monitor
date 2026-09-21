@@ -15,17 +15,13 @@ export async function GET(req: NextRequest) {
   }
 
   const state = await readStore();
-  const successTime = (value: string | null | undefined) => {
-    const parsed = value ? new Date(value).getTime() : 0;
-    return Number.isFinite(parsed) ? parsed : 0;
-  };
-  const wallets = [...state.wallets]
-    .sort(
-      (left, right) =>
-        successTime(left.lastSuccess?.at) - successTime(right.lastSuccess?.at) ||
-        left.address.localeCompare(right.address)
-    )
-    .map((wallet) => ({ id: wallet.id, address: wallet.address.toLowerCase() }));
+  // Keep the persisted order stable. Five independent GitHub runners fetch this
+  // manifest at slightly different instants; a freshness sort could reshuffle after
+  // the first write and make runners duplicate or skip an address.
+  const wallets = state.wallets.map((wallet) => ({
+    id: wallet.id,
+    address: wallet.address.toLowerCase(),
+  }));
 
   return NextResponse.json({ ok: true, count: wallets.length, wallets });
 }
