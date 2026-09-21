@@ -16,14 +16,14 @@ import type {
 } from "../types";
 import { activeTokenSource, fetchZerionTokens, type TokenSource } from "./token-providers";
 
-interface ChainBalanceDetail {
+export interface ChainBalanceDetail {
   id: string;
   name: string;
   valueUsd: number;
   logoUrl?: string;
 }
 
-interface TotalBalanceDetail {
+export interface TotalBalanceDetail {
   totalUsd: number;
   chains: ChainBalanceDetail[];
 }
@@ -151,7 +151,7 @@ function unwrapArray(data: unknown): Record<string, unknown>[] {
   return list.filter((item): item is Record<string, unknown> => !!item && typeof item === "object");
 }
 
-function parseTotalDetail(data: unknown): TotalBalanceDetail | null {
+export function parseTotalDetail(data: unknown): TotalBalanceDetail | null {
   const body = unwrapObject(data);
   if (!body) return null;
   const rawTotal = body.total_usd_value ?? body.total_usd;

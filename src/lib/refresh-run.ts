@@ -1,5 +1,9 @@
 import { fetchBinanceBalance, fetchGateBalance, fetchOkxBalance, type CexResult } from "@/lib/cex/balances";
-import { refreshOnchainBreakdown, refreshWallets } from "@/lib/onchain/debank";
+import {
+  parseTotalDetail,
+  refreshOnchainBreakdown,
+  refreshWallets,
+} from "@/lib/onchain/debank";
 import { BASELINE } from "@/lib/seed";
 import {
   computeTotals,
@@ -59,6 +63,89 @@ export interface RefreshResult {
   batchSucceeded?: number;
   totals: ReturnType<typeof computeTotals>;
   payload: Record<string, unknown>;
+}
+
+/**
+ * Persist one Rabby balance observation collected by the trusted GitHub runner.
+ * GitHub performs the public read because Rabby intermittently rate-limits the
+ * shared Vercel egress. The Vercel endpoint still validates the workflow OIDC
+ * token and only accepts addresses that already exist in the configured store.
+ */
+export async function ingestWalletObservation(
+  address: string,
+  rawObservation: unknown
+): Promise<RefreshResult | null> {
+  const detail = parseTotalDetail(rawObservation);
+  if (!detail) throw new Error("Invalid Rabby total-balance payload");
+
+  const state = await readStore();
+  const normalized = address.trim().toLowerCase();
+  const walletIndex = state.wallets.findIndex(
+    (wallet) => wallet.address.toLowerCase() === normalized
+  );
+  if (walletIndex < 0) return null;
+
+  const now = new Date().toISOString();
+  const chainCache = { ...(state.chainCache || {}) };
+  const previousChains = chainCache[normalized]?.chains ?? [];
+  const appChains = previousChains.filter((chain) => chain.id.startsWith("app:"));
+  const appUsd = appChains.reduce((sum, chain) => sum + (Number(chain.valueUsd) || 0), 0);
+  const combinedChains = [
+    ...detail.chains.filter((chain) => !chain.id.startsWith("app:")),
+    ...appChains,
+  ].sort((left, right) => right.valueUsd - left.valueUsd);
+  const balanceUsd = Math.round((detail.totalUsd + appUsd) * 100) / 100;
+  const hasCompleteAppAudit =
+    !!state.protocolCache?.[normalized]?.appAt || appChains.length > 0;
+
+  state.wallets = state.wallets.map((wallet, index) =>
+    index === walletIndex
+      ? {
+          ...wallet,
+          balanceUsd,
+          lastUpdated: now,
+          updatedAt: now,
+          lastSuccess: { at: now, balanceUsd },
+          status: "ok" as const,
+          source: hasCompleteAppAudit ? ("public" as const) : ("public-partial" as const),
+        }
+      : wallet
+  );
+  chainCache[normalized] = { at: now, totalUsd: balanceUsd, chains: combinedChains };
+  state.chainCache = chainCache;
+  state.onchainCacheUsd = state.wallets.reduce(
+    (sum, wallet) => sum + (Number(wallet.balanceUsd) || 0),
+    0
+  );
+  state.lastFullRefreshAt = now;
+
+  try {
+    state.onchainBreakdown = await refreshOnchainBreakdown(
+      state.wallets,
+      chainCache,
+      state.tokenCache || {},
+      state.protocolCache || {},
+      state.zerionDefi || {}
+    );
+  } catch (error) {
+    console.error("[refresh] observed-wallet breakdown rebuild failed", error);
+  }
+
+  await writeStore(state);
+  const walletOk = state.wallets.filter((wallet) => wallet.status === "ok").length;
+  return {
+    state,
+    walletOk,
+    walletTotal: state.wallets.length,
+    batchAttempted: 1,
+    batchSucceeded: 1,
+    totals: computeTotals(state),
+    payload: {
+      refreshed: true,
+      refreshMode: "wallet-observation",
+      refreshStatus: hasCompleteAppAudit ? "ok" : "partial",
+    },
+  };
 }
 
 async function refreshOnchainSlice(
