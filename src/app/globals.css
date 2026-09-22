@@ -143,28 +143,78 @@ a {
   position: relative;
 }
 
-/* 紧凑汇总卡：头像 + 五项统计 + 总资产，位于左列顶部 */
+/* 左上总资产卡：总额在上，三类资产和两项统计在下。 */
 .summary-panel {
-  display: flex;
-  align-items: center;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: start;
+  gap: 18px 14px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: #ffffff;
-  padding: 14px 16px;
+  padding: 18px;
   box-shadow: 0 1px 3px rgba(25, 35, 60, 0.04);
 }
 
 .summary-panel .stats {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   margin-top: 0;
-  gap: 18px;
+  gap: 14px 16px;
   align-items: center;
-  flex-wrap: wrap;
+}
+
+.summary-panel .stats > div:nth-child(-n + 3) {
+  grid-column: span 2;
+}
+
+.summary-panel .stats > div:nth-child(n + 4) {
+  display: flex;
+  grid-column: span 3;
+  align-items: baseline;
+  gap: 10px;
+  border-top: 1px solid var(--line-2);
+  padding-top: 10px;
+}
+
+.summary-panel .stat-value {
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.summary-panel > .avatar {
+  align-self: center;
 }
 
 .summary-panel .profile-right {
-  margin-left: auto;
-  flex: 0 0 auto;
+  display: grid;
+  grid-column: 2;
+  grid-row: 1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 12px;
+  min-width: 0;
+  margin: 0;
+  text-align: left;
+}
+
+.summary-label {
+  align-self: center;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.summary-panel .networth-value {
+  grid-column: 1 / -1;
+  font-size: 28px;
+  white-space: nowrap;
+}
+
+.summary-panel .networth-cny,
+.summary-panel .networth-rate {
+  margin-top: 0;
+  align-self: center;
 }
 
 .profile-status {
@@ -177,15 +227,17 @@ a {
 
 .overview-duo {
   display: grid;
-  /* 趋势 / 流水为 4:6；流水名称与筛选项获得更完整的横向空间。 */
-  grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
-  align-items: start;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "summary flows" "trend flows";
+  align-items: stretch;
   gap: 20px;
-  margin-top: 20px;
+  margin-top: 34px;
 }
 
 .overview-summary {
-  margin-top: 34px;
+  grid-area: summary;
+  margin-top: 0;
 }
 
 .overview-duo > .section {
@@ -194,16 +246,52 @@ a {
   margin-top: 0;
 }
 
-/* 流水卡高度收紧：不随列拉伸，减少约三分之一，让下方内容上移 */
+.overview-duo #trend {
+  display: flex;
+  grid-area: trend;
+  flex-direction: column;
+}
+
+.overview-duo #trend .chart-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 240px;
+  height: auto;
+}
+
+.overview-duo #trend .chart-canvas > .recharts-responsive-container {
+  position: absolute;
+  inset: 0;
+}
+
+/* 右列跨越总资产和趋势两行，表格随卡片伸展，页面外部滚动。 */
 .section-flows {
   display: flex;
+  grid-area: flows;
   flex-direction: column;
 }
 
 .section-flows .table {
   display: flex;
+  flex: 1;
   min-height: 0;
   flex-direction: column;
+}
+
+.section-flows .flow-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.section-flows .flow-scroll > .trow {
+  flex: 1;
+}
+
+.section-flows > .empty {
+  display: grid;
+  flex: 1;
+  place-content: center;
 }
 
 /* 分区用非常浅的底色区分，既有层次，也不干扰资产正负色。 */
@@ -1728,6 +1816,55 @@ textarea.field {
 
   .overview-duo > .section {
     height: auto;
+  }
+
+  .overview-duo {
+    grid-template-rows: auto auto auto;
+    grid-template-areas: "summary" "trend" "flows";
+  }
+
+  .overview-duo #trend .chart-canvas {
+    flex-basis: 260px;
+  }
+}
+
+@media (max-width: 700px) {
+  .summary-panel {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 16px;
+  }
+
+  .summary-panel > .avatar {
+    display: none;
+  }
+
+  .summary-panel .profile-right {
+    grid-column: 1;
+  }
+
+  .summary-panel .networth-value {
+    font-size: 24px;
+  }
+
+  .summary-panel .profile-status {
+    flex-wrap: wrap;
+    gap: 3px 8px;
+  }
+
+  .summary-panel .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .summary-panel .stats > div:nth-child(-n + 3) {
+    display: flex;
+    grid-column: 1 / -1;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+
+  .summary-panel .stats > div:nth-child(n + 4) {
+    grid-column: span 1;
   }
 }
 

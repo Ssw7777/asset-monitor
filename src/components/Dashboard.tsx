@@ -372,6 +372,7 @@ export function Dashboard() {
       </header>
 
       <div className="container" id="top">
+        <div className="overview-duo">
         <section className="summary-panel overview-summary">
               <Image src="/avatar.jpg" alt="0xStudy" width={48} height={48} className="avatar" />
               <div className="stats">
@@ -399,6 +400,7 @@ export function Dashboard() {
                 </div>
               </div>
               <div className="profile-right">
+                <div className="summary-label">总资产</div>
                 <div className="profile-status">
                   <span
                     className={`tag ${
@@ -433,7 +435,6 @@ export function Dashboard() {
               </div>
         </section>
 
-        <div className="overview-duo">
           <PortfolioChart
             snapshots={snapshots}
             usdCnyRate={rate}
