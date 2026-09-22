@@ -268,6 +268,8 @@ export interface WalletChainCacheEntry {
 }
 
 export interface PortfolioState {
+  /** Optimistic-concurrency token for the single persisted Turso document. Never exposed to clients. */
+  storeRevision?: string;
   manual: ManualAsset[];
   wallets: Wallet[];
   exchanges: ExchangeBalance[];
@@ -280,6 +282,8 @@ export interface PortfolioState {
   flowDataVersion?: number;
   onchainCacheUsd: number;
   lastRefresh: string | null;
+  /** Last successfully persisted wallet observation from either refresh path. */
+  lastWalletObservationAt?: string | null;
   /** 最近一次「全量刷新」（链上 + DApp + 代币）的时间，用于自动判断该跑 fast 还是 full */
   lastFullRefreshAt?: string | null;
   /** 各交易所已启用的全账户估值口径版本。 */

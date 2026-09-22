@@ -177,8 +177,8 @@ a {
 
 .overview-duo {
   display: grid;
-  /* 趋势 / 流水为 6:4；各自按内容自然高度，不再互相拉出空白。 */
-  grid-template-columns: minmax(0, 6fr) minmax(0, 4fr);
+  /* 趋势 / 流水为 4:6；流水名称与筛选项获得更完整的横向空间。 */
+  grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
   align-items: start;
   gap: 20px;
   margin-top: 20px;

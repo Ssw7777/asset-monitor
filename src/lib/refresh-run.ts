@@ -1,5 +1,7 @@
 import { fetchBinanceBalance, fetchGateBalance, fetchOkxBalance, type CexResult } from "@/lib/cex/balances";
 import {
+  parseAppDetail,
+  parseProtocolDetail,
   parseTotalDetail,
   refreshOnchainBreakdown,
   refreshWallets,
@@ -7,6 +9,7 @@ import {
 import { BASELINE } from "@/lib/seed";
 import {
   computeTotals,
+  mutateStore,
   publicState,
   pushSnapshot,
   readStore,
@@ -65,87 +68,327 @@ export interface RefreshResult {
   payload: Record<string, unknown>;
 }
 
-/**
- * Persist one Rabby balance observation collected by the trusted GitHub runner.
- * GitHub performs the public read because Rabby intermittently rate-limits the
- * shared Vercel egress. The Vercel endpoint still validates the workflow OIDC
- * token and only accepts addresses that already exist in the configured store.
- */
-export async function ingestWalletObservation(
-  address: string,
-  rawObservation: unknown
-): Promise<RefreshResult | null> {
-  const detail = parseTotalDetail(rawObservation);
-  if (!detail) throw new Error("Invalid Rabby total-balance payload");
+export interface WalletObservationInput {
+  address: string;
+  observation: unknown;
+  observedAt: string;
+  appObservation?: unknown;
+  protocolObservation?: unknown;
+}
 
-  const state = await readStore();
-  const normalized = address.trim().toLowerCase();
-  const walletIndex = state.wallets.findIndex(
-    (wallet) => wallet.address.toLowerCase() === normalized
-  );
-  if (walletIndex < 0) return null;
+export class WalletObservationValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WalletObservationValidationError";
+  }
+}
 
-  const now = new Date().toISOString();
-  const chainCache = { ...(state.chainCache || {}) };
-  const previousChains = chainCache[normalized]?.chains ?? [];
-  const appChains = previousChains.filter((chain) => chain.id.startsWith("app:"));
-  const appUsd = appChains.reduce((sum, chain) => sum + (Number(chain.valueUsd) || 0), 0);
-  const combinedChains = [
-    ...detail.chains.filter((chain) => !chain.id.startsWith("app:")),
-    ...appChains,
-  ].sort((left, right) => right.valueUsd - left.valueUsd);
-  const balanceUsd = Math.round((detail.totalUsd + appUsd) * 100) / 100;
-  const hasCompleteAppAudit =
-    !!state.protocolCache?.[normalized]?.appAt || appChains.length > 0;
+export class UnknownWalletObservationError extends Error {
+  readonly addresses: string[];
 
-  state.wallets = state.wallets.map((wallet, index) =>
-    index === walletIndex
-      ? {
-          ...wallet,
-          balanceUsd,
-          lastUpdated: now,
-          updatedAt: now,
-          lastSuccess: { at: now, balanceUsd },
-          status: "ok" as const,
-          source: hasCompleteAppAudit ? ("public" as const) : ("public-partial" as const),
-        }
-      : wallet
-  );
-  chainCache[normalized] = { at: now, totalUsd: balanceUsd, chains: combinedChains };
-  state.chainCache = chainCache;
-  state.onchainCacheUsd = state.wallets.reduce(
-    (sum, wallet) => sum + (Number(wallet.balanceUsd) || 0),
-    0
-  );
-  state.lastFullRefreshAt = now;
+  constructor(addresses: string[]) {
+    super("Wallet address is not configured");
+    this.name = "UnknownWalletObservationError";
+    this.addresses = addresses;
+  }
+}
 
-  try {
-    state.onchainBreakdown = await refreshOnchainBreakdown(
-      state.wallets,
-      chainCache,
-      state.tokenCache || {},
-      state.protocolCache || {},
-      state.zerionDefi || {}
-    );
-  } catch (error) {
-    console.error("[refresh] observed-wallet breakdown rebuild failed", error);
+type ParsedWalletObservation = {
+  normalized: string;
+  observedMs: number;
+  observationTime: string;
+  detail: NonNullable<ReturnType<typeof parseTotalDetail>>;
+  appDetail?: NonNullable<ReturnType<typeof parseAppDetail>>;
+  protocolDetail?: NonNullable<ReturnType<typeof parseProtocolDetail>>;
+};
+
+function parseWalletObservations(
+  observations: WalletObservationInput[]
+): ParsedWalletObservation[] {
+  if (!Array.isArray(observations) || observations.length < 1 || observations.length > 10) {
+    throw new WalletObservationValidationError("Wallet observation batch must contain 1-10 items");
   }
 
-  await writeStore(state);
+  const receivedMs = Date.now();
+  const seen = new Set<string>();
+  return observations.map((entry) => {
+    const normalized = String(entry?.address || "").trim().toLowerCase();
+    if (!/^0x[a-f0-9]{40}$/.test(normalized)) {
+      throw new WalletObservationValidationError("Invalid wallet address");
+    }
+    if (seen.has(normalized)) {
+      throw new WalletObservationValidationError("Duplicate wallet address in observation batch");
+    }
+    seen.add(normalized);
+
+    const detail = parseTotalDetail(entry?.observation);
+    if (!detail) {
+      throw new WalletObservationValidationError("Invalid Rabby total-balance payload");
+    }
+    const hasAppObservation = Object.prototype.hasOwnProperty.call(entry, "appObservation");
+    const appDetail = hasAppObservation ? parseAppDetail(entry.appObservation) : undefined;
+    if (hasAppObservation && !appDetail) {
+      throw new WalletObservationValidationError("Invalid DeBank app-list payload");
+    }
+    const hasProtocolObservation = Object.prototype.hasOwnProperty.call(entry, "protocolObservation");
+    const protocolDetail = hasProtocolObservation
+      ? parseProtocolDetail(entry.protocolObservation)
+      : undefined;
+    if (hasProtocolObservation && !protocolDetail) {
+      throw new WalletObservationValidationError("Invalid Rabby protocol-list payload");
+    }
+    const observedMs = new Date(entry?.observedAt || "").getTime();
+    if (
+      !Number.isFinite(observedMs) ||
+      observedMs > receivedMs + 60_000 ||
+      observedMs < receivedMs - 15 * 60_000
+    ) {
+      throw new WalletObservationValidationError("Invalid wallet observation timestamp");
+    }
+    return {
+      normalized,
+      observedMs,
+      observationTime: new Date(observedMs).toISOString(),
+      detail,
+      ...(appDetail ? { appDetail } : {}),
+      ...(protocolDetail ? { protocolDetail } : {}),
+    };
+  });
+}
+
+/**
+ * Persist a small batch of Rabby observations collected by trusted GitHub
+ * runners. The store is read once, the derived breakdown is rebuilt once, and
+ * the complete state is written once. `observedAt` makes retries idempotent and
+ * prevents an older runner response from overwriting newer wallet data.
+ */
+export async function ingestWalletObservations(
+  observations: WalletObservationInput[]
+): Promise<RefreshResult> {
+  const parsed = parseWalletObservations(observations);
+  const receivedMs = Date.now();
+  const mutation = await mutateStore(async (state) => {
+    const walletIndexByAddress = new Map(
+      state.wallets.map((wallet, index) => [wallet.address.trim().toLowerCase(), index])
+    );
+    const unknownAddresses = parsed
+      .filter((entry) => !walletIndexByAddress.has(entry.normalized))
+      .map((entry) => entry.normalized);
+    if (unknownAddresses.length) throw new UnknownWalletObservationError(unknownAddresses);
+
+    const wallets = [...state.wallets];
+    const chainCache = { ...(state.chainCache || {}) };
+    const protocolCache = { ...(state.protocolCache || {}) };
+    let applied = 0;
+    let totalRefreshed = 0;
+    let appRefreshed = 0;
+    let protocolsRefreshed = 0;
+    let latestAppliedObservationMs = 0;
+
+    for (const entry of parsed) {
+      const walletIndex = walletIndexByAddress.get(entry.normalized)!;
+      const wallet = wallets[walletIndex];
+      const previousChains = chainCache[entry.normalized]?.chains ?? [];
+      const previousAppChains = previousChains.filter((chain) => chain.id.startsWith("app:"));
+      const previousAppUsd = previousAppChains.reduce(
+        (sum, chain) => sum + (Number(chain.valueUsd) || 0),
+        0
+      );
+      const previousProtocol = protocolCache[entry.normalized] ?? { at: "", protocols: [] };
+      const existingSuccessMs = wallet.lastSuccess?.at
+        ? new Date(wallet.lastSuccess.at).getTime()
+        : Number.NaN;
+      const existingAppMs = previousProtocol.appAt
+        ? new Date(previousProtocol.appAt).getTime()
+        : Number.NaN;
+      const existingProtocolMs = previousProtocol.at
+        ? new Date(previousProtocol.at).getTime()
+        : Number.NaN;
+      const applyTotal = !Number.isFinite(existingSuccessMs) || existingSuccessMs < entry.observedMs;
+      const applyApp =
+        !!entry.appDetail &&
+        (!Number.isFinite(existingAppMs) || existingAppMs < entry.observedMs);
+      const applyProtocol =
+        !!entry.protocolDetail &&
+        (!Number.isFinite(existingProtocolMs) || existingProtocolMs < entry.observedMs);
+
+      if (applyApp && entry.appDetail) {
+        protocolCache[entry.normalized] = {
+          ...previousProtocol,
+          apps: entry.appDetail.protocols,
+          appAt: entry.observationTime,
+          appLastAttemptAt: entry.observationTime,
+        };
+        appRefreshed += 1;
+      }
+      if (applyProtocol && entry.protocolDetail) {
+        protocolCache[entry.normalized] = {
+          ...(protocolCache[entry.normalized] ?? previousProtocol),
+          protocols: entry.protocolDetail,
+          at: entry.observationTime,
+          lastAttemptAt: entry.observationTime,
+        };
+        protocolsRefreshed += 1;
+      }
+
+      if (applyTotal || applyApp) {
+        const appChains = applyApp && entry.appDetail ? entry.appDetail.chains : previousAppChains;
+        const appUsd = appChains.reduce((sum, chain) => sum + (Number(chain.valueUsd) || 0), 0);
+        const baseChains = applyTotal
+          ? entry.detail.chains.filter((chain) => !chain.id.startsWith("app:"))
+          : previousChains.filter((chain) => !chain.id.startsWith("app:"));
+        const previousCombinedTotal = Number(chainCache[entry.normalized]?.totalUsd ?? wallet.balanceUsd) || 0;
+        const baseUsd = applyTotal
+          ? entry.detail.totalUsd
+          : Math.max(0, previousCombinedTotal - previousAppUsd);
+        const combinedChains = [...baseChains, ...appChains].sort(
+          (left, right) => right.valueUsd - left.valueUsd
+        );
+        const balanceUsd = Math.round((baseUsd + appUsd) * 100) / 100;
+        const appAt = protocolCache[entry.normalized]?.appAt;
+        const appAtMs = appAt ? new Date(appAt).getTime() : Number.NaN;
+        const hasCompleteAppAudit =
+          Number.isFinite(appAtMs) &&
+          appAtMs <= receivedMs + 60_000 &&
+          receivedMs - appAtMs <= 6 * 60 * 60 * 1000;
+        wallets[walletIndex] = {
+          ...wallet,
+          balanceUsd,
+          ...(applyTotal
+            ? {
+                lastUpdated: entry.observationTime,
+                updatedAt: entry.observationTime,
+                lastSuccess: { at: entry.observationTime, balanceUsd },
+                status: "ok" as const,
+              }
+            : wallet.lastSuccess
+              ? { lastSuccess: { ...wallet.lastSuccess, balanceUsd } }
+              : {}),
+          source: hasCompleteAppAudit ? "public" : "public-partial",
+        };
+        chainCache[entry.normalized] = {
+          at: applyTotal ? entry.observationTime : (chainCache[entry.normalized]?.at ?? entry.observationTime),
+          totalUsd: balanceUsd,
+          chains: combinedChains,
+        };
+      }
+
+      if (applyTotal) {
+        totalRefreshed += 1;
+        latestAppliedObservationMs = Math.max(latestAppliedObservationMs, entry.observedMs);
+      }
+      if (applyTotal || applyApp || applyProtocol) applied += 1;
+    }
+
+    state.wallets = wallets;
+    state.chainCache = chainCache;
+    state.protocolCache = protocolCache;
+    if (latestAppliedObservationMs > 0) {
+      const previousWalletObservationMs = state.lastWalletObservationAt
+        ? new Date(state.lastWalletObservationAt).getTime()
+        : 0;
+      state.lastWalletObservationAt = new Date(
+        Math.max(previousWalletObservationMs || 0, latestAppliedObservationMs)
+      ).toISOString();
+    }
+    state.onchainCacheUsd = wallets.reduce(
+      (sum, wallet) => sum + (Number(wallet.balanceUsd) || 0),
+      0
+    );
+    const allWalletsFresh = wallets.every((wallet) => {
+      const successMs = wallet.lastSuccess?.at
+        ? new Date(wallet.lastSuccess.at).getTime()
+        : Number.NaN;
+      return wallet.status === "ok" && Number.isFinite(successMs) &&
+        successMs <= receivedMs + 60_000 && receivedMs - successMs <= 12 * 60 * 1000;
+    });
+    const cacheFresh = (value: string | undefined) => {
+      const valueMs = value ? new Date(value).getTime() : Number.NaN;
+      return Number.isFinite(valueMs) && valueMs <= receivedMs + 60_000 &&
+        receivedMs - valueMs <= 6 * 60 * 60 * 1000;
+    };
+    const appsStale = wallets.filter(
+      (wallet) => !cacheFresh(protocolCache[wallet.address.toLowerCase()]?.appAt)
+    ).length;
+    const protocolsStale = wallets.filter(
+      (wallet) => !cacheFresh(protocolCache[wallet.address.toLowerCase()]?.at)
+    ).length;
+    if (applied > 0 && allWalletsFresh && appsStale === 0 && protocolsStale === 0) {
+      state.lastFullRefreshAt = new Date(receivedMs).toISOString();
+    }
+    if (applied > 0) {
+      try {
+        state.onchainBreakdown = await refreshOnchainBreakdown(
+          wallets,
+          chainCache,
+          state.tokenCache || {},
+          protocolCache,
+          state.zerionDefi || {}
+        );
+      } catch (error) {
+        console.error("[refresh] observed-wallet breakdown rebuild failed", error);
+      }
+    }
+    return {
+      applied,
+      totalRefreshed,
+      appRefreshed,
+      protocolsRefreshed,
+      appsStale,
+      protocolsStale,
+    };
+  });
+
+  const state = mutation.state;
+  const {
+    applied,
+    totalRefreshed,
+    appRefreshed,
+    protocolsRefreshed,
+    appsStale,
+    protocolsStale,
+  } = mutation.result;
+  const skipped = parsed.length - applied;
+
   const walletOk = state.wallets.filter((wallet) => wallet.status === "ok").length;
   return {
     state,
     walletOk,
     walletTotal: state.wallets.length,
-    batchAttempted: 1,
-    batchSucceeded: 1,
+    batchAttempted: parsed.length,
+    batchSucceeded: applied,
     totals: computeTotals(state),
     payload: {
-      refreshed: true,
-      refreshMode: "wallet-observation",
-      refreshStatus: hasCompleteAppAudit ? "ok" : "partial",
+      refreshed: applied > 0,
+      refreshMode: "wallet-observations",
+      refreshStatus: appsStale === 0 && protocolsStale === 0 ? "ok" : "partial",
+      received: parsed.length,
+      applied,
+      skipped,
+      appRefreshed,
+      protocolsRefreshed,
+      totalRefreshed,
+      ...(applied === 0 ? { skippedReason: "older_or_duplicate_observation" } : {}),
     },
   };
+}
+
+/** Keep the original single-observation API for callers outside the batch route. */
+export async function ingestWalletObservation(
+  address: string,
+  rawObservation: unknown,
+  observedAt?: string
+): Promise<RefreshResult | null> {
+  try {
+    const result = await ingestWalletObservations([
+      { address, observation: rawObservation, observedAt: observedAt || new Date().toISOString() },
+    ]);
+    result.payload.refreshMode = "wallet-observation";
+    return result;
+  } catch (error) {
+    if (error instanceof UnknownWalletObservationError) return null;
+    throw error;
+  }
 }
 
 async function refreshOnchainSlice(
@@ -184,7 +427,6 @@ async function refreshOnchainSlice(
       !!wallet.lastSuccess?.at &&
       wallet.lastSuccess.at !== previousSuccessById.get(wallet.id)
   ).length;
-  const succeededThisBatch = batchSucceeded > 0;
   try {
     const onchainBreakdown = await refreshOnchainBreakdown(
       wallets,
@@ -229,7 +471,7 @@ async function refreshOnchainSlice(
   state.zerionDefi = defiCache;
   state.longtailCache = longtailCache;
   state.onchainBreakdown = breakdown;
-  if (succeededThisBatch) state.lastFullRefreshAt = now;
+  if (batchSucceeded > 0) state.lastWalletObservationAt = now;
   await writeStore(state);
 
   return { state, wallets, partial, breakdown, batchAttempted, batchSucceeded };

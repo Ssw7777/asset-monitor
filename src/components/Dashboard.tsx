@@ -220,9 +220,10 @@ export function Dashboard() {
 
   useEffect(() => {
     void load();
-    // 打开页面即做一次全量实时刷新：全部钱包余额 + DeFi 仓位立刻读取，不用等调度器
+    // 打开页面只刷新交易所与快照。链上钱包由云端分批任务持续更新，
+    // 避免浏览器每次打开都触发 25 个公共接口请求并在函数时限内超时。
     if (!mountedRef.current) mountedRef.current = true;
-    void quietRefresh("full", false);
+    void quietRefresh("fast", false);
   }, [load, quietRefresh]);
 
   useEffect(() => {
@@ -357,9 +358,9 @@ export function Dashboard() {
             <button
               type="button"
               className="btn btn-accent"
-              onClick={() => quietRefresh("full", true)}
+              onClick={() => quietRefresh("fast", true)}
               disabled={refreshing}
-              title="立即轮询全部地址和三家交易所，并写入一条持久快照"
+              title="立即刷新三家交易所并读取云端最近的钱包结果"
             >
               {refreshing ? "刷新中…" : "刷新数据"}
             </button>

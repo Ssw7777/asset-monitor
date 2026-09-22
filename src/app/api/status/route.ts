@@ -18,32 +18,52 @@ export async function GET(req: NextRequest) {
 
   const state = await readStore();
   const wallets = state.wallets;
+  const now = Date.now();
   const tenMinutes = 10 * 60 * 1000;
   const twentyMinutes = 20 * 60 * 1000;
   const threeHours = 3 * 60 * 60 * 1000;
+  const sixHours = 6 * 60 * 60 * 1000;
+  const appsFresh = wallets.filter((wallet) => {
+    const at = state.protocolCache?.[wallet.address.toLowerCase()]?.appAt;
+    const atMs = at ? new Date(at).getTime() : Number.NaN;
+    return Number.isFinite(atMs) && atMs <= now + 60_000 && now - atMs <= sixHours;
+  }).length;
+  const protocolsFresh = wallets.filter((wallet) => {
+    const at = state.protocolCache?.[wallet.address.toLowerCase()]?.at;
+    const atMs = at ? new Date(at).getTime() : Number.NaN;
+    return Number.isFinite(atMs) && atMs <= now + 60_000 && now - atMs <= sixHours;
+  }).length;
   const refreshAgeSeconds = state.lastRefresh
     ? Math.max(0, Math.round((Date.now() - new Date(state.lastRefresh).getTime()) / 1000))
     : null;
   return NextResponse.json({
     ok: true,
-    now: new Date().toISOString(),
+    now: new Date(now).toISOString(),
     lastRefresh: state.lastRefresh,
+    lastWalletObservationAt: state.lastWalletObservationAt ?? null,
     lastFullRefreshAt: state.lastFullRefreshAt ?? null,
     refreshAgeSeconds,
     snapshotCount: state.snapshots.length,
     walletCount: wallets.length,
     walletsLive: wallets.filter((wallet) => {
       const at = wallet.lastSuccess?.at ?? wallet.lastUpdated;
-      return wallet.status === "ok" && !!at && Date.now() - new Date(at).getTime() <= tenMinutes;
+      const atMs = at ? new Date(at).getTime() : Number.NaN;
+      return wallet.status === "ok" && Number.isFinite(atMs) && atMs <= now + 60_000 && now - atMs <= tenMinutes;
     }).length,
     walletsOver20min: wallets.filter((wallet) => {
       const at = wallet.lastSuccess?.at;
-      return !at || Date.now() - new Date(at).getTime() > twentyMinutes;
+      const atMs = at ? new Date(at).getTime() : Number.NaN;
+      return !Number.isFinite(atMs) || atMs > now + 60_000 || now - atMs > twentyMinutes;
     }).length,
     walletsStale: wallets.filter((wallet) => {
       const at = wallet.lastSuccess?.at;
-      return !at || Date.now() - new Date(at).getTime() > threeHours;
+      const atMs = at ? new Date(at).getTime() : Number.NaN;
+      return !Number.isFinite(atMs) || atMs > now + 60_000 || now - atMs > threeHours;
     }).length,
+    appsFresh,
+    appsStale: wallets.length - appsFresh,
+    protocolsFresh,
+    protocolsStale: wallets.length - protocolsFresh,
     sourceCounts: {
       direct: wallets.filter((wallet) => wallet.source === "direct").length,
       public: wallets.filter((wallet) => wallet.source === "public").length,

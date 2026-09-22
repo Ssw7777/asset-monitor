@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { randomUUID } from "node:crypto";
 import type {
   EncryptedSecretsBlob,
   ExchangeBalance,
@@ -27,6 +28,13 @@ export const SNAPSHOT_LIMIT = 2016;
 const FLOW_DATA_VERSION = 2;
 /** 保留全部快照的逐钱包 / 逐 DApp 明细（2016 条 ≈ 7 天），这样 7 天窗口也能按钱包归因。 */
 const SNAPSHOT_DETAIL_KEEP = SNAPSHOT_LIMIT;
+
+export class StoreConflictError extends Error {
+  constructor(message = "Portfolio store revision conflict") {
+    super(message);
+    this.name = "StoreConflictError";
+  }
+}
 
 function trimSnapshots(list: SnapshotPoint[]): SnapshotPoint[] {
   const sliced = list.length > SNAPSHOT_LIMIT ? list.slice(-SNAPSHOT_LIMIT) : list;
@@ -112,6 +120,7 @@ export function defaultState(): PortfolioState {
     flowDataVersion: FLOW_DATA_VERSION,
     onchainCacheUsd: BASELINE.onchainUsd,
     lastRefresh: null,
+    lastWalletObservationAt: null,
     usdCnyRate: rate,
     onchainBreakdown: null,
     tokenCache: {},
@@ -208,6 +217,7 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
       ? raw.flowBaselineAt
       : new Date().toISOString();
   return {
+    storeRevision: typeof raw.storeRevision === "string" ? raw.storeRevision : undefined,
     manual: Array.isArray(raw.manual) ? raw.manual : d.manual,
     // Migration runs on every read: newly required addresses appear without touching existing rows.
     wallets: applyWalletMigrations(storedWallets),
@@ -249,6 +259,8 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
         ? (raw.longtailCache as Record<string, WalletLongtailCacheEntry>)
         : {},
     encryptedSecrets: raw.encryptedSecrets ?? null,
+    lastWalletObservationAt:
+      typeof raw.lastWalletObservationAt === "string" ? raw.lastWalletObservationAt : null,
     lastFullRefreshAt: typeof raw.lastFullRefreshAt === "string" ? raw.lastFullRefreshAt : null,
     cexValuationVersions:
       raw.cexValuationVersions && typeof raw.cexValuationVersions === "object"
@@ -350,32 +362,46 @@ async function readTurso(): Promise<PortfolioState | null> {
   try {
     const client = await ensureTursoSchema();
     const rs = await client.execute({
-      sql: "SELECT value FROM kv_store WHERE key = ?",
+      sql: "SELECT value, updated_at FROM kv_store WHERE key = ?",
       args: [TURSO_ROW_KEY],
     });
     const row = rs.rows[0];
     if (!row) return null;
     const value = row.value as string;
-    return normalizeState(JSON.parse(value));
+    const state = normalizeState(JSON.parse(value));
+    state.storeRevision = String(row.updated_at || "");
+    return state;
   } catch (e) {
     console.error("[store] turso read failed", e);
-    return null;
+    throw e;
   }
 }
 
-async function writeTurso(state: PortfolioState): Promise<boolean> {
+async function writeTurso(state: PortfolioState): Promise<void> {
   try {
     const client = await ensureTursoSchema();
-    const now = new Date().toISOString();
-    await client.execute({
-      sql: `INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-      args: [TURSO_ROW_KEY, JSON.stringify(state), now],
-    });
-    return true;
+    const previousRevision = state.storeRevision || "";
+    const nextRevision = `${new Date().toISOString()}-${randomUUID()}`;
+    const nextState = { ...state, storeRevision: nextRevision };
+    const result = previousRevision
+      ? await client.execute({
+          sql: `UPDATE kv_store SET value = ?, updated_at = ?
+                WHERE key = ? AND updated_at = ?`,
+          args: [JSON.stringify(nextState), nextRevision, TURSO_ROW_KEY, previousRevision],
+        })
+      : await client.execute({
+          sql: `INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO NOTHING`,
+          args: [TURSO_ROW_KEY, JSON.stringify(nextState), nextRevision],
+        });
+    if (result.rowsAffected !== 1) {
+      throw new StoreConflictError();
+    }
+    state.storeRevision = nextRevision;
   } catch (e) {
+    if (e instanceof StoreConflictError) throw e;
     console.error("[store] turso write failed", e);
-    return false;
+    throw e;
   }
 }
 
@@ -403,12 +429,21 @@ export async function readStore(): Promise<PortfolioState> {
       writeMemoryAndTmp(fromDb);
       return fromDb;
     }
-    const cached = readMemoryOrTmp();
-    if (cached) return cached;
-    const seeded = defaultState();
-    await writeTurso(seeded);
-    writeMemoryAndTmp(seeded);
-    return seeded;
+    // Turso is authoritative. A warm-memory or /tmp copy may be used only to
+    // initialize a genuinely empty table, never as a revision-bearing value.
+    const initial = structuredClone(readMemoryOrTmp() ?? defaultState());
+    delete initial.storeRevision;
+    try {
+      await writeTurso(initial);
+      writeMemoryAndTmp(initial);
+      return initial;
+    } catch (error) {
+      if (!(error instanceof StoreConflictError)) throw error;
+      const concurrentlyCreated = await readTurso();
+      if (!concurrentlyCreated) throw error;
+      writeMemoryAndTmp(concurrentlyCreated);
+      return concurrentlyCreated;
+    }
   }
 
   if (isServerless()) {
@@ -432,11 +467,12 @@ export async function readStore(): Promise<PortfolioState> {
 }
 
 export async function writeStore(state: PortfolioState): Promise<void> {
-  writeMemoryAndTmp(state);
   if (preferTurso()) {
     await writeTurso(state);
+    writeMemoryAndTmp(state);
     return;
   }
+  writeMemoryAndTmp(state);
   if (isServerless()) {
     // already wrote /tmp + memory
     return;
@@ -444,98 +480,186 @@ export async function writeStore(state: PortfolioState): Promise<void> {
   writeJsonFile(LOCAL_STORE, state);
 }
 
+export type StoreMutationResult<T> = {
+  state: PortfolioState;
+  result: T;
+};
+
+async function withLocalMutationLock<T>(task: () => Promise<T>): Promise<T> {
+  const previous = g.__amStoreLock ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queueTail = previous.then(() => gate);
+  g.__amStoreLock = queueTail;
+  await previous;
+  try {
+    return await task();
+  } finally {
+    release();
+    if (g.__amStoreLock === queueTail) delete g.__amStoreLock;
+  }
+}
+
+/**
+ * Apply a state change against the latest persisted revision. Turso writes use
+ * optimistic concurrency; a competing writer causes a fresh read and replay of
+ * the mutation instead of silently replacing its changes. Local storage has no
+ * database CAS, so mutations are serialized within the process.
+ *
+ * Mutators may be replayed and therefore must not perform non-idempotent side
+ * effects outside the supplied state object.
+ */
+export async function mutateStore<T>(
+  mutator: (state: PortfolioState) => T | Promise<T>,
+  maxAttempts = 3
+): Promise<StoreMutationResult<T>> {
+  const attempts = Math.max(1, Math.trunc(maxAttempts));
+  const applyOnce = async (): Promise<StoreMutationResult<T>> => {
+    // Never mutate the object cached by readStore before persistence succeeds.
+    const state = structuredClone(await readStore());
+    const result = await mutator(state);
+    await writeStore(state);
+    return { state, result };
+  };
+
+  if (!preferTurso()) return withLocalMutationLock(applyOnce);
+
+  let conflict: StoreConflictError | null = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await applyOnce();
+    } catch (error) {
+      if (!(error instanceof StoreConflictError)) throw error;
+      conflict = error;
+    }
+  }
+  throw conflict ?? new StoreConflictError();
+}
+
 export async function updateManual(manual: ManualAsset[]) {
-  const s = await readStore();
-  s.manual = manual;
-  await writeStore(s);
-  return s;
+  return (await mutateStore((state) => { state.manual = manual; })).state;
 }
 
 export async function upsertManual(item: ManualAsset) {
-  const s = await readStore();
-  const idx = s.manual.findIndex((m) => m.id === item.id);
-  if (idx >= 0) s.manual[idx] = item;
-  else s.manual.push(item);
-  await writeStore(s);
-  return s;
+  return (await mutateStore((state) => {
+    const idx = state.manual.findIndex((m) => m.id === item.id);
+    if (idx >= 0) state.manual[idx] = item;
+    else state.manual.push(item);
+  })).state;
 }
 
 export async function deleteManual(id: string) {
-  const s = await readStore();
-  s.manual = s.manual.filter((m) => m.id !== id);
-  await writeStore(s);
-  return s;
+  return (await mutateStore((state) => {
+    state.manual = state.manual.filter((m) => m.id !== id);
+  })).state;
 }
 
-export async function updateWallets(wallets: Wallet[]) {
-  const s = await readStore();
-  s.wallets = wallets;
-  s.onchainCacheUsd = wallets.reduce((a, w) => a + w.balanceUsd, 0);
-  await writeStore(s);
-  return s;
+export async function updateWallets(
+  wallets: Wallet[],
+  options: { balanceOverrides?: Record<string, number> } = {}
+) {
+  return (await mutateStore((state) => {
+    const currentById = new Map(state.wallets.map((wallet) => [wallet.id, wallet]));
+    state.wallets = wallets.map((incoming) => {
+      const current = currentById.get(incoming.id);
+      if (!current) return incoming;
+      const hasBalanceOverride = Object.prototype.hasOwnProperty.call(
+        options.balanceOverrides || {},
+        incoming.id
+      );
+      const balanceOverride = hasBalanceOverride
+        ? Number(options.balanceOverrides?.[incoming.id])
+        : Number.NaN;
+      if (current.address.toLowerCase() !== incoming.address.toLowerCase()) {
+        return {
+          ...incoming,
+          balanceUsd: Number.isFinite(balanceOverride) ? balanceOverride : 0,
+          lastUpdated: null,
+          updatedAt: null,
+          lastSuccess: null,
+          status: "baseline" as const,
+          source: undefined,
+        };
+      }
+      return {
+        ...incoming,
+        balanceUsd: Number.isFinite(balanceOverride) ? balanceOverride : current.balanceUsd,
+        lastUpdated: current.lastUpdated,
+        updatedAt: current.updatedAt,
+        lastSuccess: current.lastSuccess,
+        status: current.status,
+        source: current.source,
+      };
+    });
+    state.onchainCacheUsd = state.wallets.reduce((sum, wallet) => sum + wallet.balanceUsd, 0);
+  })).state;
 }
 
 export async function updateOnchainBreakdown(onchainBreakdown: OnchainBreakdown) {
-  const s = await readStore();
-  s.onchainBreakdown = onchainBreakdown;
-  await writeStore(s);
-  return s;
+  return (await mutateStore((state) => { state.onchainBreakdown = onchainBreakdown; })).state;
 }
 
 export async function updateExchanges(exchanges: ExchangeBalance[]) {
-  const s = await readStore();
-  s.exchanges = exchanges;
-  await writeStore(s);
-  return s;
+  return (await mutateStore((state) => { state.exchanges = exchanges; })).state;
 }
 
 export async function setUsdCnyRate(rate: number) {
-  const s = await readStore();
-  s.usdCnyRate = Math.round(rate * 10000) / 10000 || 6.66;
-  await writeStore(s);
-  return s;
+  return (await mutateStore((state) => {
+    state.usdCnyRate = Math.round(rate * 10000) / 10000 || 6.66;
+  })).state;
 }
 
 export async function setEncryptedSecrets(blob: EncryptedSecretsBlob | null) {
-  const s = await readStore();
-  s.encryptedSecrets = blob;
-  await writeStore(s);
-  return s;
+  return (await mutateStore((state) => { state.encryptedSecrets = blob; })).state;
 }
 
 export async function updateCexValuationVersions(
   versions: NonNullable<PortfolioState["cexValuationVersions"]>
 ) {
-  const s = await readStore();
-  s.cexValuationVersions = versions;
-  await writeStore(s);
-  return s;
+  return (await mutateStore((state) => { state.cexValuationVersions = versions; })).state;
 }
 
 export async function setLastFullRefresh(at: string) {
-  const s = await readStore();
-  s.lastFullRefreshAt = at;
-  await writeStore(s);
-  return s;
+  return (await mutateStore((state) => { state.lastFullRefreshAt = at; })).state;
 }
 
 export async function updateTokenCache(cache: Record<string, WalletTokenCacheEntry>) {
-  const s = await readStore();
-  s.tokenCache = cache;
-  await writeStore(s);
-  return s;
+  return (await mutateStore((state) => { state.tokenCache = cache; })).state;
 }
 
 export async function updateProtocolCache(cache: Record<string, WalletProtocolCacheEntry>) {
-  const s = await readStore();
-  s.protocolCache = cache;
-  await writeStore(s);
-  return s;
+  return (await mutateStore((state) => {
+    const merged = { ...(state.protocolCache || {}) };
+    for (const [address, incoming] of Object.entries(cache)) {
+      const current = merged[address];
+      if (!current) {
+        merged[address] = incoming;
+        continue;
+      }
+      const currentProtocolMs = new Date(current.at || 0).getTime();
+      const incomingProtocolMs = new Date(incoming.at || 0).getTime();
+      const currentAppMs = new Date(current.appAt || 0).getTime();
+      const incomingAppMs = new Date(incoming.appAt || 0).getTime();
+      merged[address] = {
+        ...current,
+        ...incoming,
+        ...(Number.isFinite(currentProtocolMs) && currentProtocolMs > incomingProtocolMs
+          ? { at: current.at, protocols: current.protocols, lastAttemptAt: current.lastAttemptAt }
+          : {}),
+        ...(Number.isFinite(currentAppMs) && currentAppMs > incomingAppMs
+          ? { appAt: current.appAt, apps: current.apps, appLastAttemptAt: current.appLastAttemptAt }
+          : {}),
+      };
+    }
+    state.protocolCache = merged;
+  })).state;
 }
 
 export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: string }) {
-  const s = await readStore();
-  const snap: SnapshotPoint = {
+  return (await mutateStore((s) => {
+    const snap: SnapshotPoint = {
     ts: point.ts || new Date().toISOString(),
     totalUsd: point.totalUsd,
     onchain: point.onchain,
@@ -550,28 +674,27 @@ export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: str
     partial: point.partial === true ? true : undefined,
     suppressExchangeFlows: point.suppressExchangeFlows,
   };
-  const previous = s.snapshots.at(-1);
-  if (previous && !previous.seeded && previous.wallets && snap.wallets) {
+    const previous = s.snapshots.at(-1);
+    if (previous && !previous.seeded && previous.wallets && snap.wallets) {
     // Also backfill all still-retained history on migration, so records visible before
     // this release become durable before their source snapshots rotate out.
-    const additions = deriveFlowEventsFromSnapshots(
-      s,
-      [...s.snapshots, snap],
-      PERSISTED_FLOW_MIN_USD
-    );
-    if (additions.length) {
-      const existing = s.flowEvents ?? [];
-      const seen = new Set(existing.map((event) => event.id));
-      s.flowEvents = [...existing, ...additions.filter((event) => !seen.has(event.id))]
-        .sort((left, right) => new Date(left.ts).getTime() - new Date(right.ts).getTime())
-        .slice(-PERSISTED_FLOW_LIMIT);
+      const additions = deriveFlowEventsFromSnapshots(
+        s,
+        [...s.snapshots, snap],
+        PERSISTED_FLOW_MIN_USD
+      );
+      if (additions.length) {
+        const existing = s.flowEvents ?? [];
+        const seen = new Set(existing.map((event) => event.id));
+        s.flowEvents = [...existing, ...additions.filter((event) => !seen.has(event.id))]
+          .sort((left, right) => new Date(left.ts).getTime() - new Date(right.ts).getTime())
+          .slice(-PERSISTED_FLOW_LIMIT);
+      }
     }
-  }
-  s.snapshots.push(snap);
-  s.snapshots = trimSnapshots(s.snapshots);
-  s.lastRefresh = snap.ts;
-  await writeStore(s);
-  return s;
+    s.snapshots.push(snap);
+    s.snapshots = trimSnapshots(s.snapshots);
+    s.lastRefresh = snap.ts;
+  })).state;
 }
 
 export function computeTotals(s: PortfolioState) {
@@ -600,6 +723,7 @@ export function computeTotals(s: PortfolioState) {
  */
 export function publicState(s: PortfolioState) {
   const {
+    storeRevision: _omitStoreRevision,
     encryptedSecrets: _omitSecrets,
     tokenCache: _omitTokenCache,
     protocolCache: _omitProtocolCache,
@@ -611,6 +735,7 @@ export function publicState(s: PortfolioState) {
     ...rest
   } = s;
   void _omitSecrets;
+  void _omitStoreRevision;
   void _omitTokenCache;
   void _omitProtocolCache;
   void _omitChainCache;

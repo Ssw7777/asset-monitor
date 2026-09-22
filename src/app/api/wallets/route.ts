@@ -114,7 +114,13 @@ export async function POST(req: NextRequest) {
     wallets.push(makeWallet({ name, address, chain, balanceUsd: Number(body.balanceUsd) || 0 }));
   }
 
-  await updateWallets(wallets);
+  const requestedBalance = body.balanceUsd != null ? Number(body.balanceUsd) : Number.NaN;
+  await updateWallets(wallets, {
+    balanceOverrides:
+      id && Number.isFinite(requestedBalance)
+        ? { [id]: Math.round(requestedBalance * 100) / 100 }
+        : undefined,
+  });
   return NextResponse.json(await okPayload());
 }
 

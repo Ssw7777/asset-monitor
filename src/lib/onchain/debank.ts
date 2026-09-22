@@ -28,7 +28,7 @@ export interface TotalBalanceDetail {
   chains: ChainBalanceDetail[];
 }
 
-interface AppBalanceDetail {
+export interface AppBalanceDetail {
   chains: ChainBalanceDetail[];
   protocols: Record<string, unknown>[];
 }
@@ -171,12 +171,26 @@ export function parseTotalDetail(data: unknown): TotalBalanceDetail | null {
   return { totalUsd, chains };
 }
 
+/** Parse a Rabby/DeBank complex-protocol response while preserving an empty, valid list. */
+export function parseProtocolDetail(data: unknown): Record<string, unknown>[] | null {
+  if (Array.isArray(data)) return unwrapArray(data);
+  if (!data || typeof data !== "object") return null;
+  const record = data as Record<string, unknown>;
+  const hasRecognizedList =
+    Array.isArray(record.data) ||
+    Array.isArray(record.list) ||
+    (!!record.data &&
+      typeof record.data === "object" &&
+      Array.isArray((record.data as Record<string, unknown>).list));
+  return hasRecognizedList ? unwrapArray(data) : null;
+}
+
 /**
  * DeBank renders app-native assets (for example Polymarket) next to chain assets,
  * but they are not included in `/user/total_balance`. Convert them into both a
  * synthetic allocation and a protocol row so every view uses the same net worth.
  */
-function parseAppDetail(data: unknown): AppBalanceDetail | null {
+export function parseAppDetail(data: unknown): AppBalanceDetail | null {
   const body = unwrapObject(data);
   if (!body || !Array.isArray(body.apps)) return null;
   const chains: ChainBalanceDetail[] = [];
