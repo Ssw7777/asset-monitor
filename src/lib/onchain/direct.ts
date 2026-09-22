@@ -157,6 +157,108 @@ export async function fetchZerionDefi(
   });
 }
 
+export interface ZerionAppAudit {
+  chains: Array<{ id: string; name: string; valueUsd: number }>;
+  protocols: Record<string, unknown>[];
+}
+
+/**
+ * App-native balances excluded from Rabby's `/total_balance`.
+ * Keep a strict allowlist so ordinary DeFi deposits already represented by the
+ * chain total are never added twice. Zerion currently exposes the configured
+ * Polymarket balance as a dapp-linked position.
+ */
+export async function fetchZerionAppAudit(
+  address: string,
+  opts: { deadlineMs?: number } = {}
+): Promise<ZerionAppAudit | null> {
+  const key = nextZerionKey();
+  if (!key) return null;
+  return zerionRequest(async () => {
+    // Calls are deliberately queued. Recompute the remaining budget when this
+    // call actually reaches the head of the queue, otherwise ten requests can
+    // each retain the original 20 s timeout and outlive a 60 s serverless run.
+    const remainingMs = opts.deadlineMs == null ? 20_000 : opts.deadlineMs - Date.now();
+    if (remainingMs < 750) return null;
+    try {
+      const response = await fetch(
+        `https://api.zerion.io/v1/wallets/${address}/positions/?currency=usd&filter[positions]=no_filter&page[size]=100`,
+        {
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`,
+            Accept: "application/json",
+          },
+          cache: "no-store",
+          signal: AbortSignal.timeout(Math.min(20_000, remainingMs)),
+        }
+      );
+      if (!response.ok) return null;
+      const body = (await response.json()) as {
+        data?: Array<{
+          attributes?: {
+            position_type?: string;
+            quantity?: { float?: number };
+            value?: unknown;
+            price?: unknown;
+            fungible_info?: { symbol?: string };
+          };
+          relationships?: { dapp?: { data?: { id?: string } } };
+        }>;
+      };
+      if (!Array.isArray(body.data)) return null;
+
+      const appNames: Record<string, string> = { polymarket: "Polymarket" };
+      const grouped = new Map<
+        string,
+        { valueUsd: number; tokens: Array<Record<string, unknown>> }
+      >();
+      for (const item of body.data) {
+        const dappId = String(item.relationships?.dapp?.data?.id || "").toLowerCase();
+        if (!appNames[dappId]) continue;
+        const valueUsd = number(item.attributes?.value);
+        if (valueUsd <= 0.005) continue;
+        const current = grouped.get(dappId) ?? { valueUsd: 0, tokens: [] };
+        current.valueUsd += valueUsd;
+        current.tokens.push({
+          optimized_symbol: String(item.attributes?.fungible_info?.symbol || appNames[dappId]),
+          amount: number(item.attributes?.quantity?.float),
+          price: number(item.attributes?.price),
+          usd_value: valueUsd,
+        });
+        grouped.set(dappId, current);
+      }
+
+      const chains: ZerionAppAudit["chains"] = [];
+      const protocols: Record<string, unknown>[] = [];
+      for (const [id, entry] of grouped) {
+        const valueUsd = Math.round(entry.valueUsd * 100) / 100;
+        const name = appNames[id];
+        chains.push({ id: `app:${id}`, name, valueUsd });
+        protocols.push({
+          id: `app:${id}`,
+          name,
+          chain: `app:${id}`,
+          chain_name: name,
+          _assetMonitorSource: "app",
+          portfolio_item_list: [
+            {
+              stats: {
+                asset_usd_value: valueUsd,
+                debt_usd_value: 0,
+                net_usd_value: valueUsd,
+              },
+              detail: { supply_token_list: entry.tokens, borrow_token_list: [], reward_token_list: [] },
+            },
+          ],
+        });
+      }
+      return { chains, protocols };
+    } catch {
+      return null;
+    }
+  });
+}
+
 const number = (v: unknown) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;

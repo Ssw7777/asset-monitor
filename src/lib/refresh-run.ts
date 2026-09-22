@@ -6,6 +6,7 @@ import {
   refreshOnchainBreakdown,
   refreshWallets,
 } from "@/lib/onchain/debank";
+import { fetchZerionAppAudit, type ZerionAppAudit } from "@/lib/onchain/direct";
 import { BASELINE } from "@/lib/seed";
 import {
   computeTotals,
@@ -18,6 +19,175 @@ import {
   writeStore,
 } from "@/lib/store";
 import type { ExchangeBalance, PortfolioState } from "@/lib/types";
+
+const APP_AUDIT_REFRESH_MS = 5.5 * 60 * 60 * 1000;
+const APP_AUDIT_BATCH_SIZE = 10;
+const APP_AUDIT_RUN_BUDGET_MS = 40_000;
+
+type AppAuditResult = {
+  address: string;
+  observedAt: string;
+  audit: ZerionAppAudit;
+};
+
+function timestampMs(value: string | null | undefined) {
+  const parsed = value ? new Date(value).getTime() : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Refresh the App-only part of the wallet total without touching its canonical
+ * Rabby balance timestamp. Zerion is intentionally restricted by
+ * `fetchZerionAppAudit` to App-native assets (currently Polymarket), so normal
+ * protocol deposits cannot be added to the wallet total a second time.
+ *
+ * Network reads happen before the mutation. The successful observations are
+ * then replay-safe: on every CAS retry we compare timestamps against the latest
+ * state, replace only `app:*` allocations, and rebuild the aggregate once.
+ */
+async function refreshStaleAppAudits(seedState: PortfolioState) {
+  const nowMs = Date.now();
+  const targets = [...seedState.wallets]
+    .filter((wallet) => {
+      const appAt = seedState.protocolCache?.[wallet.address.toLowerCase()]?.appAt;
+      const appAtMs = timestampMs(appAt);
+      return appAtMs === 0 || nowMs - appAtMs >= APP_AUDIT_REFRESH_MS;
+    })
+    .sort((left, right) => {
+      const leftEntry = seedState.protocolCache?.[left.address.toLowerCase()];
+      const rightEntry = seedState.protocolCache?.[right.address.toLowerCase()];
+      return (
+        timestampMs(leftEntry?.appAt) - timestampMs(rightEntry?.appAt) ||
+        timestampMs(leftEntry?.appLastAttemptAt) - timestampMs(rightEntry?.appLastAttemptAt) ||
+        left.address.localeCompare(right.address)
+      );
+    })
+    .slice(0, APP_AUDIT_BATCH_SIZE);
+
+  if (!targets.length) {
+    return { state: seedState, attempted: 0, refreshed: 0 };
+  }
+
+  // CEX requests already ran before this helper. Reserve enough headroom for
+  // the atomic store write and snapshot within Vercel's 60 second limit.
+  const deadlineMs = Date.now() + APP_AUDIT_RUN_BUDGET_MS;
+  const observations = (
+    await Promise.all(
+      targets.map(async (wallet): Promise<AppAuditResult | null> => {
+        const audit = await fetchZerionAppAudit(wallet.address, { deadlineMs });
+        if (!audit) return null;
+        return {
+          address: wallet.address.toLowerCase(),
+          observedAt: new Date().toISOString(),
+          audit,
+        };
+      })
+    )
+  ).filter((entry): entry is AppAuditResult => entry !== null);
+
+  if (!observations.length) {
+    return { state: seedState, attempted: targets.length, refreshed: 0 };
+  }
+
+  const mutation = await mutateStore(async (state) => {
+    const wallets = [...state.wallets];
+    const walletIndex = new Map(
+      wallets.map((wallet, index) => [wallet.address.toLowerCase(), index])
+    );
+    const chainCache = { ...(state.chainCache || {}) };
+    const protocolCache = { ...(state.protocolCache || {}) };
+    let refreshed = 0;
+
+    for (const observation of observations) {
+      const index = walletIndex.get(observation.address);
+      if (index == null) continue;
+
+      const observedMs = timestampMs(observation.observedAt);
+      const previousProtocol = protocolCache[observation.address] ?? {
+        at: "",
+        protocols: [],
+      };
+      // A newer GitHub runner or another fast invocation already won the race.
+      if (timestampMs(previousProtocol.appAt) >= observedMs) continue;
+
+      const wallet = wallets[index];
+      const previousChainEntry = chainCache[observation.address];
+      const previousChains = previousChainEntry?.chains ?? [];
+      const previousAppUsd = previousChains
+        .filter((chain) => chain.id.startsWith("app:"))
+        .reduce((sum, chain) => sum + (Number(chain.valueUsd) || 0), 0);
+      const baseChains = previousChains.filter((chain) => !chain.id.startsWith("app:"));
+      const appUsd = observation.audit.chains.reduce(
+        (sum, chain) => sum + (Number(chain.valueUsd) || 0),
+        0
+      );
+      const previousCombinedTotal =
+        Number(previousChainEntry?.totalUsd ?? wallet.balanceUsd) || 0;
+      const baseUsd = Math.max(0, previousCombinedTotal - previousAppUsd);
+      const balanceUsd = Math.round((baseUsd + appUsd) * 100) / 100;
+      const combinedChains = [...baseChains, ...observation.audit.chains].sort(
+        (left, right) => right.valueUsd - left.valueUsd
+      );
+
+      protocolCache[observation.address] = {
+        ...previousProtocol,
+        apps: observation.audit.protocols,
+        appAt: observation.observedAt,
+        appLastAttemptAt: observation.observedAt,
+      };
+      chainCache[observation.address] = {
+        at:
+          previousChainEntry?.at ||
+          wallet.lastSuccess?.at ||
+          observation.observedAt,
+        totalUsd: balanceUsd,
+        chains: combinedChains,
+      };
+      wallets[index] = {
+        ...wallet,
+        balanceUsd,
+        ...(wallet.lastSuccess
+          ? { lastSuccess: { ...wallet.lastSuccess, balanceUsd } }
+          : {}),
+        // App completeness refines a public Rabby observation. Do not relabel a
+        // legacy direct/Zerion basis, since that would fabricate a basis change.
+        ...(wallet.source === "public" || wallet.source === "public-partial"
+          ? { source: "public" as const }
+          : {}),
+      };
+      refreshed += 1;
+    }
+
+    if (refreshed > 0) {
+      state.wallets = wallets;
+      state.chainCache = chainCache;
+      state.protocolCache = protocolCache;
+      state.onchainCacheUsd = wallets.reduce(
+        (sum, wallet) => sum + (Number(wallet.balanceUsd) || 0),
+        0
+      );
+      try {
+        state.onchainBreakdown = await refreshOnchainBreakdown(
+          wallets,
+          chainCache,
+          state.tokenCache || {},
+          protocolCache,
+          state.zerionDefi || {}
+        );
+      } catch (error) {
+        console.error("[refresh] Zerion App audit breakdown rebuild failed", error);
+      }
+    }
+
+    return refreshed;
+  });
+
+  return {
+    state: mutation.state,
+    attempted: targets.length,
+    refreshed: mutation.result,
+  };
+}
 
 function mapExchange(
   exchange: ExchangeBalance["exchange"],
@@ -528,8 +698,8 @@ export async function runWalletBatch(
 
 /**
  * 刷新：
- * - fast（默认给 1 分钟级定时器）：只读三家交易所余额 + 写一条快照，几百毫秒完成，
- *   链上 / DApp / 代币沿用上一次结果 —— 这样曲线可以做到分钟级，又不烧 API 额度。
+ * - fast：刷新三家交易所和到期的 App 原生资产审计，再写一条快照。
+ *   钱包链上余额由云端分片任务按十分钟周期更新。
  * - full：交易所 + 一小批轮转地址余额 + DApp / 代币缓存补齐；云端任务连续分批调用。
  */
 export async function runRefresh(
@@ -570,6 +740,8 @@ export async function runRefresh(
     mapExchange("gate", gate, prevMap.gate, BASELINE.gate, now),
   ];
   let latest = await updateExchanges(exchanges);
+  const appAudit = await refreshStaleAppAudits(latest);
+  latest = appAudit.state;
 
   let partial = latest.wallets.some(
     (wallet) => wallet.status !== "ok" || wallet.source === "public-partial"
@@ -633,6 +805,8 @@ export async function runRefresh(
       totals: computeTotals(finalState),
       refreshed: true,
       refreshMode: fast ? "fast" : "full",
+      appAuditsAttempted: appAudit.attempted,
+      appAuditsRefreshed: appAudit.refreshed,
       /** 只有“一个地址、一个交易所都没读到”才算整体失败；部分成功仍算成功 */
       refreshStatus:
         walletOk === finalState.wallets.length && exchangeOk
