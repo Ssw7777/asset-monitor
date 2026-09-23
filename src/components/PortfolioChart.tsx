@@ -110,7 +110,7 @@ export function PortfolioChart({
     const min = Math.min(...values);
     const max = Math.max(...values);
     // 紧贴曲线实际波动区间：只留 8% 呼吸空间，波动一眼可见
-    const pad = Math.max((max - min) * 0.08, Math.abs(max) * 0.0015, 0.5);
+    const pad = Math.max((max - min) * 0.12, 0.5);
     return [min - pad, max + pad];
   }, [data]);
 
@@ -203,9 +203,11 @@ export function PortfolioChart({
               tick={{ fontSize: 11, fill: "#8b93a7" }}
               axisLine={false}
               tickLine={false}
-              width={52}
+              width={70}
               tickCount={5}
-              tickFormatter={(value) => formatAxisTick(Number(value))}
+              tickFormatter={(value) => yDomain[1] - yDomain[0] < 1000
+                ? Number(value).toLocaleString("en-US", { maximumFractionDigits: yDomain[1] - yDomain[0] < 10 ? 2 : 0 })
+                : formatAxisTick(Number(value))}
             />
             <Tooltip
               content={<ChartTooltip rate={rate} />}

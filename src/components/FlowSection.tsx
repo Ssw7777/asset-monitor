@@ -2,6 +2,8 @@
 
 import type { FlowEvent, FlowRangeKey, FlowSummary } from "@/lib/flows";
 import { FLOW_RANGES } from "@/lib/flows";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { amountNum, shortAddr, timeAgo, usd } from "./format";
 
 const DIRECTION: Record<FlowEvent["direction"], { cls: string }> = {
@@ -9,11 +11,6 @@ const DIRECTION: Record<FlowEvent["direction"], { cls: string }> = {
   out: { cls: "neg" },
   transfer: { cls: "" },
 };
-
-/** 兼容历史记录：只收起“外部”的解释性括号，不改钱包或协议名称里的括号。 */
-function compactExternalLabel(value: string) {
-  return /^外部[（(]/.test(value) ? "外部" : value;
-}
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleString("zh-CN", {
@@ -45,12 +42,18 @@ export function FlowSection({
 }) {
   const events = summary?.events ?? [];
   const net = summary?.netUsd ?? 0;
+  const [page, setPage] = useState(0);
+  const pageSize = 8;
+  const pages = Math.max(1, Math.ceil(events.length / pageSize));
+  const currentPage = Math.min(page, pages - 1);
+  const visibleEvents = events.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  useEffect(() => setPage(0), [range, minUsd]);
 
   return (
     <section className="section section-surface section-flows" id="flows">
       <div className="section-head">
         <div className="section-title">
-          <h2>资金变动流水</h2>
+          <h2 title="余额估值变化，不等于转账。没有交易哈希时不推断资金去向。">资金变动流水</h2>
           <strong className={`flow-net num ${net >= 0 ? "pos" : "neg"}`}>
             {net > 0 ? "+" : net < 0 ? "-" : ""}
             {usd(Math.abs(net))}
@@ -83,6 +86,7 @@ export function FlowSection({
           </span>
         </div>
       </div>
+      <div className="flow-explanation">余额估值变动 · 非转账记录 · <Link prefetch={false} href="/transactions" target="_blank">核验链上交易 ↗</Link></div>
 
       {events.length ? (
         <div className="table">
@@ -93,10 +97,8 @@ export function FlowSection({
               <div className="hide-md">变动钱包/交易所</div>
               <div className="right flow-balance">余额变化</div>
             </div>
-            {events.map((event) => {
+            {visibleEvents.map((event) => {
               const direction = DIRECTION[event.direction];
-              const from = compactExternalLabel(event.from);
-              const to = compactExternalLabel(event.to);
               return (
                 <div className="trow grid-flow" key={event.id}>
                   <div className="cell-token-text">
@@ -110,7 +112,7 @@ export function FlowSection({
                     </div>
                   </div>
                   <div className="cell-token-text flow-entity hide-md">
-                    <b>{from} → {to}</b>
+                    <b>{event.entityLabel}</b>
                     <span>
                       {event.entityAddress ? shortAddr(event.entityAddress) : event.entityLabel}
                     </span>
@@ -119,7 +121,7 @@ export function FlowSection({
                     {amountNum(event.before)} → {usd(event.after)}
                   </div>
                   <div className="flow-meta cell-sub">
-                    {from} → {to}
+                    {event.entityLabel}
                     {event.entityAddress ? ` · ${shortAddr(event.entityAddress)}` : ""} · {amountNum(event.before)} →{" "}
                     {usd(event.after)}
                   </div>
@@ -135,6 +137,13 @@ export function FlowSection({
             : `还没有超过 ${minUsd} U 的变动记录：每轮刷新会自动比对并记录，时间越久记录越完整`}
         </div>
       )}
+      {pages > 1 && <div className="flow-pagination">
+        <span className="small">{currentPage + 1} / {pages} 页 · 已载入 {events.length} 条</span>
+        <div className="inline">
+          <button className="btn btn-outline" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>上一页</button>
+          <button className="btn btn-outline" disabled={currentPage === pages - 1} onClick={() => setPage(currentPage + 1)}>下一页</button>
+        </div>
+      </div>}
     </section>
   );
 }

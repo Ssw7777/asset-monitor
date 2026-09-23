@@ -81,8 +81,12 @@ function collectDeltas(state: PortfolioState, prev: SnapshotPoint, cur: Snapshot
     const prevBasis = prev.walletBasis?.[address] ?? "public";
     const curBasis = cur.walletBasis?.[address] ?? "public";
     if (prevBasis !== curBasis) continue;
-    const before = Number(prev.wallets?.[address] ?? 0);
-    const after = Number(cur.wallets?.[address] ?? before);
+    // Discovery/removal and incomplete valuations are not comparable observations.
+    if (!(address in (prev.wallets ?? {})) || !(address in (cur.wallets ?? {}))) continue;
+    if ([prevBasis, curBasis].some((basis) => basis === "public-partial" || basis === "zerion")) continue;
+    const before = Number(prev.wallets?.[address]);
+    const after = Number(cur.wallets?.[address]);
+    if (!Number.isFinite(before) || !Number.isFinite(after)) continue;
     const wallet = walletByAddress.get(address);
     out.push({
       entityType: "wallet",
@@ -155,58 +159,14 @@ export function detectFlowEventsBetween(
   const deltas = collectDeltas(state, prev, cur).filter(
     (delta) => Math.abs(delta.change) >= Math.max(0, minUsd)
   );
-  const outs = deltas.filter((delta) => delta.change < 0).sort((a, b) => a.change - b.change);
-  const ins = deltas.filter((delta) => delta.change > 0).sort((a, b) => b.change - a.change);
-  const usedIn = new Set<number>();
-  const usedOut = new Set<number>();
-
-  for (let oi = 0; oi < outs.length; oi += 1) {
-    const outDelta = outs[oi];
-    const outAbs = Math.abs(outDelta.change);
-    let bestIndex = -1;
-    let bestGap = Infinity;
-    for (let ii = 0; ii < ins.length; ii += 1) {
-      if (usedIn.has(ii)) continue;
-      const inDelta = ins[ii];
-      const gap = Math.abs(inDelta.change - outAbs);
-      const tolerance = Math.max(30, Math.max(outAbs, inDelta.change) * 0.25);
-      if (gap <= tolerance && gap < bestGap) {
-        bestGap = gap;
-        bestIndex = ii;
-      }
-    }
-    if (bestIndex >= 0) {
-      const inDelta = ins[bestIndex];
-      usedIn.add(bestIndex);
-      usedOut.add(oi);
-      events.push({
-        id: `${cur.ts}-${outDelta.entityKey}-${inDelta.entityKey}`,
-        ts: cur.ts,
-        direction: "transfer",
-        amountUsd: round2(Math.min(outAbs, inDelta.change)),
-        before: round2(outDelta.before),
-        after: round2(outDelta.after),
-        changePct: pct(outDelta.before, outDelta.after),
-        entityType: outDelta.entityType,
-        entityKey: outDelta.entityKey,
-        entityLabel: outDelta.entityLabel,
-        entityAddress: outDelta.entityAddress,
-        from: outDelta.entityLabel,
-        to: inDelta.entityLabel,
-        matched: true,
-        counterparty: inDelta.entityLabel,
-        status,
-      });
-    }
-  }
-
-  for (let oi = 0; oi < outs.length; oi += 1) {
-    if (usedOut.has(oi)) continue;
-    const delta = outs[oi];
+  // Balance snapshots contain no transaction hash or counterparty evidence.
+  // Record each entity independently; never infer transfers from matching amounts.
+  for (const delta of deltas) {
+    const direction = delta.change < 0 ? "out" : "in";
     events.push({
-      id: `${cur.ts}-${delta.entityKey}-out`,
+      id: `${cur.ts}-${delta.entityKey}-${direction}`,
       ts: cur.ts,
-      direction: "out",
+      direction,
       amountUsd: round2(Math.abs(delta.change)),
       before: round2(delta.before),
       after: round2(delta.after),
@@ -216,30 +176,7 @@ export function detectFlowEventsBetween(
       entityLabel: delta.entityLabel,
       entityAddress: delta.entityAddress,
       from: delta.entityLabel,
-      to: "外部",
-      matched: false,
-      counterparty: null,
-      status,
-    });
-  }
-
-  for (let ii = 0; ii < ins.length; ii += 1) {
-    if (usedIn.has(ii)) continue;
-    const delta = ins[ii];
-    events.push({
-      id: `${cur.ts}-${delta.entityKey}-in`,
-      ts: cur.ts,
-      direction: "in",
-      amountUsd: round2(delta.change),
-      before: round2(delta.before),
-      after: round2(delta.after),
-      changePct: pct(delta.before, delta.after),
-      entityType: delta.entityType,
-      entityKey: delta.entityKey,
-      entityLabel: delta.entityLabel,
-      entityAddress: delta.entityAddress,
-      from: "外部",
-      to: delta.entityLabel,
+      to: "",
       matched: false,
       counterparty: null,
       status,
@@ -247,6 +184,22 @@ export function detectFlowEventsBetween(
   }
 
   return events;
+}
+
+/** Preserve historical measurements, but revoke unsupported transfer attribution. */
+export function asBalanceObservation(event: FlowEvent): FlowEvent {
+  const change = event.after - event.before;
+  const direction = change < 0 ? "out" : "in";
+  return {
+    ...event,
+    id: `${event.ts}-${event.entityKey}-${direction}`,
+    direction,
+    amountUsd: round2(Math.abs(change)),
+    from: event.entityLabel,
+    to: "",
+    matched: false,
+    counterparty: null,
+  };
 }
 
 /** Rebuild detectable records from retained snapshots (used once for storage migration and dedupe). */
@@ -269,10 +222,7 @@ export function deriveFlowEventsFromSnapshots(
 /**
  * 大额资金变动流水。
  * 逐张快照对比“每个钱包 / 每家交易所 / 每条手动资产”的余额差，
- * 超过阈值就记一条；同一轮里金额接近的一减一增会被标成“疑似转入转出”。
- *
- * 注意：链上无法证明资金去向，匹配只是基于同一轮快照的推测，
- * 因此每条都带 `matched` 与状态说明，不把推测当成事实。
+ * 超过阈值就记一条。只代表估值变化，不代表已发生转账。
  */
 export function buildFlowSummary(
   state: PortfolioState,
@@ -309,7 +259,7 @@ export function buildFlowSummary(
 
   // Persistent events survive snapshot rotation. Union with recent derived events to
   // preserve records created before this storage migration and deduplicate by stable id.
-  const persistent = (state.flowEvents ?? []).filter((event) => {
+  const persistent = (state.flowEvents ?? []).map(asBalanceObservation).filter((event) => {
     const ts = new Date(event.ts).getTime();
     return (
       ts >= baselineMs &&
@@ -324,10 +274,10 @@ export function buildFlowSummary(
   );
   const limited = events.slice(0, limit);
   const totalIn = round2(
-    limited.filter((event) => event.direction !== "out").reduce((sum, event) => sum + event.amountUsd, 0)
+    events.filter((event) => event.direction === "in").reduce((sum, event) => sum + event.amountUsd, 0)
   );
   const totalOut = round2(
-    limited.filter((event) => event.direction !== "in").reduce((sum, event) => sum + event.amountUsd, 0)
+    events.filter((event) => event.direction === "out").reduce((sum, event) => sum + event.amountUsd, 0)
   );
 
   return {
@@ -342,6 +292,6 @@ export function buildFlowSummary(
     intervals,
     scannedFrom: events.length ? events[events.length - 1].ts : snapshots.length ? snapshots[0].ts : null,
     scannedTo: events.length ? events[0].ts : snapshots.length ? snapshots[snapshots.length - 1].ts : null,
-    note: "达到 50 U 的余额变动会写入长期记录，不随七天快照淘汰；同轮金额接近的一减一增仅标记为疑似转账。",
+    note: "余额估值变化，不代表转账；价格波动、仓位变化或数据修正均可能影响估值。交易记录需单独核验。",
   };
 }

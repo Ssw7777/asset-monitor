@@ -446,7 +446,7 @@ export function WalletsTable({
           显示 {filtered.length} / {wallets.length} 个地址 · 上限 50
         </span>
         <span>
-          每 10 分钟滚动轮询全部地址，成功时间最旧的地址优先补查；单个接口失败时保留上次成功值，不用错误的 0 覆盖
+          目标每 10 分钟轮询；实际以各钱包成功时间为准。调度延迟或接口失败会导致超时，失败不会将余额归零。
         </span>
       </div>
     </section>

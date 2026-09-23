@@ -243,7 +243,7 @@ a {
 .overview-duo > .section {
   min-width: 0;
   height: auto;
-  margin-top: 0;
+  margin: 0;
 }
 
 .overview-duo #trend {
@@ -293,6 +293,16 @@ a {
   flex: 1;
   place-content: center;
 }
+
+.flow-explanation { color: var(--muted); font-size: 12px; margin: -2px 0 12px; }
+.flow-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+.flow-pagination .btn { padding: 5px 9px; font-size: 12px; }
+.transaction-page { padding-top: 32px; padding-bottom: 40px; }
+.transaction-wallets { display: flex; gap: 8px; flex-wrap: wrap; margin: 20px 0; }
+.transaction-wallets [aria-current="page"] { background: #eaf1ff; border-color: #5089ff; }
+.transaction-record { padding: 18px 0; border-bottom: 1px solid var(--line); }
+.transaction-hash { font-size: 12px; overflow-wrap: anywhere; }
+.transaction-transfer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-top: 10px; }
 
 /* 分区用非常浅的底色区分，既有层次，也不干扰资产正负色。 */
 #trend,

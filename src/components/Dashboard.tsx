@@ -23,6 +23,7 @@ import { TokenTable } from "./TokenTable";
 import { localChainIcon, TokenIcon } from "./TokenIcon";
 import { WalletsTable } from "./WalletsTable";
 import { cny, timeAgo, usd } from "./format";
+import { walletFreshness } from "@/lib/freshness";
 
 interface Totals {
   manualUsd: number;
@@ -114,6 +115,11 @@ export function Dashboard() {
   const flowRangeRef = useRef<FlowRangeKey>("24h");
   const flowMinRef = useRef(50);
   const lastFullRef = useRef(Date.now());
+  const [clockNow, setClockNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setClockNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   const applyPayload = useCallback((json: PortfolioPayload) => {
     setData(json);
@@ -331,6 +337,7 @@ export function Dashboard() {
 
   const { totals, exchanges, wallets, manual, snapshots, usdCnyRate, lastRefresh } = data;
   const rate = usdCnyRate || 6.66;
+  const freshness = walletFreshness(wallets, clockNow);
   const partial = breakdown?.partial === true;
   const dapps = breakdown?.dapps ?? [];
   const onchainUsd = totals.onchainUsd || chains.reduce((sum, chain) => sum + chain.valueUsd, 0);
@@ -354,7 +361,7 @@ export function Dashboard() {
             <a href="#addresses">地址</a>
           </nav>
           <div className="topbar-actions">
-            <span className="small">更新于 {timeAgo(lastRefresh)}</span>
+            <span className="small">快照 {timeAgo(lastRefresh)}</span>
             <button
               type="button"
               className="btn btn-accent"
@@ -404,16 +411,18 @@ export function Dashboard() {
                 <div className="profile-status">
                   <span
                     className={`tag ${
-                      error || data.refreshStatus === "failed" ? "neg" : data.refreshStatus === "partial" ? "warn" : "pos"
+                      error || data.refreshStatus === "failed" ? "neg" : freshness.stale || partial ? "warn" : "pos"
                     }`}
                   >
                     {error || data.refreshStatus === "failed"
                       ? "数据获取失败"
-                      : data.refreshStatus === "partial"
-                        ? "部分数据沿用缓存"
-                        : "数据刷新成功"}
+                      : freshness.stale
+                        ? `${freshness.stale} 个钱包超过10分钟未更新`
+                        : partial
+                          ? "钱包已更新 · 部分明细待核验"
+                          : `钱包已更新 ${freshness.fresh}/${freshness.total}`}
                   </span>
-                  <span className="small">{rateSaving ? "汇率保存中…" : "快照每 5 分钟"}</span>
+                  <span className="small">{rateSaving ? "汇率保存中…" : `最旧钱包：${Number.isFinite(freshness.oldestAgeMs) ? `${Math.ceil(freshness.oldestAgeMs / 60_000)}分钟前` : "尚无成功记录"}`}</span>
                 </div>
                 <div className="networth-value num">{usd(totals.totalUsd)}</div>
                 <div className="networth-cny num">{cny(totals.totalUsd * rate)}</div>

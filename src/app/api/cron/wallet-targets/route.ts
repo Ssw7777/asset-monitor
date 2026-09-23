@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
       })
       .filter((entry) => entry.at < detailRefreshBefore)
       .sort((left, right) => left.at - right.at || left.index - right.index)
-      .slice(0, 10)
+      .slice(0, state.wallets.length)
       .map((entry) => entry.index)
   );
   const wallets = state.wallets.map((wallet, index) => {
@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
       needsRetry:
         !Number.isFinite(lastSuccessMs) ||
         lastSuccessMs > now + 60_000 ||
-        lastSuccessMs < retryBefore,
+        lastSuccessMs < retryBefore || protocolRefreshIndexes.has(index),
       needsAppRefresh: appRefreshIndexes.has(index),
       needsProtocolRefresh: protocolRefreshIndexes.has(index),
     };

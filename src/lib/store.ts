@@ -181,6 +181,13 @@ function normalizeSnapshot(raw: unknown): SnapshotPoint | null {
       point.wallets && typeof point.wallets === "object"
         ? (point.wallets as Record<string, number>)
         : undefined,
+    walletBasis:
+      point.walletBasis && typeof point.walletBasis === "object"
+        ? (point.walletBasis as Record<string, string>)
+        : undefined,
+    zerionWallets: Array.isArray(point.zerionWallets)
+      ? point.zerionWallets.filter((item): item is string => typeof item === "string")
+      : undefined,
     manualItems:
       point.manualItems && typeof point.manualItems === "object"
         ? (point.manualItems as Record<string, number>)

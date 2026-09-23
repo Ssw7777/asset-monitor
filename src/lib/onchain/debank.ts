@@ -768,7 +768,7 @@ export async function refreshWallets(
     const previousAppChains = (chainStore[addressLower]?.chains ?? []).filter((chain) =>
       chain.id.startsWith("app:")
     );
-    const { detail, apps, complete, status, attempted } = await fetchWalletDetail(
+    const { detail, apps, status, attempted } = await fetchWalletDetail(
       wallet.address,
       true,
       previousAppChains
@@ -803,6 +803,15 @@ export async function refreshWallets(
         );
       }
       const balanceUsd = Math.round(detail.totalUsd * 100) / 100;
+      // A successful App audit may legitimately contain no positions. Its
+      // timestamp, rather than a non-empty app chain list, proves completeness
+      // when the public App endpoint is temporarily unavailable.
+      const appAuditAtMs = Date.parse(protocolStore[addressLower]?.appAt ?? "");
+      const observedAtMs = Date.parse(attemptedAt);
+      const hasCompleteAppAudit =
+        Number.isFinite(appAuditAtMs) &&
+        appAuditAtMs <= observedAtMs + 60_000 &&
+        observedAtMs - appAuditAtMs <= 6 * 60 * 60 * 1000;
       return {
         ...wallet,
         balanceUsd,
@@ -810,7 +819,7 @@ export async function refreshWallets(
         updatedAt: attemptedAt,
         lastSuccess: { at: attemptedAt, balanceUsd },
         status: "ok" as const,
-        source: complete ? ("public" as const) : ("public-partial" as const),
+        source: hasCompleteAppAudit ? ("public" as const) : ("public-partial" as const),
       };
     }
 
