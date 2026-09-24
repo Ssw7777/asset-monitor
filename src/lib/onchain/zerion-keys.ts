@@ -1,7 +1,7 @@
 /**
- * Zerion 免费额度按 Key 独立计算（300 次/天/Key）。
- * 支持配置多把 Key 轮转使用（ZERION_API_KEYS = 逗号分隔），等效额度成倍放大；
- * 轮转计数器在每个 Serverless 实例内自增，实例间整体分布近似均匀。
+ * Zerion 额度以接口返回的组织级 ratelimit-org-* 为准。
+ * 同一组织的多把 Key 不增加组织额度；轮转仅用于兼容现有配置，
+ * 不能据此推算总额度，也不能绕过组织限流。
  */
 
 let rotation = 0;
@@ -26,8 +26,8 @@ export function nextZerionKey(): string | null {
 }
 
 /**
- * Zerion 请求全局串行 + 相邻间隔 800ms：不并发、不突发，
- * 以平稳小批次读取为目标，而不是用多 Key 堆高请求速率。
+ * 单实例请求串行 + 相邻间隔 1100ms，兼容当前 1 RPS 的额度。
+ * 此队列不跨 Serverless 实例；组织级限流仍由服务商统一执行。
  */
 let zerionQueue: Promise<void> = Promise.resolve();
 
@@ -35,6 +35,6 @@ export function zerionRequest<T>(fn: () => Promise<T>): Promise<T> {
   const run = zerionQueue.then(fn, fn);
   zerionQueue = run
     .catch(() => undefined)
-    .then(() => new Promise<void>((resolve) => setTimeout(resolve, 800)));
+    .then(() => new Promise<void>((resolve) => setTimeout(resolve, 1100)));
   return run;
 }

@@ -8,6 +8,7 @@ import {
 } from "@/lib/onchain/debank";
 import { fetchZerionAppAudit, type ZerionAppAudit } from "@/lib/onchain/direct";
 import { BASELINE } from "@/lib/seed";
+import { walletFreshness } from "@/lib/freshness";
 import {
   computeTotals,
   mutateStore,
@@ -23,6 +24,9 @@ import type { ExchangeBalance, PortfolioState } from "@/lib/types";
 const APP_AUDIT_REFRESH_MS = 5.5 * 60 * 60 * 1000;
 const APP_AUDIT_BATCH_SIZE = 10;
 const APP_AUDIT_RUN_BUDGET_MS = 40_000;
+// Failed App-only audits must not consume ten requests every five minutes.
+// This is separate from the Rabby wallet-balance refresh cadence.
+const APP_AUDIT_RETRY_MS = 3 * 60 * 60 * 1000;
 
 type AppAuditResult = {
   address: string;
@@ -49,9 +53,12 @@ async function refreshStaleAppAudits(seedState: PortfolioState) {
   const nowMs = Date.now();
   const targets = [...seedState.wallets]
     .filter((wallet) => {
-      const appAt = seedState.protocolCache?.[wallet.address.toLowerCase()]?.appAt;
+      const entry = seedState.protocolCache?.[wallet.address.toLowerCase()];
+      const appAt = entry?.appAt;
       const appAtMs = timestampMs(appAt);
-      return appAtMs === 0 || nowMs - appAtMs >= APP_AUDIT_REFRESH_MS;
+      const lastAttempt = timestampMs(entry?.appLastAttemptAt);
+      return (appAtMs === 0 || nowMs - appAtMs >= APP_AUDIT_REFRESH_MS) &&
+        (lastAttempt === 0 || nowMs - lastAttempt >= APP_AUDIT_RETRY_MS);
     })
     .sort((left, right) => {
       const leftEntry = seedState.protocolCache?.[left.address.toLowerCase()];
@@ -67,6 +74,21 @@ async function refreshStaleAppAudits(seedState: PortfolioState) {
   if (!targets.length) {
     return { state: seedState, attempted: 0, refreshed: 0 };
   }
+
+  // Persist attempts before the network call, including failures/timeouts.
+  // The route's distributed lease prevents concurrent schedulers reserving twice.
+  const attemptedAt = new Date(nowMs).toISOString();
+  const reserved = await mutateStore(async (state) => {
+    const protocolCache = { ...(state.protocolCache ?? {}) };
+    for (const wallet of targets) {
+      const address = wallet.address.toLowerCase();
+      protocolCache[address] = {
+        ...(protocolCache[address] ?? { at: "", protocols: [] }),
+        appLastAttemptAt: attemptedAt,
+      };
+    }
+    state.protocolCache = protocolCache;
+  });
 
   // CEX requests already ran before this helper. Reserve enough headroom for
   // the atomic store write and snapshot within Vercel's 60 second limit.
@@ -86,7 +108,7 @@ async function refreshStaleAppAudits(seedState: PortfolioState) {
   ).filter((entry): entry is AppAuditResult => entry !== null);
 
   if (!observations.length) {
-    return { state: seedState, attempted: targets.length, refreshed: 0 };
+    return { state: reserved.state, attempted: targets.length, refreshed: 0 };
   }
 
   const mutation = await mutateStore(async (state) => {
@@ -758,6 +780,9 @@ export async function runRefresh(
   }
 
   const totals = computeTotals(latest);
+  // A newly written snapshot does not make old component observations current.
+  partial = partial || walletFreshness(latest.wallets).stale > 0 ||
+    latest.exchanges.some((item) => item.status !== "ok");
   let finalState = await pushSnapshot({
     totalUsd: totals.totalUsd,
     onchain: totals.onchainUsd,
@@ -787,7 +812,7 @@ export async function runRefresh(
       ...Object.fromEntries(suppressExchangeFlows.map((exchange) => [exchange, valuationVersion])),
     });
   }
-  const walletOk = finalState.wallets.filter((wallet) => wallet.status === "ok").length;
+  const walletOk = walletFreshness(finalState.wallets).fresh;
   // “可用”= 本轮拿到实时数据，或沿用了上次成功数据（余额依然有效）。
   // 只有所有地址都没有任何余额、交易所也全失败时，才算整体失败。
   const walletUsable = finalState.wallets.filter(
@@ -809,7 +834,7 @@ export async function runRefresh(
       appAuditsRefreshed: appAudit.refreshed,
       /** 只有“一个地址、一个交易所都没读到”才算整体失败；部分成功仍算成功 */
       refreshStatus:
-        walletOk === finalState.wallets.length && exchangeOk
+        walletOk === finalState.wallets.length && exchanges.every((item) => item.status === "ok") && !partial
           ? "ok"
           : walletUsable > 0 || exchangeOk
             ? "partial"

@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * 轻量状态接口：用来确认「云端定时刷新到底有没有在跑」。
- * 只返回时间与数量，不含任何余额、地址或密钥；
+ * 返回时间、数量和汇总余额，不含地址或密钥；
  * 需要登录会话，或通过云端定时任务鉴权。
  */
 export async function GET(req: NextRequest) {
@@ -23,6 +23,16 @@ export async function GET(req: NextRequest) {
   const twentyMinutes = 20 * 60 * 1000;
   const threeHours = 3 * 60 * 60 * 1000;
   const sixHours = 6 * 60 * 60 * 1000;
+  const ageMs = (value: string | undefined) => {
+    const at = value ? Date.parse(value) : Number.NaN;
+    return Number.isFinite(at) && at <= now + 60_000 ? Math.max(0, now - at) : Infinity;
+  };
+  const walletAges = wallets.map(wallet => ageMs(wallet.lastSuccess?.at));
+  const protocolAges = wallets.map(wallet => ageMs(state.protocolCache?.[wallet.address.toLowerCase()]?.at));
+  const oldestAgeSeconds = (ages: number[]) => {
+    const max = ages.length ? Math.max(...ages) : Infinity;
+    return Number.isFinite(max) ? Math.ceil(max / 1000) : null;
+  };
   const appsFresh = wallets.filter((wallet) => {
     const at = state.protocolCache?.[wallet.address.toLowerCase()]?.appAt;
     const atMs = at ? new Date(at).getTime() : Number.NaN;
@@ -45,6 +55,10 @@ export async function GET(req: NextRequest) {
     refreshAgeSeconds,
     snapshotCount: state.snapshots.length,
     walletCount: wallets.length,
+    walletsOver10min: walletAges.filter(age => age > tenMinutes).length,
+    oldestWalletAgeSeconds: oldestAgeSeconds(walletAges),
+    protocolsWithin10min: protocolAges.filter(age => age <= tenMinutes).length,
+    oldestProtocolAgeSeconds: oldestAgeSeconds(protocolAges),
     walletsLive: wallets.filter((wallet) => {
       const at = wallet.lastSuccess?.at ?? wallet.lastUpdated;
       const atMs = at ? new Date(at).getTime() : Number.NaN;
