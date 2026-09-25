@@ -417,7 +417,7 @@ export async function fetchDirectDetail(
     zerionChainTotals = new Map(Object.entries(cached.chainSnapshot ?? {}));
   } else if (opts.allowZerion) {
     const zerionResult = await fetchZerionTokens(address, { deadlineMs: opts.deadlineMs });
-    if (zerionResult) {
+    if (zerionResult && zerionResult.complete !== false && zerionResult.coveredChains.includes("*")) {
       for (const token of zerionResult.tokens) {
         if (token.amount > 0) {
           impliedPrices.set(`${token.chain}:${token.symbol.toUpperCase()}`, token.valueUsd / token.amount);

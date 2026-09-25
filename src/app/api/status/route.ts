@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
 import { hasCronAuthorization } from "@/lib/cron-auth";
 import { readStore } from "@/lib/store";
+import { auditTokens } from "@/lib/token-audit";
 
 export const dynamic = "force-dynamic";
 
@@ -93,6 +94,7 @@ export async function GET(req: NextRequest) {
     zerionDefiWallets: Object.keys(state.zerionDefi ?? {}).length,
     tokenSource: state.onchainBreakdown?.tokenSource ?? null,
     tokenCount: state.onchainBreakdown?.tokens?.length ?? 0,
+    tokenAudit: auditTokens(state, now),
     dappCount: state.onchainBreakdown?.dapps?.length ?? 0,
   });
 }

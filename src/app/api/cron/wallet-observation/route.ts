@@ -35,6 +35,8 @@ function parseRequestEntry(
     address,
     observedAt,
     observation: record.observation,
+    ...(Object.prototype.hasOwnProperty.call(record, "tokenObservations") ? { tokenObservations: record.tokenObservations as WalletObservationInput["tokenObservations"] } : {}),
+    ...(Object.prototype.hasOwnProperty.call(record, "tokenSpecificObservations") ? { tokenSpecificObservations: record.tokenSpecificObservations as WalletObservationInput["tokenSpecificObservations"] } : {}),
     ...(Object.prototype.hasOwnProperty.call(record, "appObservation")
       ? { appObservation: record.appObservation }
       : {}),
@@ -107,6 +109,7 @@ export async function POST(req: NextRequest) {
       skipped: result.payload.skipped,
       appRefreshed: result.payload.appRefreshed,
       protocolsRefreshed: result.payload.protocolsRefreshed,
+      tokensRefreshed: result.payload.tokensRefreshed,
     });
   } catch (error) {
     console.error("[cron] wallet observation rejected", error);

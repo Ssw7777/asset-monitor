@@ -536,6 +536,8 @@ export function Dashboard() {
           chainFilter={chainFilter}
           partial={partial}
           tokenSource={breakdown?.tokenSource}
+          tokenAudit={breakdown?.tokenAudit}
+          now={clockNow}
         />
 
         <ProtocolSections

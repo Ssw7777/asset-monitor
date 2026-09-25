@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { hasCronAuthorization } from "@/lib/cron-auth";
 import { readStore } from "@/lib/store";
 import { needsProtocolRefresh } from "@/lib/scheduler-freshness";
+import { requiredTokenChains } from "@/lib/token-audit";
+import { tokenUuid } from "@/lib/onchain/rabby-token-observation";
 
 export const preferredRegion = ["hkg1"];
 export const dynamic = "force-dynamic";
@@ -47,6 +49,16 @@ export async function GET(req: NextRequest) {
       .map((entry) => entry.index)
   );
   const wallets = state.wallets.map((wallet, index) => {
+    const key = wallet.address.toLowerCase();
+    const tokens = state.tokenCache?.[key];
+    const tokenChains = requiredTokenChains(state, key).map(chain => ({
+      chain, at: Date.parse(tokens?.chainUpdatedAt?.[chain] ?? tokens?.at ?? "") || 0,
+      value: state.chainCache?.[key]?.chains.find(item => item.id === chain)?.valueUsd ?? 0,
+    })).sort((a,b) => a.at - b.at || b.value - a.value).map(item => item.chain);
+    const needsTokenRefresh = tokenChains.some(chain => {
+      const at = Date.parse(tokens?.chainUpdatedAt?.[chain] ?? tokens?.at ?? "");
+      return !Number.isFinite(at) || at > now + 60_000 || now - at > 8 * 60_000 || !!tokens?.chainErrors?.[chain];
+    });
     const lastSuccessMs = wallet.lastSuccess?.at
       ? new Date(wallet.lastSuccess.at).getTime()
       : Number.NaN;
@@ -59,6 +71,10 @@ export async function GET(req: NextRequest) {
         lastSuccessMs < retryBefore || protocolRefreshIndexes.has(index),
       needsAppRefresh: appRefreshIndexes.has(index),
       needsProtocolRefresh: protocolRefreshIndexes.has(index),
+      needsTokenRefresh,
+      tokenChains,
+      tokenUuids: [...new Set([...(tokens?.tokens ?? []).map(tokenUuid).filter((id): id is string => !!id), ...Object.keys(tokens?.inventory ?? {})])]
+        .sort((a,b) => (Date.parse(tokens?.tokenAttemptAt?.[a] ?? tokens?.inventory?.[a]?.updatedAt ?? "") || 0) - (Date.parse(tokens?.tokenAttemptAt?.[b] ?? tokens?.inventory?.[b]?.updatedAt ?? "") || 0)),
     };
   });
 

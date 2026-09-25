@@ -15,6 +15,7 @@ import type {
   Wallet,
 } from "../types";
 import { activeTokenSource, fetchZerionTokens, type TokenSource } from "./token-providers";
+import { mergeTokenCacheObservation, tokenCacheNeedsRefresh, tokenIdentity } from "./token-cache-policy";
 
 export interface ChainBalanceDetail {
   id: string;
@@ -63,10 +64,9 @@ const CONCURRENCY = 6;
  */
 const PUBLIC_REQUEST_INTERVAL_MS = 3_000;
 /**
- * 代币明细额度控制：每个地址最多每 12 小时尝试一次、每轮最多 1 个地址。
- * 25 个钱包稳定上限约 25 × 2 = 50 次/天；失败同样写 lastAttemptAt，避免重试风暴。
+ * 代币明细发现额度控制：成功缓存 12 小时，失败至少间隔 15 分钟；每轮最多 1 个地址。
+ * lastAttemptAt 仅用于失败退避，不能冒充上次成功更新时间。
  */
-const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
 const TOKEN_WALLET_BUDGET = 1;
 const TOKEN_CHAINS_PER_WALLET = 3;
 const TOKEN_MIN_CHAIN_USD = 5;
@@ -590,11 +590,7 @@ async function fetchWalletTokens(
 ): Promise<{ detail: WalletTokenDetail | null; status: WalletFetchStatus }> {
   const normalized = address.toLowerCase();
   const hit = store[normalized] || null;
-  const freshnessAnchor = hit?.lastAttemptAt || hit?.at;
-  const fresh = freshnessAnchor
-    ? Date.now() - new Date(freshnessAnchor).getTime() < TOKEN_TTL_MS
-    : false;
-  if (!force && hit && fresh) return { detail: hit, status: "cached" };
+  if (!force && hit && !tokenCacheNeedsRefresh(hit)) return { detail: hit, status: "cached" };
   const attemptedAt = new Date().toISOString();
   store[normalized] = hit
     ? { ...hit, lastAttemptAt: attemptedAt }
@@ -608,8 +604,9 @@ async function fetchWalletTokens(
       };
   const detail = await fetchTokenListOnce(normalized, chainIds, deadlineMs);
   if (detail) {
-    store[normalized] = { at: attemptedAt, lastAttemptAt: attemptedAt, ...detail };
-    return { detail, status: "ok" };
+    const merged = mergeTokenCacheObservation(hit, detail, attemptedAt);
+    store[normalized] = merged;
+    return { detail: merged, status: detail.coveredChains.length ? "ok" : hit ? "cached" : "error" };
   }
   return hit ? { detail: hit, status: "cached" } : { detail: null, status: "error" };
 }
@@ -618,11 +615,7 @@ type TokenCache = Record<string, WalletTokenCacheEntry>;
 
 /** 需要补代币明细的地址：本地缓存过期，或从来没取过。 */
 function tokenCacheStale(address: string, store: TokenCache) {
-  const hit = store[address.toLowerCase()];
-  if (!hit) return true;
-  const anchor = hit.lastAttemptAt || hit.at;
-  if (!anchor) return true;
-  return Date.now() - new Date(anchor).getTime() >= TOKEN_TTL_MS;
+  return tokenCacheNeedsRefresh(store[address.toLowerCase()]);
 }
 
 function protocolCacheStale(address: string, store: ProtocolCache) {
@@ -1030,7 +1023,7 @@ export async function refreshOnchainBreakdown(
         };
         current.tokenCovered =
           current.tokenCovered || tokenDetail.coveredChains.includes("*") || tokenDetail.coveredChains.includes(chainId);
-        const key = `${token.kind}:${token.symbol.toUpperCase()}`;
+        const key = `${token.kind}:${tokenIdentity(token)}`;
         const existing = current.tokens.get(key);
         if (existing) {
           existing.amount += token.amount;
@@ -1043,7 +1036,7 @@ export async function refreshOnchainBreakdown(
         chainMap.set(chainId, current);
 
         // 跨钱包的代币聚合：同一个代币在不同钱包分别持有多少，是"多钱包综合体"的核心。
-        const tokenKey = `${chainId}:${token.symbol.toUpperCase()}`;
+        const tokenKey = `${chainId}:${tokenIdentity(token)}`;
         const holding =
           tokenMap.get(tokenKey) ||
           {
@@ -1190,11 +1183,11 @@ export async function refreshOnchainBreakdown(
       const stablecoins = allTokens
         .filter((token) => token.kind === "stable")
         .slice(0, TOKENS_PER_GROUP)
-        .map((token) => ({ ...token, amount: rounded(token.amount), valueUsd: rounded(token.valueUsd) }));
+        .map((token) => ({ ...token, valueUsd: rounded(token.valueUsd) }));
       const spot = allTokens
         .filter((token) => token.kind !== "stable")
         .slice(0, TOKENS_PER_GROUP)
-        .map((token) => ({ ...token, amount: rounded(token.amount), valueUsd: rounded(token.valueUsd) }));
+        .map((token) => ({ ...token, valueUsd: rounded(token.valueUsd) }));
       const stableUsd = rounded(
         allTokens.filter((token) => token.kind === "stable").reduce((sum, token) => sum + token.valueUsd, 0)
       );
@@ -1231,7 +1224,7 @@ export async function refreshOnchainBreakdown(
     debtUsd: rounded(wallet.debtUsd),
     netUsd: rounded(wallet.netUsd),
     tokens: wallet.tokens
-      .map((token) => ({ ...token, amount: rounded(token.amount), valueUsd: rounded(token.valueUsd) }))
+      .map((token) => ({ ...token, valueUsd: rounded(token.valueUsd) }))
       .sort((left, right) => right.valueUsd - left.valueUsd)
       .slice(0, 12),
   });
@@ -1266,7 +1259,7 @@ export async function refreshOnchainBreakdown(
       symbol: holding.symbol,
       chain: holding.chain,
       chainName: holding.chainName,
-      amount: rounded(holding.amount),
+      amount: holding.amount,
       price: holding.amount > 0 ? holding.valueUsd / holding.amount : 0,
       valueUsd: rounded(holding.valueUsd),
       kind: holding.kind,
@@ -1275,7 +1268,7 @@ export async function refreshOnchainBreakdown(
       wallets: [...holding.wallets.values()]
         .map((share) => ({
           ...share,
-          amount: rounded(share.amount),
+          amount: share.amount,
           valueUsd: rounded(share.valueUsd),
         }))
         .sort((left, right) => right.valueUsd - left.valueUsd),
@@ -1291,7 +1284,7 @@ export async function refreshOnchainBreakdown(
     dapps,
     tokens,
     tokensTotalUsd: rounded(tokens.reduce((sum, token) => sum + token.valueUsd, 0)),
-    tokenSource: activeTokenSource(),
+    tokenSource: Object.values(tokenStore).some(entry => entry.source === "rabby-public") ? "rabby-public" : activeTokenSource(),
     cachedWallets,
     partial: cachedWallets > 0,
     rateLimitedUntil: publicBlocked() ? new Date(getPublicBlockedUntil()).toISOString() : null,

@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { TokenHolding } from "@/lib/types";
-import { amountNum, priceUsd, shortAddr, usd } from "./format";
+import type { TokenAuditSummary, TokenHolding } from "@/lib/types";
+import { amountNum, priceUsd, shortAddr, timeAgo, usd } from "./format";
 import { localChainIcon, TokenIcon } from "./TokenIcon";
 
 function percent(value: number, total: number) {
@@ -11,7 +11,9 @@ function percent(value: number, total: number) {
 }
 
 interface TokenGroup {
+  key: string;
   symbol: string;
+  identityConflict: boolean;
   chains: TokenHolding[];
   amount: number;
   valueUsd: number;
@@ -21,15 +23,29 @@ interface TokenGroup {
   wallets: Array<{ walletId: string; walletName: string; address: string; amount: number; valueUsd: number }>;
 }
 
-/** 同名代币跨链合并成一个组（图1：ETH 在不同链上只占一行，点开才看各链明细）。 */
+/** Symbols group display rows only. Any same-chain identity conflict splits the whole symbol group. */
 function groupTokens(tokens: TokenHolding[]): TokenGroup[] {
+  const identities = new Map<string, Set<string>>();
+  const conflictingSymbols = new Set<string>();
+  for (const token of tokens) {
+    const symbol = token.symbol.toUpperCase();
+    const chainKey = `${symbol}:${token.chain}`;
+    const ids = identities.get(chainKey) ?? new Set<string>();
+    ids.add(token.id);
+    identities.set(chainKey, ids);
+    if (ids.size > 1) conflictingSymbols.add(symbol);
+  }
   const map = new Map<string, TokenGroup>();
   for (const token of tokens) {
-    const key = token.symbol.toUpperCase();
+    const symbol = token.symbol.toUpperCase();
+    const identityConflict = conflictingSymbols.has(symbol);
+    const key = identityConflict ? `${symbol}:${token.chain}:${token.id}` : symbol;
     const group =
       map.get(key) ||
       ({
+        key,
         symbol: token.symbol,
+        identityConflict,
         chains: [],
         amount: 0,
         valueUsd: 0,
@@ -62,23 +78,43 @@ function groupTokens(tokens: TokenHolding[]): TokenGroup[] {
   return list.sort((left, right) => right.valueUsd - left.valueUsd);
 }
 
-/** DeBank 的 Wallet 版式 + 多钱包/多链合并：同名代币一行，点开看链与钱包明细。 */
+function auditWalletStatus(wallet: TokenAuditSummary["wallets"][number], now: number) {
+  if (wallet.status === "error") return "error";
+  if (wallet.status === "missing" || !wallet.updatedAt) return "missing";
+  const at = Date.parse(wallet.updatedAt);
+  return Number.isFinite(at) && at <= now && now - at <= 10 * 60 * 1000 ? "fresh" : "stale";
+}
+
+/** Token quantities and their freshness are independent of wallet-total refreshes. */
 export function TokenTable({
   tokens,
   onchainUsd,
   chainFilter,
   partial,
   tokenSource,
+  tokenAudit,
+  now = Date.now(),
 }: {
   tokens: TokenHolding[];
   onchainUsd: number;
   chainFilter: string;
   partial?: boolean;
   tokenSource?: string;
+  tokenAudit?: TokenAuditSummary;
+  now?: number;
 }) {
   const [query, setQuery] = useState("");
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [dustOpen, setDustOpen] = useState(false);
+  const walletAudits = useMemo(
+    () => new Map(tokenAudit?.wallets.map((wallet) => [wallet.walletId, wallet]) ?? []),
+    [tokenAudit]
+  );
+  const auditCounts = useMemo(() => {
+    const counts = { fresh: 0, stale: 0, missing: 0, error: 0 };
+    for (const wallet of tokenAudit?.wallets ?? []) counts[auditWalletStatus(wallet, now)] += 1;
+    return counts;
+  }, [tokenAudit, now]);
 
   const filtered = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -109,7 +145,7 @@ export function TokenTable({
   const coverage = onchainUsd > 0 ? (shownTotal / onchainUsd) * 100 : 0;
 
   const renderCard = (group: TokenGroup) => {
-    const key = group.symbol.toUpperCase();
+    const key = group.key;
     const open = openKey === key;
     const share = percent(group.valueUsd, shownTotal);
     const topChain = group.chains[0];
@@ -134,6 +170,7 @@ export function TokenTable({
               <b>{group.symbol}</b>
               <span>
                 {group.kind === "stable" ? "稳定币" : group.kind === "native" ? "主链币" : "现货"}
+                {group.identityConflict ? " · 同名资产独立显示" : ""}
               </span>
             </span>
           </div>
@@ -144,7 +181,7 @@ export function TokenTable({
             </div>
             <div>
               <span>数量</span>
-              <b className="num">
+              <b className="num" title={`${group.amount} ${group.symbol}`}>
                 {amountNum(group.amount)} {group.symbol}
               </b>
             </div>
@@ -190,7 +227,7 @@ export function TokenTable({
                     />
                     {chain.chainName}
                   </span>
-                  <span className="amount">
+                  <span className="amount" title={`${chain.amount} ${chain.symbol} · ${chain.id}`}>
                     {amountNum(chain.amount)} · {usd(chain.valueUsd)}
                   </span>
                 </div>
@@ -200,19 +237,27 @@ export function TokenTable({
               各钱包持仓
             </div>
             <div className="detail-grid">
-              {group.wallets.map((wallet) => (
+              {group.wallets.map((wallet) => {
+                const audit = walletAudits.get(wallet.walletId);
+                const status = audit ? auditWalletStatus(audit, now) : "missing";
+                const statusLabel = status === "fresh" ? "10 分钟内" : status === "error" ? "读取失败" : status === "stale" ? "明细过期" : "未获取明细";
+                return (
                 <div className="detail-item" key={wallet.walletId}>
                   <span className="name">
                     {wallet.walletName}
                     <span className="small" style={{ marginLeft: 6 }}>
                       {shortAddr(wallet.address)}
                     </span>
+                    <span className="small" style={{ marginLeft: 6 }} title={audit?.updatedAt ?? "无成功更新记录"}>
+                      明细 {timeAgo(audit?.updatedAt ?? null)} · {statusLabel}
+                    </span>
                   </span>
-                  <span className="amount">
+                  <span className="amount" title={`${wallet.amount} ${group.symbol}`}>
                     {amountNum(wallet.amount)} · {usd(wallet.valueUsd)}
                   </span>
                 </div>
-              ))}
+              );
+              })}
             </div>
           </div>
         )}
@@ -226,8 +271,8 @@ export function TokenTable({
         <div className="section-title">
           <h2>代币</h2>
           <span className="hint">
-            {groups.length} 个币种
-            {chainFilter !== "all" ? "（已按链筛选）" : " · 同名代币已跨链合并"}
+            {groups.length} 项
+            {chainFilter !== "all" ? "（已按链筛选）" : " · 按符号分组"}
           </span>
         </div>
         <div className="inline">
@@ -245,6 +290,19 @@ export function TokenTable({
           </span>
           <span className="section-total num">{usd(shownTotal)}</span>
         </div>
+      </div>
+
+      <div className="small" style={{ marginBottom: 10 }} role="status">
+        {tokenAudit ? (
+          <>
+            全部代币巡检 {auditCounts.fresh}/{tokenAudit.walletCount} 钱包在 10 分钟内
+            {` · 过期 ${auditCounts.stale} · 失败 ${auditCounts.error}`}
+            {auditCounts.missing > 0 ? ` · 未获取 ${auditCounts.missing}` : ""}
+            <span title={tokenAudit.oldestUpdatedAt ?? "无成功更新记录"}>
+              {` · 最早明细 ${timeAgo(tokenAudit.oldestUpdatedAt)}`}
+            </span>
+          </>
+        ) : "全部代币巡检：尚无明细核验结果"}
       </div>
 
       {groups.length ? (

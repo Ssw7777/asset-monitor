@@ -18,6 +18,7 @@ import type {
 import { deriveFlowEventsFromSnapshots, PERSISTED_FLOW_LIMIT, PERSISTED_FLOW_MIN_USD } from "./flows";
 import { BASELINE, MIGRATION_WALLETS, SEED_MANUAL, seedWallets } from "./seed";
 import { WALLET_LIMIT, normalizeAddress } from "./wallets";
+import { auditTokens } from "./token-audit";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const LOCAL_STORE = path.join(DATA_DIR, "store.json");
@@ -762,6 +763,7 @@ export function publicState(s: PortfolioState) {
   }));
   return {
     ...rest,
+    onchainBreakdown: s.onchainBreakdown ? { ...s.onchainBreakdown, tokenAudit: auditTokens(s) } : s.onchainBreakdown,
     snapshots,
     snapshotCount: s.snapshots.length,
     snapshotLimit: SNAPSHOT_LIMIT,

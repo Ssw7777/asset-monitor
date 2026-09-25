@@ -1,10 +1,16 @@
 import type { TokenLine } from "../types";
 import { nextZerionKey, zerionKeys, zerionRequest } from "./zerion-keys";
+import { readZerionPositionPages, type PositionPartialReason } from "./zerion-position-parser";
 
 export type TokenSource = "debank" | "zerion" | "rabby-public" | "none";
 
 export interface ProviderToken extends TokenLine {
   chain: string;
+  /** Provider-qualified identity; do not group assets by ticker alone. */
+  assetId?: string;
+  contractAddress?: string;
+  /** Lossless provider decimal; amount remains a Number for existing chart consumers. */
+  amountExact?: string;
 }
 
 export interface ProviderResult {
@@ -12,6 +18,10 @@ export interface ProviderResult {
   unpricedCount: number;
   unpricedByChain: Record<string, number>;
   coveredChains: string[];
+  /** Complete provider response, not a guarantee that the provider supports every chain. */
+  complete?: boolean;
+  pagesFetched?: number;
+  partialReason?: PositionPartialReason;
   /** 全部原始仓位行（含 position_type），供直连层做仓位代币分类。 */
   raw?: Array<{ symbol: string; chain: string; type: string; amount: number; valueUsd: number }>;
 }
@@ -160,7 +170,7 @@ function collect(
     const symbol = String(row.symbol || "").trim();
     if (!symbol) continue;
     const amount = number(row.amount);
-    if (!amount || Math.abs(amount) < 1e-9) continue;
+    if (!amount) continue;
     const valueUsd = Math.abs(number(row.valueUsd));
     if (valueUsd < MIN_VALUE_USD) {
       unpricedCount += 1;
@@ -176,6 +186,9 @@ function collect(
       isCore: row.isCore === true,
       logoUrl: row.logoUrl,
       chain: row.chain,
+      assetId: row.assetId,
+      contractAddress: row.contractAddress,
+      amountExact: row.amountExact,
     });
   }
   tokens.sort((left, right) => right.valueUsd - left.valueUsd);
@@ -183,76 +196,50 @@ function collect(
 }
 
 /**
- * Zerion 免费版：一个请求就能拿到该地址在所有链上的代币仓位，含价格与图标。
+ * Zerion 服务商覆盖范围内的仓位；分页未完成绝不可当作全量缓存。
  * 官方文档：https://developers.zerion.io — 用 Basic 认证，key 作为用户名。
  */
 export async function fetchZerionTokens(
   address: string,
-  opts: { deadlineMs?: number; includeAllPositions?: boolean } = {}
+  opts: {
+    deadlineMs?: number;
+    includeAllPositions?: boolean;
+    maxPages?: number;
+    beforeRequest?: () => boolean | Promise<boolean>;
+  } = {}
 ): Promise<ProviderResult | null> {
   const key = nextZerionKey();
   if (!key) return null;
-  const remainingMs = opts.deadlineMs == null ? 20_000 : opts.deadlineMs - Date.now();
-  if (remainingMs < 750) return null;
-  return zerionRequest(async () => {
-    try {
-      const filter = opts.includeAllPositions ? "" : "&filter[positions]=only_simple";
-      const response = await fetch(
-        `https://api.zerion.io/v1/wallets/${address}/positions/?currency=usd&page[size]=100${filter}`,
-        {
-          headers: {
-            Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`,
-            Accept: "application/json",
-          },
-          cache: "no-store",
-          signal: AbortSignal.timeout(Math.min(20_000, remainingMs)),
-        }
-      );
-      if (!response.ok) return null;
-      const body = (await response.json()) as {
-        data?: Array<{
-          id?: string;
-          attributes?: {
-            position_type?: string;
-            quantity?: { float?: number };
-            value?: number;
-            price?: number;
-            fungible_info?: { symbol?: string; name?: string; icon?: { url?: string } };
-          };
-          relationships?: { chain?: { data?: { id?: string } } };
-        }>;
-      };
-      if (!Array.isArray(body.data)) return null;
-      const rows = body.data
-        .map((item) => {
-          const attributes = item.attributes || {};
-          const symbol = String(attributes.fungible_info?.symbol || "");
-          const amount = number(attributes.quantity?.float);
-          const price = number(attributes.price);
-          const valueUsd = number(attributes.value) || Math.abs(amount * price);
-          return {
-            symbol,
-            amount,
-            valueUsd,
-            type: String(attributes.position_type || "wallet"),
-            tokenId: String(item.id || symbol),
-            logoUrl: attributes.fungible_info?.icon?.url,
-            chain: normalizeChainId(String(item.relationships?.chain?.data?.id || "unknown")),
-          };
-        })
-        .filter((row) => row.symbol);
-      const result = collect(rows);
-      result.coveredChains = ["*"];
-      result.raw = rows.map((row) => ({
-        symbol: row.symbol,
-        chain: row.chain,
-        type: row.type,
-        amount: row.amount,
-        valueUsd: row.valueUsd,
-      }));
-      return result;
-    } catch {
-      return null;
-    }
-  });
+  const deadlineMs = opts.deadlineMs ?? Date.now() + 20_000;
+  if (deadlineMs - Date.now() < 750) return null;
+  const filter = opts.includeAllPositions ? "no_filter" : "only_simple";
+  const initialUrl = `https://api.zerion.io/v1/wallets/${encodeURIComponent(address)}/positions/?currency=usd&filter[positions]=${filter}&filter[trash]=only_non_trash`;
+  const pages = await readZerionPositionPages(initialUrl, (url) => zerionRequest(async () => {
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs < 750) throw new Error("zerion_deadline");
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}`,
+        Accept: "application/json",
+      },
+      cache: "no-store",
+      redirect: "manual",
+      signal: AbortSignal.timeout(Math.min(20_000, remainingMs)),
+    });
+    return { status: response.status, body: response.status === 200 ? await response.json() : null };
+  }), normalizeChainId, { ...opts, deadlineMs });
+  if (!pages) return null;
+  const result = collect(pages.rows);
+  result.complete = pages.complete;
+  result.pagesFetched = pages.pagesFetched;
+  result.partialReason = pages.partialReason;
+  result.coveredChains = pages.complete ? ["*"] : [];
+  result.raw = pages.rows.map((row) => ({
+    symbol: row.symbol,
+    chain: row.chain,
+    type: row.type,
+    amount: row.amount,
+    valueUsd: row.valueUsd,
+  }));
+  return result;
 }

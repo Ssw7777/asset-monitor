@@ -9,6 +9,11 @@ export interface TokenLine {
   valueUsd: number;
   /** DeBank token id, e.g. `eth` or `0x…` */
   tokenId: string;
+  assetId?: string;
+  contractAddress?: string;
+  /** Original upstream decimal, retained separately from floating-point chart values. */
+  amountExact?: string;
+  updatedAt?: string;
   kind: TokenKind;
   isCore: boolean;
   /** 代币图标（DeBank CDN），拿不到时前端回退为字母图标 */
@@ -201,6 +206,8 @@ export interface OnchainBreakdown {
   tokensTotalUsd: number;
   /** 当前生效的代币数据源（debank / zerion / rabby-public） */
   tokenSource?: "debank" | "zerion" | "rabby-public" | "none";
+  /** Independent token-detail checks; wallet-total freshness cannot stand in for this. */
+  tokenAudit?: TokenAuditSummary;
   /** true 表示部分地址沿用上次成功数据（限流或失败） */
   partial?: boolean;
   /** 本轮沿用缓存/上次成功数据的地址数量 */
@@ -220,12 +227,42 @@ export interface EncryptedSecretsBlob {
 /** 某个地址的代币明细缓存（服务端持久化，避免每次冷启动都去消耗 API 额度）。 */
 export interface WalletTokenCacheEntry {
   at: string;
+  source?: "debank" | "zerion" | "rabby-public";
+  lastError?: string;
+  chainUpdatedAt?: Record<string, string>;
+  chainAttemptAt?: Record<string, string>;
+  chainErrors?: Record<string, string>;
+  tokenErrors?: Record<string, string>;
+  tokenAttemptAt?: Record<string, string>;
+  /** Includes zero/unpriced known tokens so disappearance never stops future checks. */
+  inventory?: Record<string, { amount: number; updatedAt: string }>;
   /** 最近一次向代币数据源发起请求的时间；失败也记录，用于严格控制每日额度。 */
   lastAttemptAt?: string;
   tokens: Array<TokenLine & { chain: string }>;
   unpricedCount: number;
   unpricedByChain: Record<string, number>;
   coveredChains: string[];
+}
+
+export interface TokenAuditSummary {
+  checkedAt: string;
+  walletCount: number;
+  freshWallets: number;
+  staleWallets: number;
+  missingWallets: number;
+  failedWallets: number;
+  invalidRows: number;
+  duplicateRows: number;
+  aggregateMismatches: number;
+  oldestUpdatedAt: string | null;
+  healthy: boolean;
+  wallets: Array<{
+    walletId: string;
+    updatedAt: string | null;
+    source: string;
+    status: "fresh" | "stale" | "missing" | "error";
+    tokenCount: number;
+  }>;
 }
 
 /** 某个地址的 DeFi 协议明细缓存（服务端持久化，避免 Vercel 冷启动后丢失多钱包仓位）。 */

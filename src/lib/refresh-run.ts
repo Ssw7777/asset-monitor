@@ -20,6 +20,8 @@ import {
   writeStore,
 } from "@/lib/store";
 import type { ExchangeBalance, PortfolioState } from "@/lib/types";
+import { applySpecificTokenObservation, applyTokenObservation, parseRabbyTokenObservation } from "@/lib/onchain/rabby-token-observation";
+import { auditTokens } from "@/lib/token-audit";
 
 const APP_AUDIT_REFRESH_MS = 5.5 * 60 * 60 * 1000;
 const APP_AUDIT_BATCH_SIZE = 10;
@@ -266,6 +268,8 @@ export interface WalletObservationInput {
   observedAt: string;
   appObservation?: unknown;
   protocolObservation?: unknown;
+  tokenObservations?: Array<{ chain: string; observation?: unknown; observedAt: string; tokenError?: string }>;
+  tokenSpecificObservations?: Array<{requestedUuids: string[]; observation?: unknown; observedAt: string; tokenError?: string}>;
 }
 
 export class WalletObservationValidationError extends Error {
@@ -292,6 +296,8 @@ type ParsedWalletObservation = {
   detail: NonNullable<ReturnType<typeof parseTotalDetail>>;
   appDetail?: NonNullable<ReturnType<typeof parseAppDetail>>;
   protocolDetail?: NonNullable<ReturnType<typeof parseProtocolDetail>>;
+  tokenDetails?: Array<{ chain: string; detail: ReturnType<typeof parseRabbyTokenObservation>; at: string; error?: string }>;
+  tokenSpecificObservations?: WalletObservationInput["tokenSpecificObservations"];
 };
 
 function parseWalletObservations(
@@ -337,6 +343,17 @@ function parseWalletObservations(
     ) {
       throw new WalletObservationValidationError("Invalid wallet observation timestamp");
     }
+    if (entry.tokenObservations !== undefined && (!Array.isArray(entry.tokenObservations) || entry.tokenObservations.length > 30)) throw new WalletObservationValidationError("Invalid token observations");
+    const tokenDetails = entry.tokenObservations?.map(row => {
+      const tokenObservedMs = Date.parse(row?.observedAt);
+      if (!row || !/^[a-z0-9_-]{1,40}$/.test(row.chain) || !Number.isFinite(tokenObservedMs) || tokenObservedMs > receivedMs + 60_000 || tokenObservedMs < receivedMs - 15 * 60_000) throw new WalletObservationValidationError("Invalid token observation timestamp or chain");
+      return { chain: row.chain, at: new Date(tokenObservedMs).toISOString(), detail: parseRabbyTokenObservation(row.observation, row.chain), error: /^[a-z0-9_]{1,60}$/.test(row.tokenError ?? "") ? row.tokenError : "invalid_payload" };
+    });
+    if (entry.tokenSpecificObservations !== undefined && (!Array.isArray(entry.tokenSpecificObservations) || entry.tokenSpecificObservations.length > 3)) throw new WalletObservationValidationError("Invalid token batches");
+    for (const batch of entry.tokenSpecificObservations ?? []) {
+      const at = Date.parse(batch?.observedAt);
+      if (!Number.isFinite(at) || at > receivedMs + 60_000 || at < receivedMs - 15 * 60_000 || !Array.isArray(batch.requestedUuids) || batch.requestedUuids.length > 100 || batch.requestedUuids.some(id => !/^[a-z0-9_-]{1,40}:(0x[a-f0-9]{40}|[a-z0-9_-]{1,40})$/.test(id))) throw new WalletObservationValidationError("Invalid token batch identifiers or timestamp");
+    }
     return {
       normalized,
       observedMs,
@@ -344,6 +361,8 @@ function parseWalletObservations(
       detail,
       ...(appDetail ? { appDetail } : {}),
       ...(protocolDetail ? { protocolDetail } : {}),
+      ...(tokenDetails ? { tokenDetails } : {}),
+      tokenSpecificObservations: entry.tokenSpecificObservations,
     };
   });
 }
@@ -371,10 +390,12 @@ export async function ingestWalletObservations(
     const wallets = [...state.wallets];
     const chainCache = { ...(state.chainCache || {}) };
     const protocolCache = { ...(state.protocolCache || {}) };
+    const tokenCache = { ...(state.tokenCache || {}) };
     let applied = 0;
     let totalRefreshed = 0;
     let appRefreshed = 0;
     let protocolsRefreshed = 0;
+    let tokensRefreshed = 0;
     let latestAppliedObservationMs = 0;
 
     for (const entry of parsed) {
@@ -403,6 +424,18 @@ export async function ingestWalletObservations(
       const applyProtocol =
         !!entry.protocolDetail &&
         (!Number.isFinite(existingProtocolMs) || existingProtocolMs < entry.observedMs);
+      let applyToken = false;
+      for (const batch of entry.tokenSpecificObservations ?? []) {
+        tokenCache[entry.normalized] = applySpecificTokenObservation(tokenCache[entry.normalized], batch.requestedUuids, batch.observation, batch.observedAt, /^[a-z0-9_]{1,60}$/.test(batch.tokenError ?? "") ? batch.tokenError : undefined);
+        applyToken = true;
+      }
+      for (const token of entry.tokenDetails ?? []) {
+        const before = tokenCache[entry.normalized];
+        const after = applyTokenObservation(before, token.detail, token.at, token.chain, token.error);
+        applyToken = applyToken || after !== before;
+        tokenCache[entry.normalized] = after;
+        if (after !== before && token.detail) tokensRefreshed++;
+      }
 
       if (applyApp && entry.appDetail) {
         protocolCache[entry.normalized] = {
@@ -469,12 +502,13 @@ export async function ingestWalletObservations(
         totalRefreshed += 1;
         latestAppliedObservationMs = Math.max(latestAppliedObservationMs, entry.observedMs);
       }
-      if (applyTotal || applyApp || applyProtocol) applied += 1;
+      if (applyTotal || applyApp || applyProtocol || applyToken) applied += 1;
     }
 
     state.wallets = wallets;
     state.chainCache = chainCache;
     state.protocolCache = protocolCache;
+    state.tokenCache = tokenCache;
     if (latestAppliedObservationMs > 0) {
       const previousWalletObservationMs = state.lastWalletObservationAt
         ? new Date(state.lastWalletObservationAt).getTime()
@@ -505,9 +539,6 @@ export async function ingestWalletObservations(
     const protocolsStale = wallets.filter(
       (wallet) => !cacheFresh(protocolCache[wallet.address.toLowerCase()]?.at)
     ).length;
-    if (applied > 0 && allWalletsFresh && appsStale === 0 && protocolsStale === 0) {
-      state.lastFullRefreshAt = new Date(receivedMs).toISOString();
-    }
     if (applied > 0) {
       try {
         state.onchainBreakdown = await refreshOnchainBreakdown(
@@ -521,11 +552,13 @@ export async function ingestWalletObservations(
         console.error("[refresh] observed-wallet breakdown rebuild failed", error);
       }
     }
+    if (applied > 0 && allWalletsFresh && appsStale === 0 && protocolsStale === 0 && auditTokens(state, receivedMs).healthy) state.lastFullRefreshAt = new Date(receivedMs).toISOString();
     return {
       applied,
       totalRefreshed,
       appRefreshed,
       protocolsRefreshed,
+      tokensRefreshed,
       appsStale,
       protocolsStale,
     };
@@ -537,6 +570,7 @@ export async function ingestWalletObservations(
     totalRefreshed,
     appRefreshed,
     protocolsRefreshed,
+    tokensRefreshed,
     appsStale,
     protocolsStale,
   } = mutation.result;
@@ -559,6 +593,7 @@ export async function ingestWalletObservations(
       skipped,
       appRefreshed,
       protocolsRefreshed,
+      tokensRefreshed,
       totalRefreshed,
       ...(applied === 0 ? { skippedReason: "older_or_duplicate_observation" } : {}),
     },
