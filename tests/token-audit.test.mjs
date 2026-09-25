@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { auditTokens } from '../src/lib/token-audit.ts';
 const now = Date.parse('2026-09-25T08:00:00Z');
 const row = { chain: 'eth', symbol: 'ETH', tokenId: 'eth', amount: .00000123456789, valueUsd: 2, kind: 'native', isCore: true };
-const seed = () => ({wallets: [{id: 'w', address: '0xABC'}], tokenCache: {'0xabc': {at: new Date(now).toISOString(), tokens: [row], coveredChains: ['*']}}, onchainBreakdown: {tokens: [{chain: 'eth', symbol: 'ETH', wallets: [{walletId: 'w', amount: row.amount, valueUsd: row.valueUsd}]}]}});
+const seed = () => ({wallets: [{id: 'w', address: '0xABC'}], tokenCache: {'0xabc': {at: new Date(now).toISOString(), tokens: [row], coveredChains: ['*']}}, onchainBreakdown: {tokens: [{id:'eth:eth',chain: 'eth', symbol: 'ETH', wallets: [{walletId: 'w', amount: row.amount, valueUsd: row.valueUsd}]}]}});
 test('all tokens are audited at original quantity precision', () => { assert.equal(auditTokens(seed(), now).healthy, true); });
+test('provider ticker aliases do not masquerade as quantity discrepancies', () => { const s = seed(); s.onchainBreakdown.tokens[0].symbol='Ethereum'; assert.equal(auditTokens(s, now).aggregateMismatches,0); });
 test('a fresh wallet total cannot hide stale token detail', () => { const s = seed(); s.tokenCache['0xabc'].at = new Date(now - 11*60000).toISOString(); assert.equal(auditTokens(s, now).staleWallets, 1); });
 test('two decimal quantity truncation is detected', () => { const s = seed(); s.onchainBreakdown.tokens[0].wallets[0].amount = 0; assert.equal(auditTokens(s, now).aggregateMismatches, 1); });
 test('missing, partial, duplicate, invalid and failed data never pass', () => {

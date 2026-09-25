@@ -38,7 +38,9 @@ export function auditTokens(state: Pick<PortfolioState, "wallets" | "tokenCache"
       const identity = `${row.chain}:${row.tokenId.toLowerCase()}`;
       if (seen.has(identity)) duplicateRows++;
       seen.add(identity);
-      const key = `${wallet.id}:${row.chain}:${row.symbol.toUpperCase()}`;
+      const rawId = row.contractAddress?.trim() || row.assetId?.trim() || row.tokenId.trim();
+      const id = /^0x[0-9a-f]+$/i.test(rawId) ? rawId.toLowerCase() : rawId;
+      const key = `${wallet.id}:${row.chain}:${id}`;
       const sum = expected.get(key) ?? { amount: 0, value: 0 };
       sum.amount += row.amount;
       sum.value += row.valueUsd;
@@ -52,7 +54,7 @@ export function auditTokens(state: Pick<PortfolioState, "wallets" | "tokenCache"
   const actual = new Map<string, { amount: number; value: number }>();
   for (const token of state.onchainBreakdown?.tokens ?? []) {
     for (const wallet of token.wallets) {
-      const key = `${wallet.walletId}:${token.chain}:${token.symbol.toUpperCase()}`;
+      const key = `${wallet.walletId}:${token.id}`;
       const sum = actual.get(key) ?? { amount: 0, value: 0 };
       sum.amount += wallet.amount;
       sum.value += wallet.valueUsd;
