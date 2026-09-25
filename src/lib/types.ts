@@ -234,6 +234,7 @@ export interface WalletTokenCacheEntry {
   chainErrors?: Record<string, string>;
   tokenErrors?: Record<string, string>;
   tokenAttemptAt?: Record<string, string>;
+  identityAttemptAt?: string;
   /** Includes zero/unpriced known tokens so disappearance never stops future checks. */
   inventory?: Record<string, { amount: number; updatedAt: string }>;
   /** 最近一次向代币数据源发起请求的时间；失败也记录，用于严格控制每日额度。 */

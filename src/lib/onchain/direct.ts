@@ -1,5 +1,6 @@
 import { fetchZerionTokens, normalizeChainId } from "./token-providers";
 import { nextZerionKey, zerionRequest } from "./zerion-keys";
+import { parseZerionPositionPage, type ParsedPosition } from "./zerion-position-parser";
 
 /**
  * 直连数据源层：不经 Rabby/DeBank 公共接口，直接向官方基础设施查询钱包余额。
@@ -160,6 +161,7 @@ export async function fetchZerionDefi(
 export interface ZerionAppAudit {
   chains: Array<{ id: string; name: string; valueUsd: number }>;
   protocols: Record<string, unknown>[];
+  tokenIdentities?: ParsedPosition[];
 }
 
 /**
@@ -252,7 +254,10 @@ export async function fetchZerionAppAudit(
           ],
         });
       }
-      return { chains, protocols };
+      const parsed = parseZerionPositionPage(body, normalizeChainId);
+      const tokenIdentities = parsed && parsed.invalidRows === 0 && !parsed.next
+        ? parsed.rows.filter(row => row.type === "wallet") : undefined;
+      return { chains, protocols, tokenIdentities };
     } catch {
       return null;
     }

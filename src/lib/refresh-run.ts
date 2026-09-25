@@ -20,7 +20,7 @@ import {
   writeStore,
 } from "@/lib/store";
 import type { ExchangeBalance, PortfolioState } from "@/lib/types";
-import { applySpecificTokenObservation, applyTokenObservation, parseRabbyTokenObservation } from "@/lib/onchain/rabby-token-observation";
+import { applySpecificTokenObservation, applyTokenObservation, parseRabbyTokenObservation, tokenUuid } from "@/lib/onchain/rabby-token-observation";
 import { auditTokens } from "@/lib/token-audit";
 
 const APP_AUDIT_REFRESH_MS = 5.5 * 60 * 60 * 1000;
@@ -59,7 +59,10 @@ async function refreshStaleAppAudits(seedState: PortfolioState) {
       const appAt = entry?.appAt;
       const appAtMs = timestampMs(appAt);
       const lastAttempt = timestampMs(entry?.appLastAttemptAt);
-      return (appAtMs === 0 || nowMs - appAtMs >= APP_AUDIT_REFRESH_MS) &&
+      const tokens = seedState.tokenCache?.[wallet.address.toLowerCase()];
+      // One-time metadata migration reuses the existing App response. No second provider read.
+      const legacyIdentities = !tokens?.identityAttemptAt && tokens?.tokens.some(token => !tokenUuid(token));
+      return legacyIdentities || (appAtMs === 0 || nowMs - appAtMs >= APP_AUDIT_REFRESH_MS) &&
         (lastAttempt === 0 || nowMs - lastAttempt >= APP_AUDIT_RETRY_MS);
     })
     .sort((left, right) => {
@@ -88,6 +91,7 @@ async function refreshStaleAppAudits(seedState: PortfolioState) {
         ...(protocolCache[address] ?? { at: "", protocols: [] }),
         appLastAttemptAt: attemptedAt,
       };
+      if (state.tokenCache?.[address]) state.tokenCache[address].identityAttemptAt = attemptedAt;
     }
     state.protocolCache = protocolCache;
   });
@@ -127,6 +131,18 @@ async function refreshStaleAppAudits(seedState: PortfolioState) {
       if (index == null) continue;
 
       const observedMs = timestampMs(observation.observedAt);
+      const tokenEntry = state.tokenCache?.[observation.address];
+      if (tokenEntry && observation.audit.tokenIdentities) {
+        // Match the exact old position ID; do not merge unrelated assets just by symbol.
+        const identities = new Map(observation.audit.tokenIdentities.map(token => [token.positionId, token]));
+        const nativeSymbols: Record<string,string> = {eth:"ETH",arb:"ETH",op:"ETH",base:"ETH",linea:"ETH",hood:"ETH",abs:"ETH",era:"ETH",scrl:"ETH",blast:"ETH",katana:"ETH",bsc:"BNB",matic:"POL",avax:"AVAX"};
+        tokenEntry.tokens = tokenEntry.tokens.map(token => {
+          const found = identities.get(token.tokenId);
+          if (!found || found.chain !== token.chain || found.symbol.toUpperCase() !== token.symbol.toUpperCase()) return token;
+          const nativeId = !found.contractAddress && nativeSymbols[found.chain] === found.symbol.toUpperCase() ? found.chain : undefined;
+          return { ...token, tokenId: nativeId || found.tokenId, contractAddress: found.contractAddress, assetId: nativeId ? undefined : found.assetId };
+        });
+      }
       const previousProtocol = protocolCache[observation.address] ?? {
         at: "",
         protocols: [],
