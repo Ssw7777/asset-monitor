@@ -67,6 +67,9 @@ export async function GET(req: NextRequest) {
       lastSuccessAt: wallet.lastSuccess?.at ?? null,
       protocolUpdatedAt: state.protocolCache?.[key]?.at ?? null,
       tokenAttemptAt: tokens?.lastAttemptAt ?? null,
+      tokenDiscoveryAt: Object.values(tokens?.chainAttemptAt ?? {})
+        .filter(at => Number.isFinite(Date.parse(at)))
+        .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null,
       needsRetry:
         !Number.isFinite(lastSuccessMs) ||
         lastSuccessMs > now + 60_000 ||
