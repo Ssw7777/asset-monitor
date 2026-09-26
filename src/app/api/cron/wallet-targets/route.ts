@@ -18,9 +18,8 @@ export async function GET(req: NextRequest) {
   }
 
   const state = await readStore();
-  // Keep the persisted order stable. Five independent GitHub runners fetch this
-  // manifest at slightly different instants; a freshness sort could reshuffle after
-  // the first write and make runners duplicate or skip an address.
+  // Preserve storage order for compatibility. The single-runner collector freezes
+  // this manifest once and schedules oldest successful observations first.
   const now = Date.now();
   const retryBefore = now - 8 * 60 * 1000;
   // App audits consume a limited authenticated quota. Keep that separate from
@@ -65,6 +64,9 @@ export async function GET(req: NextRequest) {
     return {
       id: wallet.id,
       address: wallet.address.toLowerCase(),
+      lastSuccessAt: wallet.lastSuccess?.at ?? null,
+      protocolUpdatedAt: state.protocolCache?.[key]?.at ?? null,
+      tokenAttemptAt: tokens?.lastAttemptAt ?? null,
       needsRetry:
         !Number.isFinite(lastSuccessMs) ||
         lastSuccessMs > now + 60_000 ||
