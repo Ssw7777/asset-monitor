@@ -13,6 +13,10 @@ export interface TokenLine {
   contractAddress?: string;
   /** Original upstream decimal, retained separately from floating-point chart values. */
   amountExact?: string;
+  quantitySource?: "rpc";
+  quantityBlock?: string;
+    priceUpdatedAt?: string;
+    valuationPrice?: number;
   updatedAt?: string;
   kind: TokenKind;
   isCore: boolean;
@@ -205,7 +209,7 @@ export interface OnchainBreakdown {
   /** 已取到明细的钱包代币合计，用于和链总额做“覆盖率”说明 */
   tokensTotalUsd: number;
   /** 当前生效的代币数据源（debank / zerion / rabby-public） */
-  tokenSource?: "debank" | "zerion" | "rabby-public" | "none";
+  tokenSource?: "debank" | "zerion" | "rabby-public" | "rpc" | "none";
   /** Independent token-detail checks; wallet-total freshness cannot stand in for this. */
   tokenAudit?: TokenAuditSummary;
   /** true 表示部分地址沿用上次成功数据（限流或失败） */
@@ -236,7 +240,8 @@ export interface WalletTokenCacheEntry {
   tokenAttemptAt?: Record<string, string>;
   identityAttemptAt?: string;
   /** Includes zero/unpriced known tokens so disappearance never stops future checks. */
-  inventory?: Record<string, { amount: number; updatedAt: string }>;
+  inventory?: Record<string, { amount: number; updatedAt: string; amountExact?: string; decimals?: number }>;
+  rpcTokenMetadata?: Record<string, TokenLine & {chain:string}>;
   /** 最近一次向代币数据源发起请求的时间；失败也记录，用于严格控制每日额度。 */
   lastAttemptAt?: string;
   tokens: Array<TokenLine & { chain: string }>;
@@ -246,6 +251,7 @@ export interface WalletTokenCacheEntry {
 }
 
 export interface TokenAuditSummary {
+  rpc?: { total: number; fresh: number; failed: number; oldestAt: string | null };
   checkedAt: string;
   walletCount: number;
   freshWallets: number;
@@ -271,6 +277,7 @@ export interface WalletProtocolCacheEntry {
   at: string;
   /** Last upstream attempt, including failures, so one bad address cannot retry every minute. */
   lastAttemptAt?: string;
+  lastError?: string;
   protocols: Record<string, unknown>[];
   /** DeBank App assets (for example Polymarket) are outside the normal chain total endpoint. */
   appAt?: string;
@@ -306,6 +313,12 @@ export interface WalletChainCacheEntry {
 }
 
 export interface PortfolioState {
+  rpcAudit?: {
+    cooldownUntil?: string;
+    usage: { month: string; reservedCu: number };
+    chains: Record<string, { lastAttemptAt: string; lastSuccessAt?: string; successful?: number; failed?: number; error?: string }>;
+    quantities: Record<string, { at: string; error?: string; amountExact?: string; decimals?: number; block?: string }>;
+  };
   /** Optimistic-concurrency token for the single persisted Turso document. Never exposed to clients. */
   storeRevision?: string;
   manual: ManualAsset[];

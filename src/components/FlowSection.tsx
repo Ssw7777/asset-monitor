@@ -137,13 +137,13 @@ export function FlowSection({
             : `还没有超过 ${minUsd} U 的变动记录：每轮刷新会自动比对并记录，时间越久记录越完整`}
         </div>
       )}
-      {pages > 1 && <div className="flow-pagination">
+      <div className="flow-pagination">
         <span className="small">{currentPage + 1} / {pages} 页 · 已载入 {events.length} 条</span>
         <div className="inline">
           <button className="btn btn-outline" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>上一页</button>
           <button className="btn btn-outline" disabled={currentPage === pages - 1} onClick={() => setPage(currentPage + 1)}>下一页</button>
         </div>
-      </div>}
+      </div>
     </section>
   );
 }

@@ -282,16 +282,19 @@ a {
   display: flex;
   flex: 1;
   flex-direction: column;
+  min-height: calc(36px + 8 * 64px);
 }
 
 .section-flows .flow-scroll > .trow {
-  flex: 1;
+  flex: 0 0 64px;
+  min-height: 64px;
 }
 
 .section-flows > .empty {
   display: grid;
   flex: 1;
   place-content: center;
+  min-height: calc(36px + 8 * 64px);
 }
 
 .flow-explanation { color: var(--muted); font-size: 12px; margin: -2px 0 12px; }

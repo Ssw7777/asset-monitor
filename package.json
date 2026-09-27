@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
+    "ethers": "6.17.0",
     "jose": "^6.0.12",
     "next": "^15.5.2",
     "react": "^19.1.1",

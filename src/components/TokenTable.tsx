@@ -293,6 +293,7 @@ export function TokenTable({
       </div>
 
       <div className="small" style={{ marginBottom: 10 }} role="status">
+        {tokenAudit?.rpc && <div>已知持币数量链上核验：{tokenAudit.rpc.fresh}/{tokenAudit.rpc.total} 项在 10 分钟内 · 失败 {tokenAudit.rpc.failed}；不代表价格、DeFi 和钱包总额同时更新。</div>}
         {tokenAudit ? (
           <>
             全部代币巡检 {auditCounts.fresh}/{tokenAudit.walletCount} 钱包在 10 分钟内
@@ -344,7 +345,7 @@ export function TokenTable({
                 ? "数据源：DeBank Pro"
                 : tokenSource === "zerion"
                   ? "数据源：Zerion"
-                  : "数据源：公共接口（限流时会缺）"}
+                  : tokenSource === "rpc" ? "数量：链上 RPC · 价格／发现：聚合接口" : "数据源：公共接口（限流时会缺）"}
               {coverage < 95 ? " · 差额为未取到明细或未计价资产，不计入总额" : partial ? " · 本轮有地址使用上次成功数据" : ""}
             </span>
           </div>

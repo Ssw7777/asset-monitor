@@ -226,6 +226,7 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
       : new Date().toISOString();
   return {
     storeRevision: typeof raw.storeRevision === "string" ? raw.storeRevision : undefined,
+    rpcAudit: raw.rpcAudit,
     manual: Array.isArray(raw.manual) ? raw.manual : d.manual,
     // Migration runs on every read: newly required addresses appear without touching existing rows.
     wallets: applyWalletMigrations(storedWallets),
@@ -732,6 +733,7 @@ export function computeTotals(s: PortfolioState) {
 export function publicState(s: PortfolioState) {
   const {
     storeRevision: _omitStoreRevision,
+    rpcAudit: _omitRpcAudit,
     encryptedSecrets: _omitSecrets,
     tokenCache: _omitTokenCache,
     protocolCache: _omitProtocolCache,
@@ -743,6 +745,7 @@ export function publicState(s: PortfolioState) {
     ...rest
   } = s;
   void _omitSecrets;
+  void _omitRpcAudit;
   void _omitStoreRevision;
   void _omitTokenCache;
   void _omitProtocolCache;

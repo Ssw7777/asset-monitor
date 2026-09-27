@@ -11,7 +11,7 @@ export function requiredTokenChains(state: Pick<PortfolioState, "tokenCache" | "
   ])];
 }
 
-export function auditTokens(state: Pick<PortfolioState, "wallets" | "tokenCache" | "onchainBreakdown" | "chainCache">, now = Date.now()): TokenAuditSummary {
+export function auditTokens(state: Pick<PortfolioState, "wallets" | "tokenCache" | "onchainBreakdown" | "chainCache" | "rpcAudit">, now = Date.now()): TokenAuditSummary {
   let invalidRows = 0;
   let duplicateRows = 0;
   let aggregateMismatches = 0;
@@ -69,7 +69,19 @@ export function auditTokens(state: Pick<PortfolioState, "wallets" | "tokenCache"
   }
   const count = (status: string) => wallets.filter(wallet => wallet.status === status).length;
   const freshWallets = count("fresh");
+  const rpcKeys = new Set<string>();
+  for (const wallet of state.wallets) {
+    const address=wallet.address.toLowerCase(),cache=state.tokenCache?.[address];
+    for(const uuid of Object.keys(cache?.inventory??{}))rpcKeys.add(`${address}:${uuid}`);
+    for(const token of cache?.tokens??[]){
+      const id=(token.contractAddress||token.tokenId).toLowerCase();
+      if(/^0x[a-f0-9]{40}$/.test(id)||id===token.chain)rpcKeys.add(`${address}:${token.chain}:${id}`);
+    }
+  }
+  const rpcRows=[...rpcKeys].map(key=>state.rpcAudit?.quantities[key]);
+  const rpcTimes=rpcRows.filter(r=>r&&!r.error).map(r=>Date.parse(r!.at)).filter(Number.isFinite);
   return {
+    rpc:state.rpcAudit?{total:rpcKeys.size,fresh:rpcRows.filter(r=>r&&!r.error&&now-Date.parse(r.at)<=TOKEN_FRESHNESS_MS&&Date.parse(r.at)<=now+60_000).length,failed:rpcRows.filter(r=>r?.error).length,oldestAt:rpcTimes.length?new Date(Math.min(...rpcTimes)).toISOString():null}:undefined,
     checkedAt: new Date(now).toISOString(), walletCount: wallets.length, freshWallets,
     staleWallets: count("stale"), missingWallets: count("missing"), failedWallets: count("error"),
     invalidRows, duplicateRows, aggregateMismatches,

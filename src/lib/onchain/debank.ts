@@ -455,13 +455,14 @@ async function fetchComplexProtocols(
   );
   for (const candidate of urls) {
     const response = await fetchJson(candidate.url, candidate.headers, 0);
-    if (response.data !== null) {
-      const protocols = unwrapArray(response.data);
+    const protocols = parseProtocolDetail(response.data);
+    if (protocols !== null) {
       store[normalized] = {
         ...store[normalized],
         protocols,
         at: attemptIso,
         lastAttemptAt: attemptIso,
+        lastError: undefined,
       };
       return protocols;
     }
@@ -1284,7 +1285,7 @@ export async function refreshOnchainBreakdown(
     dapps,
     tokens,
     tokensTotalUsd: rounded(tokens.reduce((sum, token) => sum + token.valueUsd, 0)),
-    tokenSource: Object.values(tokenStore).some(entry => entry.source === "rabby-public") ? "rabby-public" : activeTokenSource(),
+    tokenSource: Object.values(tokenStore).some(entry => entry.tokens.some(t=>t.quantitySource==='rpc')) ? "rpc" : Object.values(tokenStore).some(entry => entry.source === "rabby-public") ? "rabby-public" : activeTokenSource(),
     cachedWallets,
     partial: cachedWallets > 0,
     rateLimitedUntil: publicBlocked() ? new Date(getPublicBlockedUntil()).toISOString() : null,
