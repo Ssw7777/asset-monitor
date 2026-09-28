@@ -95,6 +95,8 @@ export async function GET(req: NextRequest) {
     tokenSource: state.onchainBreakdown?.tokenSource ?? null,
     tokenCount: state.onchainBreakdown?.tokens?.length ?? 0,
     tokenAudit: auditTokens(state, now),
+    marketAudit: state.marketAudit??null,
+    web3Audit:state.web3Audit??null,
     dappCount: state.onchainBreakdown?.dapps?.length ?? 0,
   });
 }

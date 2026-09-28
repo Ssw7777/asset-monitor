@@ -227,6 +227,9 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
   return {
     storeRevision: typeof raw.storeRevision === "string" ? raw.storeRevision : undefined,
     rpcAudit: raw.rpcAudit,
+    web3Audit: raw.web3Audit,
+    transactionHistory: raw.transactionHistory,
+    marketAudit: raw.marketAudit,
     manual: Array.isArray(raw.manual) ? raw.manual : d.manual,
     // Migration runs on every read: newly required addresses appear without touching existing rows.
     wallets: applyWalletMigrations(storedWallets),
@@ -734,6 +737,8 @@ export function publicState(s: PortfolioState) {
   const {
     storeRevision: _omitStoreRevision,
     rpcAudit: _omitRpcAudit,
+    web3Audit: _omitWeb3Audit,
+    transactionHistory: _omitTransactionHistory,
     encryptedSecrets: _omitSecrets,
     tokenCache: _omitTokenCache,
     protocolCache: _omitProtocolCache,
@@ -746,6 +751,8 @@ export function publicState(s: PortfolioState) {
   } = s;
   void _omitSecrets;
   void _omitRpcAudit;
+  void _omitWeb3Audit;
+  void _omitTransactionHistory;
   void _omitStoreRevision;
   void _omitTokenCache;
   void _omitProtocolCache;

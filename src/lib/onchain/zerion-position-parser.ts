@@ -1,4 +1,5 @@
 /** Pure parsing/pagination helpers; never logs provider payloads or credentials. */
+import {canonicalTokenId} from './token-identity.ts';
 export type PositionPartialReason =
   | "page_limit" | "budget" | "deadline" | "http_error"
   | "invalid_response" | "unsafe_next" | "pagination_loop";
@@ -94,6 +95,8 @@ export function parseZerionPositionPage(body: unknown, normalizeChain: (value: s
     const value = finite(attributes?.value);
     const derivedValue = price === null ? 0 : Math.abs(quantity.amount * price);
     if (!Number.isFinite(derivedValue)) { invalidRows += 1; continue; }
+    const providerTokenId=contractAddress || (fungibleId ? `zerion:${fungibleId}` : `zerion-position:${positionId}`);
+    const tokenId=canonicalTokenId({chain,tokenId:providerTokenId,contractAddress,symbol});
     rows.push({
       positionId: identity,
       symbol, chain, type,
@@ -101,8 +104,8 @@ export function parseZerionPositionPage(body: unknown, normalizeChain: (value: s
       amountExact: quantity.exact,
       valueUsd: value ?? derivedValue,
       // Symbols are labels, not asset IDs: unrelated "USDG" contracts must not merge.
-      tokenId: contractAddress || (fungibleId ? `zerion:${fungibleId}` : `zerion-position:${positionId}`),
-      assetId: fungibleId ? `zerion:${fungibleId}` : undefined,
+      tokenId,
+      assetId: fungibleId && tokenId!==chain ? `zerion:${fungibleId}` : undefined,
       contractAddress,
       logoUrl: text(object(info?.icon)?.url) || undefined,
     });

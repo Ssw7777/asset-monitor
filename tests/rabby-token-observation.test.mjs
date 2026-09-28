@@ -35,4 +35,8 @@ test('older chain response cannot overwrite a more recent specific-token observa
 test('legacy provider position IDs never become fabricated Rabby identifiers', () => {
  assert.equal(tokenUuid({chain:'eth',tokenId:'zerion-position:eth-123'}),null);
  assert.equal(tokenUuid({chain:'eth',tokenId:'eth'}),'eth:eth');
+ assert.equal(tokenUuid({chain:'hood',tokenId:'zerion:eth',symbol:'ETH'}),'hood:hood');
+ assert.equal(tokenUuid({chain:'bsc',tokenId:'zerion:eth',symbol:'ETH'}),null);
+ assert.equal(tokenUuid({chain:'eth',tokenId:'unknown',symbol:'ETH'}),null);
+ assert.equal(tokenUuid({chain:'eth',tokenId:'zerion:eth',symbol:'ETH',contractAddress:'0x1111111111111111111111111111111111111111'}),'eth:0x1111111111111111111111111111111111111111');
 });

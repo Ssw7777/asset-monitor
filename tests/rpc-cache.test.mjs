@@ -20,3 +20,14 @@ test('failed or out of order RPC read preserves successful quantities',()=>{
   const zero=applyRpcQuantities(cache,[row]);
   assert.equal(applyRpcQuantities(zero,[{...row,observedAt:cache.at,amountExact:'8'}]).tokens[0].amount,0);
 });
+
+test('verified native Zerion alias joins RPC updates; equivalent rows never double the balance',()=>{
+  const legacy={...cache.tokens[0],tokenId:'zerion:eth',assetId:'zerion:eth',kind:'spot'};
+  const next=applyRpcQuantities({...cache,tokens:[legacy,cache.tokens[0]]},[{...row,amountExact:'0.125'}]);
+  assert.equal(next.tokens.length,1);
+  assert.equal(next.tokens[0].amount,0.125);
+  assert.equal(next.tokens[0].tokenId,'eth');
+  assert.equal(next.tokens[0].assetId,undefined);
+  assert.equal(next.tokens[0].kind,'native');
+  assert.equal(next.tokens[0].priceUpdatedAt,cache.at);
+});

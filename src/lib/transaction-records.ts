@@ -3,7 +3,7 @@ export interface TransactionRecord {
   chain: string;
   minedAt: string;
   operation: string;
-  transfers: Array<{ sender: string; recipient: string; symbol: string; quantity: string; valueUsd: number | null }>;
+  transfers: Array<{ sender: string; recipient: string; symbol: string; quantity: string; valueUsd: number | null; contractAddress?:string }>;
 }
 
 /** Provider evidence only: no counterparty inference from balance differences. */

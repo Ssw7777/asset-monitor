@@ -3,6 +3,11 @@ import type { WalletTokenCacheEntry } from "../types";
 export const TOKEN_SUCCESS_TTL_MS = 12 * 60 * 60 * 1000;
 export const TOKEN_RETRY_TTL_MS = 15 * 60 * 1000;
 
+/** Presentation thresholds must not erase a positive on-chain quantity. */
+export function hasNonzeroHolding(holding: {amount:number;valueUsd:number}):boolean {
+  return holding.amount>0 || holding.valueUsd>0;
+}
+
 /** Symbols are labels, never an identity: unrelated contracts can share one. */
 export function tokenIdentity(token: { tokenId: string; contractAddress?: string; assetId?: string }): string {
   const id = token.contractAddress?.trim() || token.assetId?.trim() || token.tokenId.trim();

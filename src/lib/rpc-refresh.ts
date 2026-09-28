@@ -4,6 +4,7 @@ import { tokenUuid } from './onchain/rabby-token-observation';
 import { applyRpcQuantities } from './onchain/rpc-cache';
 import { refreshOnchainBreakdown } from './onchain/debank';
 import type { PortfolioState } from './types';
+import {refreshMarketPrices} from './market-refresh';
 
 const MONTHLY_CU_CAP=9_000_000;
 export function rpcPlan(state: PortfolioState) {
@@ -50,7 +51,9 @@ export async function refreshRpcQuantities() {
       if(result.error==='http_429')rateLimited=true;
     }
   }
-  await Promise.all([worker(),worker()]);
+  const [market]=await Promise.all([
+    refreshMarketPrices().catch(()=>({ran:'failed'})), worker(), worker(),
+  ]);
   const mutation=await mutateStore(async state=>{
     const audit=state.rpcAudit!;
     if(rateLimited)audit.cooldownUntil=new Date(Date.now()+10*60_000).toISOString();
@@ -72,5 +75,5 @@ export async function refreshRpcQuantities() {
     if(results.length)state.onchainBreakdown=await refreshOnchainBreakdown(state.wallets,state.chainCache??{},cache,state.protocolCache??{},state.zerionDefi??{});
     return {chains:results.map(r=>({chain:r.chain,successful:r.quantities.filter(q=>!q.error).length,failed:r.quantities.filter(q=>q.error).length,error:r.error})),reservedCu:audit.usage.reservedCu,monthlyCap:MONTHLY_CU_CAP};
   });
-  return {ok:true,ran:'rpc-quantities',...mutation.result};
+  return {ok:true,ran:'rpc-quantities',market,...mutation.result};
 }

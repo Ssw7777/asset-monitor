@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { mergeTokenCacheObservation, tokenCacheNeedsRefresh, tokenIdentity, TOKEN_SUCCESS_TTL_MS, TOKEN_RETRY_TTL_MS } from '../src/lib/onchain/token-cache-policy.ts';
+import { mergeTokenCacheObservation, tokenCacheNeedsRefresh, tokenIdentity, hasNonzeroHolding, TOKEN_SUCCESS_TTL_MS, TOKEN_RETRY_TTL_MS } from '../src/lib/onchain/token-cache-policy.ts';
 
 const now = Date.now();
 const at = new Date(now - 60 * 60 * 1000).toISOString();
@@ -60,6 +60,15 @@ test('missing, invalid or future success times are not fresh', () => {
 test('the final aggregation never rounds token quantities to currency precision', () => {
   const source = readFileSync(new URL('../src/lib/onchain/debank.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /amount:\s*rounded\(/);
+});
+
+test('tiny positive balances survive aggregation; display folding does not delete quantities', () => {
+  assert.equal(hasNonzeroHolding({amount:0.00000123456789,valueUsd:0.003}),true);
+  assert.equal(hasNonzeroHolding({amount:12,valueUsd:0}),true);
+  assert.equal(hasNonzeroHolding({amount:0,valueUsd:0}),false);
+  const source=readFileSync(new URL('../src/lib/onchain/debank.ts',import.meta.url),'utf8');
+  assert.match(source,/\.filter\(hasNonzeroHolding\)/);
+  assert.doesNotMatch(source,/\.filter\(\(holding\) => holding\.valueUsd >= 0\.01\)/);
 });
 
 test('contract identity prevents same-symbol aggregation and prefers canonical provider metadata', () => {

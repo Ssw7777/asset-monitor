@@ -13,10 +13,11 @@ export interface TokenLine {
   contractAddress?: string;
   /** Original upstream decimal, retained separately from floating-point chart values. */
   amountExact?: string;
-  quantitySource?: "rpc";
+  quantitySource?: "rpc" | "okx-web3";
   quantityBlock?: string;
-    priceUpdatedAt?: string;
-    valuationPrice?: number;
+  priceUpdatedAt?: string;
+  priceSource?: 'coinstats' | 'okx-web3';
+  valuationPrice?: number;
   updatedAt?: string;
   kind: TokenKind;
   isCore: boolean;
@@ -40,6 +41,7 @@ export interface TokenHolding {
   chainName: string;
   amount: number;
   price: number;
+  priceSource?: 'coinstats' | 'okx-web3';
   valueUsd: number;
   kind: TokenKind;
   logoUrl?: string;
@@ -274,6 +276,7 @@ export interface TokenAuditSummary {
 
 /** 某个地址的 DeFi 协议明细缓存（服务端持久化，避免 Vercel 冷启动后丢失多钱包仓位）。 */
 export interface WalletProtocolCacheEntry {
+  protocolUpdatedAt?: Record<string,string>;
   at: string;
   /** Last upstream attempt, including failures, so one bad address cannot retry every minute. */
   lastAttemptAt?: string;
@@ -313,6 +316,13 @@ export interface WalletChainCacheEntry {
 }
 
 export interface PortfolioState {
+  web3Audit?: {
+    cooldownUntil?:string;metadataAt?:string;balanceChains?:string[];defiChains?:string[];lastCycleAt?:string;
+    usage?:{month:string;reservedCalls:number};
+    wallets:Record<string,{lastAttemptAt:string;retryAt?:string;tokensAt?:string;tokenCount?:number;protocolAt?:string;fablesAbsentSince?:string;error?:string;protocolError?:string;historyError?:string;historyAt?:string}>;
+  };
+  transactionHistory?:Record<string,{at:string;source:'okx-web3';more:boolean;records:import('./transaction-records').TransactionRecord[]}>;
+  marketAudit?: {month:string;reservedCredits:number;lastAttemptAt?:string;lastSuccessAt?:string;cooldownUntil?:string;remainingCredits?:number;error?:string;updated?:number};
   rpcAudit?: {
     cooldownUntil?: string;
     usage: { month: string; reservedCu: number };

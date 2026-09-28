@@ -1,4 +1,5 @@
 import type { WalletTokenCacheEntry } from "../types";
+import {canonicalTokenId} from './token-identity.ts';
 
 const STABLE = new Set(["USDT", "USDC", "USDG", "USDE", "USD1", "USDT0", "USD0", "DAI", "FDUSD", "TUSD", "BUSD", "USDD", "PYUSD", "GHO", "USDS", "SUSDE", "SUSDS", "FRAX", "LUSD", "USDX", "USDP", "USDR", "USDF", "USDY", "SUSD", "CRVUSD"]);
 type Detail = Pick<WalletTokenCacheEntry, "tokens" | "unpricedCount" | "unpricedByChain" | "coveredChains"> & { observed?: Record<string, number> };
@@ -83,8 +84,8 @@ export function applyTokenObservation(previous: WalletTokenCacheEntry | undefine
     coveredChains: [...new Set([...base.coveredChains.filter(id => id !== "*"), ...Object.keys(chainUpdatedAt)])] };
 }
 
-export function tokenUuid(token: {chain: string; tokenId: string; contractAddress?: string}): string | null {
-  const id = token.contractAddress || token.tokenId;
+export function tokenUuid(token: {chain: string; tokenId: string; contractAddress?: string;symbol?:string}): string | null {
+  const id = canonicalTokenId(token);
   // Legacy Zerion position IDs are not Rabby token identifiers.
   return /^0x[a-f0-9]{40}$/i.test(id) || id === token.chain ? `${token.chain}:${id.toLowerCase()}` : null;
 }

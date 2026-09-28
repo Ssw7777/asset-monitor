@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { isAuthenticated } from "@/lib/auth";
 import { readStore } from "@/lib/store";
 import { nextZerionKey, zerionRequest } from "@/lib/onchain/zerion-keys";
+import {web3Credentials} from '@/lib/onchain/okx-web3';
 import { parseTransactionRecords, type TransactionRecord } from "@/lib/transaction-records";
 
 export const dynamic = "force-dynamic";
@@ -16,9 +17,12 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
   const { address = "" } = await searchParams;
   const wallet = state.wallets.find((item) => item.address.toLowerCase() === address.toLowerCase());
   const key = nextZerionKey();
-  let result = wallet ? cache.get(wallet.address.toLowerCase()) : undefined;
+  const cloudHistory=wallet?state.transactionHistory?.[wallet.address.toLowerCase()]:undefined;
+  const usesWeb3=!!web3Credentials();
+  let result = cloudHistory?{at:Date.parse(cloudHistory.at),records:cloudHistory.records,more:cloudHistory.more}:wallet ? cache.get(wallet.address.toLowerCase()) : undefined;
   let error = "";
-  if (wallet && (!result || Date.now() - result.at > 300_000)) {
+  if (wallet && usesWeb3 && (!result || Date.now()-result.at>600_000))error='云端链上交易查询尚未完成或已超过10分钟，请查看钱包查询状态；不把余额差额视为转账。';
+  if (wallet && !usesWeb3 && (!result || Date.now() - result.at > 300_000)) {
     result = undefined;
     if (!key) error = "未配置交易记录数据源。";
     else {
@@ -40,15 +44,15 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
   const label = (value: string) => state.wallets.find((item) => item.address.toLowerCase() === value.toLowerCase())?.name ?? value;
   return <main className="page"><div className="container transaction-page">
     <div className="section-head"><h1>链上交易核验</h1><Link className="btn btn-outline" href="/dashboard">返回看板</Link></div>
-    <p className="muted">独立读取已确认的链上交易，不使用余额差额推断转账。按需查询最近7天、最多100条；不代表后台全链实时监听。</p>
+    <p className="muted">独立读取已确认的链上交易，不使用余额差额推断转账。{usesWeb3?'云端轮询并保存最近7天的记录，每个钱包最多100笔；未覆盖的链不能据此判断无交易。':'按需查询最近7天、最多100条；不代表后台全链实时监听。'}</p>
     <nav className="transaction-wallets">{state.wallets.map((item) => <Link prefetch={false} className="btn btn-outline" aria-current={item.id === wallet?.id ? "page" : undefined} key={item.id} href={`/transactions?address=${item.address}`}>{item.name}</Link>)}</nav>
     {!wallet && <p>请选择需要核验的钱包。</p>}
     {wallet && <section className="section">
       <h2>{wallet.name}</h2><p className="transaction-hash">{wallet.address}</p>
       {error && <p className="neg" role="alert">{error}</p>}
       {result && <>
-        <p className="muted">Zerion · 查询时间 {new Date(result.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}（北京时间）</p>
-        <p className="notice">仅涵盖当前数据源及套餐支持的链；未返回记录不等于所有链均无交易。{result.more ? "本页已达查询上限，仍有更多记录，不能据此认定历史完整。" : ""}</p>
+        <p className="muted">{usesWeb3?'OKX OnchainOS':'Zerion'} · 查询时间 {new Date(result.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}（北京时间）</p>
+        <p className="notice">仅涵盖当前数据源及套餐支持的链；未返回记录不等于所有链均无交易。{result.more ? "数据源返回分页游标，本页不能据此认定历史完整。" : ""}</p>
         {!result.records.length && <p>数据源在此查询范围内未返回已确认的非垃圾交易。</p>}
         {result.records.map((tx) => <article className="transaction-record" key={`${tx.chain}:${tx.hash}`}>
           <div className="section-head"><strong>{operations[tx.operation] ?? tx.operation} · {tx.chain}</strong><span>{new Date(tx.minedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</span></div>

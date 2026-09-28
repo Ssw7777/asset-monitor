@@ -1,4 +1,5 @@
 import type { PortfolioState, TokenAuditSummary } from "./types";
+import {canonicalTokenId} from './onchain/token-identity.ts';
 
 export const TOKEN_FRESHNESS_MS = 10 * 60_000;
 
@@ -74,7 +75,7 @@ export function auditTokens(state: Pick<PortfolioState, "wallets" | "tokenCache"
     const address=wallet.address.toLowerCase(),cache=state.tokenCache?.[address];
     for(const uuid of Object.keys(cache?.inventory??{}))rpcKeys.add(`${address}:${uuid}`);
     for(const token of cache?.tokens??[]){
-      const id=(token.contractAddress||token.tokenId).toLowerCase();
+      const id=canonicalTokenId(token);
       if(/^0x[a-f0-9]{40}$/.test(id)||id===token.chain)rpcKeys.add(`${address}:${token.chain}:${id}`);
     }
   }

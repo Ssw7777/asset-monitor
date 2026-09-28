@@ -346,6 +346,7 @@ export function TokenTable({
                 : tokenSource === "zerion"
                   ? "数据源：Zerion"
                   : tokenSource === "rpc" ? "数量：链上 RPC · 价格／发现：聚合接口" : "数据源：公共接口（限流时会缺）"}
+              {tokens.some(token=>token.priceSource==='coinstats') && <> · <a href="https://coinstats.app" target="_blank" rel="noreferrer">Powered by CoinStats</a></>}
               {coverage < 95 ? " · 差额为未取到明细或未计价资产，不计入总额" : partial ? " · 本轮有地址使用上次成功数据" : ""}
             </span>
           </div>

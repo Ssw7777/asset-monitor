@@ -15,7 +15,7 @@ import type {
   Wallet,
 } from "../types";
 import { activeTokenSource, fetchZerionTokens, type TokenSource } from "./token-providers";
-import { mergeTokenCacheObservation, tokenCacheNeedsRefresh, tokenIdentity } from "./token-cache-policy";
+import { mergeTokenCacheObservation, tokenCacheNeedsRefresh, tokenIdentity, hasNonzeroHolding } from "./token-cache-policy";
 
 export interface ChainBalanceDetail {
   id: string;
@@ -1049,10 +1049,12 @@ export async function refreshOnchainBreakdown(
             valueUsd: 0,
             kind: token.kind,
             logoUrl: token.logoUrl,
+            priceSource: token.priceSource,
             wallets: new Map<string, { walletId: string; walletName: string; address: string; amount: number; valueUsd: number }>(),
           };
         holding.amount += token.amount;
         holding.valueUsd += token.valueUsd;
+        if (token.priceSource) holding.priceSource = token.priceSource;
         if (!holding.logoUrl && token.logoUrl) holding.logoUrl = token.logoUrl;
         const walletShare = holding.wallets.get(wallet.id) || {
           walletId: wallet.id,
@@ -1262,6 +1264,7 @@ export async function refreshOnchainBreakdown(
       chainName: holding.chainName,
       amount: holding.amount,
       price: holding.amount > 0 ? holding.valueUsd / holding.amount : 0,
+      priceSource: holding.priceSource,
       valueUsd: rounded(holding.valueUsd),
       kind: holding.kind,
       logoUrl: holding.logoUrl,
@@ -1274,7 +1277,7 @@ export async function refreshOnchainBreakdown(
         }))
         .sort((left, right) => right.valueUsd - left.valueUsd),
     }))
-    .filter((holding) => holding.valueUsd >= 0.01)
+    .filter(hasNonzeroHolding)
     .sort((left, right) => right.valueUsd - left.valueUsd);
 
   return {
