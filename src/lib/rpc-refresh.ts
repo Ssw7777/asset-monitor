@@ -6,6 +6,7 @@ import { refreshOnchainBreakdown } from './onchain/debank';
 import type { PortfolioState } from './types';
 import {refreshMarketPrices} from './market-refresh';
 import {readKonaPositions,applyKonaObservation,type KonaObservation} from './onchain/kona-rpc';
+import {readFablesPositions,applyFablesObservation,type FablesObservation} from './onchain/fables-rpc';
 
 const MONTHLY_CU_CAP=9_000_000;
 export function rpcPlan(state: PortfolioState) {
@@ -29,7 +30,7 @@ export async function refreshRpcQuantities() {
   const reserved=await mutateStore(async state=>{
     const audit=state.rpcAudit??{usage:{month,reservedCu:0},chains:{},quantities:{}};
     if(audit.usage.month!==month)audit.usage={month,reservedCu:0};
-    if(Date.parse(audit.cooldownUntil??'')>start)return {targets:[] as Array<[string,RpcTarget[]]>,konaWallets:[] as string[]};
+    if(Date.parse(audit.cooldownUntil??'')>start)return {targets:[] as Array<[string,RpcTarget[]]>,konaWallets:[] as string[],fablesWallets:[] as string[]};
     const plan=[...rpcPlan(state)].filter(([chain])=>start-(Date.parse(audit.chains[chain]?.lastAttemptAt??'')||0)>=4*60_000)
       .sort(([a],[b])=>(Date.parse(audit.chains[a]?.lastAttemptAt??'')||0)-(Date.parse(audit.chains[b]?.lastAttemptAt??'')||0)).slice(0,6);
     const targets:Array<[string,RpcTarget[]]>=[];
@@ -39,11 +40,20 @@ export async function refreshRpcQuantities() {
       audit.usage.reservedCu+=cost;
       audit.chains[chain]={...audit.chains[chain],lastAttemptAt:at};targets.push([chain,rows]);
     }
+    // Public Fables discovery is paced across cloud ticks, not 25 concurrent
+    // requests. Three oldest addresses per minute cover all 25 in nine ticks.
+    const fablesWallets=audit.usage.reservedCu+100<=MONTHLY_CU_CAP?state.wallets
+      .map(w=>w.address.toLowerCase()).filter(a=>start-(Date.parse(audit.fablesWallets?.[a]?.lastAttemptAt??'')||0)>=4*60_000)
+      .sort((a,b)=>(Date.parse(audit.fablesWallets?.[a]?.lastAttemptAt??'')||0)-(Date.parse(audit.fablesWallets?.[b]?.lastAttemptAt??'')||0)||
+        Number(state.protocolCache?.[b]?.protocols.some(p=>p.id==='hood_fables')??false)-Number(state.protocolCache?.[a]?.protocols.some(p=>p.id==='hood_fables')??false))
+      .slice(0,3):[];
+    if(fablesWallets.length){audit.usage.reservedCu+=100;audit.fablesWallets={...audit.fablesWallets};for(const address of fablesWallets)audit.fablesWallets[address]={...audit.fablesWallets[address],lastAttemptAt:at};}
     state.rpcAudit=audit;
-    return {targets,konaWallets:targets.some(([chain])=>chain==='abs')?state.wallets.map(w=>w.address.toLowerCase()):[]};
+    return {targets,konaWallets:targets.some(([chain])=>chain==='abs')?state.wallets.map(w=>w.address.toLowerCase()):[],fablesWallets};
   });
   const queue=[...reserved.result.targets],results:RpcChainResult[]=[];
   let kona:KonaObservation|undefined,konaError:string|undefined;
+  let fables:FablesObservation|undefined,fablesError:string|undefined;
   let rateLimited=false;
   async function worker(){
     while(queue.length && !rateLimited && Date.now()-start<40_000){
@@ -56,6 +66,7 @@ export async function refreshRpcQuantities() {
   const [market]=await Promise.all([
     refreshMarketPrices().catch(()=>({ran:'failed'})), worker(), worker(),
     ...(reserved.result.konaWallets.length?[readKonaPositions(reserved.result.konaWallets,{apiKey:process.env.ALCHEMY_API_KEY}).then(value=>{kona=value;}).catch(error=>{konaError=error instanceof Error&&/^[a-z0-9_]+$/.test(error.message)?error.message:'kona_read_failed';if(konaError==='http_429')rateLimited=true;})]:[]),
+    ...(reserved.result.fablesWallets.length?[readFablesPositions(reserved.result.fablesWallets,{apiKey:process.env.ALCHEMY_API_KEY}).then(value=>{fables=value;}).catch(error=>{fablesError=error instanceof Error&&/^[a-z0-9_]+$/.test(error.message)?error.message:'fables_read_failed';if(fablesError==='http_429')rateLimited=true;})]:[]),
   ]);
   const mutation=await mutateStore(async state=>{
     const audit=state.rpcAudit!;
@@ -81,7 +92,22 @@ export async function refreshRpcQuantities() {
       state.protocolCache=protocols;
       audit.protocols={...audit.protocols,kona:{at:kona.at,block:kona.block,wallets:Object.keys(kona.wallets).length}};
     }else if(konaError)audit.protocols={...audit.protocols,kona:{...audit.protocols?.kona,error:konaError}};
-    if(results.length)state.onchainBreakdown=await refreshOnchainBreakdown(state.wallets,state.chainCache??{},cache,state.protocolCache??{},state.zerionDefi??{});
+    if(fables){
+      const protocols={...state.protocolCache};
+      for(const [address,protocol] of Object.entries(fables.wallets)){
+        protocols[address]=applyFablesObservation(protocols[address],protocol,fables.at,fables.block);
+        audit.fablesWallets![address]={...audit.fablesWallets![address],at:fables.at,block:fables.block,error:undefined};
+      }
+      state.protocolCache=protocols;
+      // Only refund a completed bounded request's unused reservation; errors
+      // keep the full reservation rather than under-count a possibly spent call.
+      if(audit.usage.month===month)audit.usage.reservedCu-=Math.max(0,100-fables.estimatedCu);
+      audit.protocols={...audit.protocols,fables:{at:fables.at,block:fables.block,wallets:Object.keys(audit.fablesWallets??{}).filter(a=>Date.now()-Date.parse(audit.fablesWallets![a].at??'')<=20*60_000).length}};
+    }else if(fablesError){
+      for(const address of reserved.result.fablesWallets)audit.fablesWallets![address]={...audit.fablesWallets![address],error:fablesError};
+      audit.protocols={...audit.protocols,fables:{...audit.protocols?.fables,error:fablesError}};
+    }
+    if(results.length||kona||fables)state.onchainBreakdown=await refreshOnchainBreakdown(state.wallets,state.chainCache??{},cache,state.protocolCache??{},state.zerionDefi??{});
     return {chains:results.map(r=>({chain:r.chain,successful:r.quantities.filter(q=>!q.error).length,failed:r.quantities.filter(q=>q.error).length,error:r.error})),protocols:audit.protocols??{},reservedCu:audit.usage.reservedCu,monthlyCap:MONTHLY_CU_CAP};
   });
   return {ok:true,ran:'rpc-quantities',market,...mutation.result};

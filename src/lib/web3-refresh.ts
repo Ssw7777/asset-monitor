@@ -5,6 +5,7 @@ import {refreshOnchainBreakdown} from './onchain/debank';
 import type {Wallet,WalletTokenCacheEntry,WalletProtocolCacheEntry} from './types';
 import type {TransactionRecord} from './transaction-records';
 import {dueWeb3Wallets} from './web3-scheduling';
+import {preserveRpcProtocols} from './onchain/protocol-observation';
 
 const wait=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 const safeError=(error:unknown)=>error instanceof Error&&/^web3_[a-z0-9_]+$/.test(error.message)?error.message:'web3_request_failed';
@@ -65,7 +66,12 @@ export async function refreshWeb3Observations(){
       const data=await read('/api/v6/dex/balance/all-token-balances-by-address?'+new URLSearchParams({address,chains:chains.join(','),excludeRiskToken:'0'}));
       result.tokensAt=new Date().toISOString();result.tokens=parseWeb3Tokens(data,address,chains,result.tokensAt);
     }catch(error){result.error=safeError(error);}
+    const fablesRpcAt=reservation.state.protocolCache?.[address]?.protocolRpcOwnership?.hood_fables?.at;
     try{
+      if(fablesRpcAt&&Date.now()-Date.parse(fablesRpcAt)<=20*60000){
+        // The native Lens has already checked this owner's complete Fables
+        // ledger. Do not spend another API call on a delayed provider snapshot.
+      }else{
       const data=await read('/api/v6/defi/user/asset/platform/list',{walletAddressList:protocolChains.map(chainIndex=>({chainIndex,walletAddress:address}))});
       const overview=parseWeb3DefiOverview(data,new Date().toISOString());
       const platform=overview.platforms.find(p=>String(p.analysisPlatformId)==='141415'&&p.platformName==='Fables');
@@ -74,6 +80,7 @@ export async function refreshWeb3Observations(){
         const detail=await read('/api/v6/defi/user/asset/platform/detail',{walletAddressList:[{chainIndex:'4663',walletAddress:address}],platformList:[{chainIndex:'4663',analysisPlatformId:'141415'}]});
         result.protocol=applyFablesDetail(undefined,detail,overview);result.protocolAt=overview.observedAt;
       }else if(protocolChains.includes('4663'))result.fablesAbsentAt=overview.observedAt;
+      }
     }catch(error){result.protocolError=safeError(error);}
     try{
       const begin=Date.now()-7*86400000;
@@ -93,8 +100,8 @@ export async function refreshWeb3Observations(){
       if(result.tokens){cache[address]=applyWeb3Tokens(cache[address],result.tokens,result.tokensAt!);audit.tokensAt=result.tokensAt;audit.tokenCount=result.tokens.length;}
       if(result.protocol&&Date.parse(result.protocolAt!)>Math.max(Date.parse(protocols[address]?.at??'')||0,Date.parse(protocols[address]?.protocolUpdatedAt?.hood_fables??'')||0)){
         const previous=protocols[address]??{at:'',protocols:[]};
-        protocols[address]={...previous,protocolUpdatedAt:{...previous.protocolUpdatedAt,hood_fables:result.protocolAt!},
-          protocols:[...previous.protocols.filter(p=>p.id!=='hood_fables'),...result.protocol.protocols]};
+        protocols[address]=preserveRpcProtocols(previous,{...previous,protocolUpdatedAt:{...previous.protocolUpdatedAt,hood_fables:result.protocolAt!},
+          protocols:[...previous.protocols.filter(p=>p.id!=='hood_fables'),...result.protocol.protocols]});
         audit.protocolAt=result.protocolAt;
         audit.fablesAbsentSince=undefined;
       }
@@ -105,7 +112,7 @@ export async function refreshWeb3Observations(){
         const previous=protocols[address];
         if(!since||absentMs<since)audit.fablesAbsentSince=result.fablesAbsentAt;
         else if(absentMs-since>=4*60000&&previous&&absentMs>Math.max(Date.parse(previous.at)||0,Date.parse(previous.protocolUpdatedAt?.hood_fables??'')||0)){
-          protocols[address]={...previous,protocolUpdatedAt:{...previous.protocolUpdatedAt,hood_fables:result.fablesAbsentAt},protocols:previous.protocols.filter(p=>p.id!=='hood_fables')};
+          protocols[address]=preserveRpcProtocols(previous,{...previous,protocolUpdatedAt:{...previous.protocolUpdatedAt,hood_fables:result.fablesAbsentAt},protocols:previous.protocols.filter(p=>p.id!=='hood_fables')});
         }
       }
       if(result.history&&Date.parse(result.historyAt!)>(Date.parse(history[address]?.at??'')||0)){

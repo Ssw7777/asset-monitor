@@ -325,6 +325,7 @@ export interface PortfolioState {
   transactionHistory?:Record<string,{at:string;source:'okx-web3';more:boolean;records:import('./transaction-records').TransactionRecord[]}>;
   marketAudit?: {month:string;reservedCredits:number;lastAttemptAt?:string;lastSuccessAt?:string;cooldownUntil?:string;remainingCredits?:number;error?:string;updated?:number};
   rpcAudit?: {
+    fablesWallets?: Record<string,{lastAttemptAt:string;at?:string;block?:string;error?:string}>;
     protocols?: Record<string,{at?:string;block?:string;wallets?:number;error?:string}>;
     cooldownUntil?: string;
     usage: { month: string; reservedCu: number };
