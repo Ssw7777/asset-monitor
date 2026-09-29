@@ -16,6 +16,7 @@ import type {
 } from "../types";
 import { activeTokenSource, fetchZerionTokens, type TokenSource } from "./token-providers";
 import { mergeTokenCacheObservation, tokenCacheNeedsRefresh, tokenIdentity, hasNonzeroHolding } from "./token-cache-policy";
+import {preserveRpcProtocols} from './protocol-observation';
 
 export interface ChainBalanceDetail {
   id: string;
@@ -457,14 +458,14 @@ async function fetchComplexProtocols(
     const response = await fetchJson(candidate.url, candidate.headers, 0);
     const protocols = parseProtocolDetail(response.data);
     if (protocols !== null) {
-      store[normalized] = {
+      store[normalized] = preserveRpcProtocols(store[normalized],{
         ...store[normalized],
         protocols,
         at: attemptIso,
         lastAttemptAt: attemptIso,
         lastError: undefined,
-      };
-      return protocols;
+      });
+      return store[normalized].protocols;
     }
   }
   return hit?.protocols ?? null;

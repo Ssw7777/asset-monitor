@@ -1,4 +1,4 @@
-import {mutateStore} from './store';
+import {mutateLiveStore as mutateStore} from './store';
 import {COINSTATS_PRICE_IDS,parseCoinStatsPrices,applyMarketPrices} from './onchain/coinstats-prices';
 import {refreshOnchainBreakdown} from './onchain/debank';
 

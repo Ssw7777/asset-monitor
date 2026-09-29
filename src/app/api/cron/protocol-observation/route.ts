@@ -1,12 +1,12 @@
 import {NextRequest,NextResponse} from 'next/server';
 import {hasCronAuthorization} from '@/lib/cron-auth';
-import {mutateStore} from '@/lib/store';
+import {mutateLiveStore as mutateStore} from '@/lib/store';
 import {applyProtocolObservation} from '@/lib/onchain/protocol-observation';
 import {refreshOnchainBreakdown} from '@/lib/onchain/debank';
 
 export const preferredRegion=['hkg1'];
 export const dynamic='force-dynamic';
-export const maxDuration=30;
+export const maxDuration=60;
 export async function POST(req:NextRequest){
   if(!await hasCronAuthorization(req))return NextResponse.json({ok:false},{status:401});
   let body;

@@ -276,6 +276,7 @@ export interface TokenAuditSummary {
 
 /** 某个地址的 DeFi 协议明细缓存（服务端持久化，避免 Vercel 冷启动后丢失多钱包仓位）。 */
 export interface WalletProtocolCacheEntry {
+  protocolRpcOwnership?: Record<string,{at:string;block:string}>;
   protocolUpdatedAt?: Record<string,string>;
   at: string;
   /** Last upstream attempt, including failures, so one bad address cannot retry every minute. */
@@ -324,6 +325,7 @@ export interface PortfolioState {
   transactionHistory?:Record<string,{at:string;source:'okx-web3';more:boolean;records:import('./transaction-records').TransactionRecord[]}>;
   marketAudit?: {month:string;reservedCredits:number;lastAttemptAt?:string;lastSuccessAt?:string;cooldownUntil?:string;remainingCredits?:number;error?:string;updated?:number};
   rpcAudit?: {
+    protocols?: Record<string,{at?:string;block?:string;wallets?:number;error?:string}>;
     cooldownUntil?: string;
     usage: { month: string; reservedCu: number };
     chains: Record<string, { lastAttemptAt: string; lastSuccessAt?: string; successful?: number; failed?: number; error?: string }>;

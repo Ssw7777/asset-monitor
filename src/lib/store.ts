@@ -19,6 +19,8 @@ import { deriveFlowEventsFromSnapshots, PERSISTED_FLOW_LIMIT, PERSISTED_FLOW_MIN
 import { BASELINE, MIGRATION_WALLETS, SEED_MANUAL, seedWallets } from "./seed";
 import { WALLET_LIMIT, normalizeAddress } from "./wallets";
 import { auditTokens } from "./token-audit";
+import {preserveRpcProtocols} from './onchain/protocol-observation';
+import {serializedFields,changedFields,deltaSql} from './store-delta';
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const LOCAL_STORE = path.join(DATA_DIR, "store.json");
@@ -305,16 +307,20 @@ async function tursoClient() {
   });
 }
 
+let schemaClient:Promise<import('@libsql/client').Client>|undefined;
 async function ensureTursoSchema() {
-  const client = await tursoClient();
-  await client.execute(`
+  if(!schemaClient)schemaClient=(async()=>{
+    const client = await tursoClient();
+    await client.execute(`
     CREATE TABLE IF NOT EXISTS kv_store (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
   `);
-  return client;
+    return client;
+  })().catch(error=>{schemaClient=undefined;throw error;});
+  return schemaClient;
 }
 
 /**
@@ -370,17 +376,18 @@ export async function releaseRefreshLease(owner: string): Promise<void> {
   if (g.__amRefreshLease?.owner === owner) delete g.__amRefreshLease;
 }
 
-async function readTurso(): Promise<PortfolioState | null> {
+async function readTurso(includeHistory=true): Promise<PortfolioState | null> {
   try {
     const client = await ensureTursoSchema();
     const rs = await client.execute({
-      sql: "SELECT value, updated_at FROM kv_store WHERE key = ?",
+      sql: `SELECT ${includeHistory?'value':"json_remove(value,'$.snapshots','$.flowEvents') AS value"}, updated_at FROM kv_store WHERE key = ?`,
       args: [TURSO_ROW_KEY],
     });
     const row = rs.rows[0];
     if (!row) return null;
     const value = row.value as string;
     const state = normalizeState(JSON.parse(value));
+    if(!includeHistory){state.snapshots=[];state.flowEvents=[];}
     state.storeRevision = String(row.updated_at || "");
     return state;
   } catch (e) {
@@ -389,17 +396,18 @@ async function readTurso(): Promise<PortfolioState | null> {
   }
 }
 
-async function writeTurso(state: PortfolioState): Promise<void> {
+async function writeTurso(state: PortfolioState,changes?:Record<string,string|undefined>): Promise<void> {
   try {
     const client = await ensureTursoSchema();
     const previousRevision = state.storeRevision || "";
     const nextRevision = `${new Date().toISOString()}-${randomUUID()}`;
     const nextState = { ...state, storeRevision: nextRevision };
+    const delta=changes?deltaSql({...changes,storeRevision:JSON.stringify(nextRevision)}):null;
     const result = previousRevision
       ? await client.execute({
-          sql: `UPDATE kv_store SET value = ?, updated_at = ?
+          sql: `UPDATE kv_store SET value = ${delta?.expression??'?'}, updated_at = ?
                 WHERE key = ? AND updated_at = ?`,
-          args: [JSON.stringify(nextState), nextRevision, TURSO_ROW_KEY, previousRevision],
+          args: [...(delta?delta.args:[JSON.stringify(nextState)]), nextRevision, TURSO_ROW_KEY, previousRevision],
         })
       : await client.execute({
           sql: `INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)
@@ -425,7 +433,7 @@ function readMemoryOrTmp(): PortfolioState | null {
 
 function writeMemoryAndTmp(state: PortfolioState) {
   g.__amStore = state;
-  if (isServerless()) {
+  if (isServerless() && !preferTurso()) {
     try {
       writeJsonFile(TMP_STORE, state);
     } catch {
@@ -525,14 +533,25 @@ async function withLocalMutationLock<T>(task: () => Promise<T>): Promise<T> {
  */
 export async function mutateStore<T>(
   mutator: (state: PortfolioState) => T | Promise<T>,
-  maxAttempts = 3
+  maxAttempts = 3,
+  includeHistory = true
 ): Promise<StoreMutationResult<T>> {
   const attempts = Math.max(1, Math.trunc(maxAttempts));
   const applyOnce = async (): Promise<StoreMutationResult<T>> => {
     // Never mutate the object cached by readStore before persistence succeeds.
-    const state = structuredClone(await readStore());
+    const stored=!includeHistory&&preferTurso()?await readTurso(false):await readStore();
+    if(!stored)throw new Error('live_store_missing');
+    const state = structuredClone(stored);
+    const before=serializedFields(state);
     const result = await mutator(state);
-    await writeStore(state);
+    const changes=changedFields(before,state);
+    if(!includeHistory&&('snapshots' in changes||'flowEvents' in changes))throw new Error('live_mutation_touched_history');
+    // Not-due polling checks must not rewrite every historical snapshot or
+    // compete with successful observations for a CAS revision.
+    if(Object.keys(changes).length){
+      if(preferTurso()){await writeTurso(state,changes);writeMemoryAndTmp(state);}
+      else await writeStore(state);
+    }
     return { state, result };
   };
 
@@ -548,6 +567,13 @@ export async function mutateStore<T>(
     }
   }
   throw conflict ?? new StoreConflictError();
+}
+
+/** Provider observations do not download/re-upload thousands of old snapshots. */
+export async function mutateLiveStore<T>(mutator:(state:PortfolioState)=>T|Promise<T>){return mutateStore(mutator,3,false);}
+export async function readLiveStore(){
+ if(!preferTurso())return readStore();
+ const state=await readTurso(false);if(!state)throw new Error('live_store_missing');return state;
 }
 
 export async function updateManual(manual: ManualAsset[]) {
@@ -654,7 +680,7 @@ export async function updateProtocolCache(cache: Record<string, WalletProtocolCa
       const incomingProtocolMs = new Date(incoming.at || 0).getTime();
       const currentAppMs = new Date(current.appAt || 0).getTime();
       const incomingAppMs = new Date(incoming.appAt || 0).getTime();
-      merged[address] = {
+      merged[address] = preserveRpcProtocols(current,{
         ...current,
         ...incoming,
         ...(Number.isFinite(currentProtocolMs) && currentProtocolMs > incomingProtocolMs
@@ -663,7 +689,7 @@ export async function updateProtocolCache(cache: Record<string, WalletProtocolCa
         ...(Number.isFinite(currentAppMs) && currentAppMs > incomingAppMs
           ? { appAt: current.appAt, apps: current.apps, appLastAttemptAt: current.appLastAttemptAt }
           : {}),
-      };
+      });
     }
     state.protocolCache = merged;
   })).state;
