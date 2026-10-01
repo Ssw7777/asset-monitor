@@ -31,7 +31,7 @@ async function handle(req: NextRequest) {
   const walletBudgetParam = searchParams.get("walletBudget");
   const requestedWalletBudget = walletBudgetParam === null ? Number.NaN : Number(walletBudgetParam);
   const walletBudget = Number.isInteger(requestedWalletBudget)
-    ? Math.max(1, Math.min(3, requestedWalletBudget))
+    ? Math.max(1, Math.min(2, requestedWalletBudget))
     : undefined;
   const staleMinutesParam = Number(searchParams.get("staleMinutes"));
   const staleMinutes =
@@ -65,7 +65,7 @@ async function handle(req: NextRequest) {
       {
         ok: refreshStatus !== "failed",
         mode,
-        walletBudget: walletBudget ?? 2,
+        walletBudget: walletBudget ?? 1,
         staleMinutes: staleMinutes ?? null,
         ran: result.payload.refreshMode,
         refreshStatus,
