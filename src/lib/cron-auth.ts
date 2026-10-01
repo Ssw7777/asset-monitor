@@ -3,7 +3,11 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { NextRequest } from "next/server";
 
 const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
-const GITHUB_OIDC_AUDIENCE = "https://0xstudybank.vercel.app";
+const GITHUB_OIDC_AUDIENCES = [
+  "https://0xstudybank-six.vercel.app",
+  "https://0xstudybank.vercel.app",
+] as const;
+const GITHUB_OIDC_AUDIENCE = GITHUB_OIDC_AUDIENCES[0];
 const GITHUB_MAIN_REF = "refs/heads/main";
 const TRUSTED_GITHUB_WORKFLOWS = [
   {
@@ -50,7 +54,7 @@ async function isTrustedGithubWorkflowToken(token: string) {
   try {
     const { payload } = await jwtVerify(token, githubJwks, {
       issuer: GITHUB_OIDC_ISSUER,
-      audience: GITHUB_OIDC_AUDIENCE,
+      audience: [...GITHUB_OIDC_AUDIENCES],
       algorithms: ["RS256"],
     });
 
