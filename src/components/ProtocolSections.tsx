@@ -37,14 +37,52 @@ function ChainIcon({ id, name, size = 16 }: { id: string; name: string; size?: n
   );
 }
 
-/** 资产 / 负债用代币符号表达：`USDT + USDC.e`，不堆美元金额。 */
+/** Token rows for asset or debt (rewards count as assets). */
+function tokensOf(wallet: DappWalletShare, role: "asset" | "debt") {
+  return wallet.tokens
+    .filter((token) => (role === "asset" ? token.role !== "debt" : token.role === "debt"))
+    .sort((left, right) => Math.abs(right.valueUsd) - Math.abs(left.valueUsd));
+}
+
+/** Compact symbol list for mobile meta line. */
 function symbolsOf(wallet: DappWalletShare, role: "asset" | "debt") {
-  const list = wallet.tokens.filter((token) =>
-    role === "asset" ? token.role !== "debt" : token.role === "debt"
-  );
+  const list = tokensOf(wallet, role);
   if (!list.length) return "—";
   const names = [...new Set(list.map((token) => token.symbol))];
   return names.slice(0, 4).join(" + ") + (names.length > 4 ? ` +${names.length - 4}` : "");
+}
+
+/** Asset / debt cell: USD total + per-token amount · value (not net-only). */
+function PositionDetail({
+  wallet,
+  role,
+}: {
+  wallet: DappWalletShare;
+  role: "asset" | "debt";
+}) {
+  const list = tokensOf(wallet, role);
+  const total = role === "asset" ? wallet.assetUsd : wallet.debtUsd;
+  const tone = role === "debt" && total > 0.01 ? "var(--neg)" : undefined;
+  if (!list.length && total <= 0.01) {
+    return <span style={{ color: "var(--ink-3)" }}>—</span>;
+  }
+  return (
+    <div className="cell-token-text" style={{ color: tone }}>
+      <b className="num">{usd(total)}</b>
+      {list.slice(0, 4).map((token) => (
+        <span key={`${token.role}-${token.symbol}-${token.amount}`}>
+          {token.symbol}
+          {Number.isFinite(token.amount) && Math.abs(token.amount) > 0
+            ? ` ${token.amount >= 1000 ? token.amount.toFixed(2) : token.amount.toPrecision(4)}`
+            : ""}
+          {" · "}
+          {usd(token.valueUsd)}
+          {token.role === "reward" ? " (奖励)" : ""}
+        </span>
+      ))}
+      {list.length > 4 ? <span>+{list.length - 4} 项</span> : null}
+    </div>
+  );
 }
 
 /** DeBank 的协议区块：协议头 + 各钱包份额表；小于 1 USDT 的协议默认折叠成一行。 */
@@ -124,14 +162,15 @@ export function ProtocolSections({
             )}
             <span className="small">
               {dapp.chains.length} 条链 · {dapp.wallets.length} 个钱包
-              {debt ? ` · 负债 ${usd(dapp.debtUsd)}` : ""}
+              {` · 资产 ${usd(dapp.assetUsd)}`}
+              {debt ? ` · 负债 ${usd(dapp.debtUsd)}` : " · 负债 $0"}
             </span>
           </div>
           <span className="protocol-summary">
             {stat && (
               stat.comparable ? (
                 <span className={`small num protocol-history ${deltaClass(stat.changeUsd)}`}>
-                  {reference}前余额 {usd(stat.pastUsd)} · 目前 {signedUsd(stat.changeUsd)}
+                  {reference}前净值 {usd(stat.pastUsd)} · 目前 {signedUsd(stat.changeUsd)}
                   {stat.changePct != null ? `（${signedPct(stat.changePct)}）` : ""}
                   {stat.apy != null ? ` · 年化 ${stat.apy.toFixed(1)}%` : ""}
                 </span>
@@ -139,7 +178,9 @@ export function ProtocolSections({
                 <span className="small protocol-history">{reference}前暂无可比余额</span>
               )
             )}
-            <span className="section-total num">{usd(dapp.netUsd)}</span>
+            <span className="section-total num" title="净值 = 资产 − 负债">
+              净值 {usd(dapp.netUsd)}
+            </span>
           </span>
         </div>
 
@@ -169,21 +210,21 @@ export function ProtocolSections({
                   <span className="cell-main">{chainName}</span>
                 </div>
                 <div className="cell-main hide-md">
-                  <span className="cell-token" style={{ gap: 6 }}>
-                    <ChainIcon id={chainId} name={chainName} size={14} />
-                    {symbolsOf(wallet, "asset")}
-                  </span>
+                  <PositionDetail wallet={wallet} role="asset" />
                 </div>
-                <div
-                  className="cell-main hide-md"
-                  style={{ color: wallet.debtUsd > 0.01 ? "var(--neg)" : "var(--ink-3)" }}
-                >
-                  {symbolsOf(wallet, "debt")}
+                <div className="cell-main hide-md">
+                  <PositionDetail wallet={wallet} role="debt" />
                 </div>
-                <div className="right cell-main num">{usd(wallet.netUsd)}</div>
+                <div className="right cell-main num" title="净值 = 资产 − 负债">
+                  {usd(wallet.netUsd)}
+                </div>
 
                 <div className="flow-meta cell-sub">
-                  {chainName} · 资产：{symbolsOf(wallet, "asset")} · 净值 {usd(wallet.netUsd)}
+                  {chainName} · 资产 {usd(wallet.assetUsd)}（{symbolsOf(wallet, "asset")}）
+                  {wallet.debtUsd > 0.01
+                    ? ` · 负债 ${usd(wallet.debtUsd)}（${symbolsOf(wallet, "debt")}）`
+                    : " · 负债 $0"}
+                  {" · "}净值 {usd(wallet.netUsd)}
                 </div>
               </div>
             );
@@ -198,7 +239,7 @@ export function ProtocolSections({
       <div className="section-head">
         <div className="section-title">
           <h2>DeFi 仓位</h2>
-          <span className="hint">{dapps.length} 个协议 · 只解释组成，不重复计入总额</span>
+          <span className="hint">{dapps.length} 个协议 · 展示资产与负债明细，净值=资产−负债；不重复计入总额</span>
         </div>
         <span className="inline">
           {perf?.available ? (

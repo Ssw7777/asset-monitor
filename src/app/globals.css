@@ -867,8 +867,8 @@ textarea.field {
 /* 协议下的钱包份额表 */
 .grid-protocol {
   grid-template-columns:
-    minmax(170px, 1.3fr) minmax(110px, 0.9fr) minmax(110px, 0.9fr)
-    minmax(110px, 0.9fr) minmax(120px, 0.95fr);
+    minmax(150px, 1.1fr) minmax(90px, 0.7fr) minmax(160px, 1.2fr)
+    minmax(150px, 1.1fr) minmax(110px, 0.85fr);
 }
 
 /* 钱包表 */
