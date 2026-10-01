@@ -21,7 +21,7 @@ async function handle(req: NextRequest) {
 
   /**
    * mode=fast：只刷新交易所 + 写一条快照。
-   * mode=wallet-batch：只刷新最多 5 个轮转钱包，不读交易所、不写快照。
+   * mode=wallet-batch：只刷新最多 3 个轮转钱包，不读交易所、不写快照。
    *   - staleMinutes=N：只刷「成功时间超过 N 分钟」的地址（调度器 20 分钟补查批次）。
    *   - walletId=x：只刷指定地址（地址管理页「检查」按钮）。
    * mode=full / auto：兼容页面手动刷新与每日兜底，同样使用安全的小批量钱包预算。
@@ -31,7 +31,7 @@ async function handle(req: NextRequest) {
   const walletBudgetParam = searchParams.get("walletBudget");
   const requestedWalletBudget = walletBudgetParam === null ? Number.NaN : Number(walletBudgetParam);
   const walletBudget = Number.isInteger(requestedWalletBudget)
-    ? Math.max(1, Math.min(5, requestedWalletBudget))
+    ? Math.max(1, Math.min(3, requestedWalletBudget))
     : undefined;
   const staleMinutesParam = Number(searchParams.get("staleMinutes"));
   const staleMinutes =
@@ -65,7 +65,7 @@ async function handle(req: NextRequest) {
       {
         ok: refreshStatus !== "failed",
         mode,
-        walletBudget: walletBudget ?? 5,
+        walletBudget: walletBudget ?? 2,
         staleMinutes: staleMinutes ?? null,
         ran: result.payload.refreshMode,
         refreshStatus,

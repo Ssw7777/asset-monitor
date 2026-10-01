@@ -7,7 +7,10 @@ const READ_ONLY_PATHS = new Set([
 ]);
 export interface OkxWeb3Credentials {key:string;secret:string;passphrase:string}
 export function web3Credentials():OkxWeb3Credentials|null {
-  const key=process.env.OKX_WEB3_API_KEY,secret=process.env.OKX_WEB3_API_SECRET,passphrase=process.env.OKX_WEB3_PASSPHRASE;
+  // Production stores OnchainOS keys as OKX_ONCHAINOS_*; OKX_WEB3_* remains the canonical name.
+  const key=process.env.OKX_WEB3_API_KEY||process.env.OKX_ONCHAINOS_API_KEY;
+  const secret=process.env.OKX_WEB3_API_SECRET||process.env.OKX_ONCHAINOS_API_SECRET;
+  const passphrase=process.env.OKX_WEB3_PASSPHRASE||process.env.OKX_ONCHAINOS_API_PASSPHRASE;
   // Never fall back to CEX trading keys or Agentic Wallet login credentials.
   return key&&secret&&passphrase?{key,secret,passphrase}:null;
 }

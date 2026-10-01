@@ -17,6 +17,7 @@ import type {
 import { activeTokenSource, fetchZerionTokens, type TokenSource } from "./token-providers";
 import { mergeTokenCacheObservation, tokenCacheNeedsRefresh, tokenIdentity, hasNonzeroHolding } from "./token-cache-policy";
 import {preserveRpcProtocols} from './protocol-observation';
+import {fetchCalibratedWalletTotal} from './total-calibration';
 
 export interface ChainBalanceDetail {
   id: string;
@@ -52,18 +53,23 @@ const PROTOCOL_TTL = 6 * 60 * 60 * 1000;
 const PROTOCOL_RETRY_TTL = 30 * 60 * 1000;
 /** One protocol request per batch is enough to refresh all 25 records well inside the 6-hour TTL. */
 const PROTOCOL_WALLET_BUDGET = 1;
-/** Five widely spaced batches of five cover all 25 configured wallets in about ten minutes. */
-const MAX_PUBLIC_REQUESTS_PER_RUN = 5;
 /**
- * 直连层（Alchemy/Zerion 鉴权接口）可以并行：无公共接口的 3 秒串行限制。
+ * Smaller Rabby batches (2) + longer spacing reduce 429/503 cascades.
+ * Scheduler raises trigger frequency; concurrency stays low.
+ */
+const MAX_PUBLIC_REQUESTS_PER_RUN = 2;
+/**
+ * 直连层（Alchemy/Zerion 鉴权接口）可以并行：无公共接口的串行限制。
  * 公共源兜底请求仍会被 waitForPublicSlot 全局串行化，互不冲突。
  */
-const CONCURRENCY = 6;
+const CONCURRENCY = 2;
 /**
- * Rabby / DeBank 公共接口严格串行，并让相邻请求至少间隔 3 秒。
- * 每个云端小批次最多 5 个钱包；批次之间由调度器留出约 135 秒。
+ * Rabby / DeBank 公共接口严格串行；相邻请求至少间隔 5 秒。
+ * 刚成功的地址默认跳过，避免重复烧额度。
  */
-const PUBLIC_REQUEST_INTERVAL_MS = 3_000;
+const PUBLIC_REQUEST_INTERVAL_MS = 5_000;
+/** Skip wallets whose lastSuccess is newer than this (unless only/live). */
+const FRESH_SKIP_MS = 8 * 60_000;
 /**
  * 代币明细发现额度控制：成功缓存 12 小时，失败至少间隔 15 分钟；每轮最多 1 个地址。
  * lastAttemptAt 仅用于失败退避，不能冒充上次成功更新时间。
@@ -112,7 +118,8 @@ function publicBlocked(url?: string): boolean {
 }
 
 function markPublicBlocked(url: string, ms: number) {
-  const wait = Math.min(2 * 60_000, Math.max(15_000, ms));
+  // Longer cooldown after consecutive 429s; scheduler keeps ticking smaller batches.
+  const wait = Math.min(3 * 60_000, Math.max(30_000, ms));
   const host = publicHost(url);
   publicBlockedUntilByHost.set(
     host,
@@ -717,6 +724,9 @@ export async function refreshWallets(
   } else if (opts.staleMinutes && opts.staleMinutes > 0) {
     const minAgeMs = opts.staleMinutes * 60_000;
     pool = wallets.filter((wallet) => nowMs - successTs(wallet) >= minAgeMs);
+  } else if (!opts.live) {
+    // Skip recently successful addresses so Rabby quota goes to stale wallets.
+    pool = wallets.filter((wallet) => nowMs - successTs(wallet) >= FRESH_SKIP_MS);
   }
   const targets = [...pool]
     .sort(
@@ -763,12 +773,14 @@ export async function refreshWallets(
     const previousAppChains = (chainStore[addressLower]?.chains ?? []).filter((chain) =>
       chain.id.startsWith("app:")
     );
+    const previousBaseChains = (chainStore[addressLower]?.chains ?? []).filter(
+      (chain) => !chain.id.startsWith("app:")
+    );
     const { detail, apps, status, attempted } = await fetchWalletDetail(
       wallet.address,
       true,
       previousAppChains
     );
-    if (!attempted) return wallet;
 
     if (status === "ok" && detail) {
       chainStore[addressLower] = {
@@ -818,8 +830,56 @@ export async function refreshWallets(
       };
     }
 
-    // Never switch valuation sources after a public read fails. Keeping the last
-    // confirmed balance prevents API/cache transitions from becoming fake flows.
+    // Rabby/public failed or blocked: calibrate with OKX/Zerion authentic totals.
+    // Never invent a total from token quantities / RPC amounts.
+    if (hasDetailTime()) {
+      const calibrated = await fetchCalibratedWalletTotal(wallet.address, { deadlineMs: stopAt });
+      if (calibrated) {
+        const appUsd = previousAppChains.reduce((sum, chain) => sum + (Number(chain.valueUsd) || 0), 0);
+        const balanceUsd = Math.round((calibrated.totalUsd + appUsd) * 100) / 100;
+        const baseChains =
+          previousBaseChains.length > 0
+            ? previousBaseChains.map((chain) => ({ ...chain }))
+            : [
+                {
+                  id: `calibrated:${calibrated.source}`,
+                  name: calibrated.source === "okx-web3" ? "OKX OnchainOS" : "Zerion",
+                  valueUsd: calibrated.totalUsd,
+                },
+              ];
+        chainStore[addressLower] = {
+          at: attemptedAt,
+          totalUsd: balanceUsd,
+          chains: [...baseChains, ...previousAppChains.map((chain) => ({ ...chain }))].sort(
+            (left, right) => right.valueUsd - left.valueUsd
+          ),
+        };
+        if (protocolTargets.has(addressLower) && hasDetailTime() && !publicBlocked()) {
+          await fetchComplexProtocols(wallet.address, protocolStore);
+        }
+        if (wantsTokenDetail && hasDetailTime()) {
+          await fetchWalletTokens(
+            wallet.address,
+            tokenChainsFor(wallet.address),
+            tokenStore,
+            true,
+            stopAt
+          );
+        }
+        return {
+          ...wallet,
+          balanceUsd,
+          lastUpdated: attemptedAt,
+          updatedAt: attemptedAt,
+          lastSuccess: { at: attemptedAt, balanceUsd },
+          status: "ok" as const,
+          source: calibrated.source === "zerion" ? ("zerion" as const) : ("direct" as const),
+        };
+      }
+    }
+
+    // Keep last confirmed balance; never zero on provider failure.
+    if (!attempted && !publicBlocked()) return wallet;
     if (wantsTokenDetail && hasDetailTime()) {
       await fetchWalletTokens(
         wallet.address,

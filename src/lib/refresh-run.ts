@@ -741,7 +741,8 @@ export async function runWalletBatch(
   const walletUsable = finalState.wallets.filter(
     (wallet) => wallet.status !== "error" || wallet.balanceUsd > 0
   ).length;
-  const noStaleTargets = !!opts.staleMinutes && !onchain.batchAttempted;
+  // No due wallets (all fresh within skip window, or staleMinutes filter empty) is success.
+  const noDueTargets = !onchain.batchAttempted;
 
   return {
     state: finalState,
@@ -755,8 +756,8 @@ export async function runWalletBatch(
       refreshMode: "wallet-batch",
       staleMinutes: opts.staleMinutes ?? null,
       checkedWalletIds: opts.walletIds ?? null,
-      skipped: noStaleTargets ? "no_stale_wallets" : undefined,
-      refreshStatus: noStaleTargets
+      skipped: noDueTargets ? "no_due_wallets" : undefined,
+      refreshStatus: noDueTargets
         ? "ok"
         : onchain.batchSucceeded === 0
           ? "failed"
