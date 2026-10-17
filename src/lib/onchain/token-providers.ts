@@ -1,6 +1,7 @@
 import type { TokenLine } from "../types";
 import { nextZerionKey, zerionKeys, zerionRequest } from "./zerion-keys";
 import { readZerionPositionPages, type PositionPartialReason } from "./zerion-position-parser";
+import { isDustTokenValue, isJunkTokenSymbol } from "./junk-tokens";
 
 export type TokenSource = "debank" | "zerion" | "rabby-public" | "none";
 
@@ -168,11 +169,11 @@ function collect(
   let unpricedCount = 0;
   for (const row of rows) {
     const symbol = String(row.symbol || "").trim();
-    if (!symbol) continue;
+    if (!symbol || isJunkTokenSymbol(symbol)) continue;
     const amount = number(row.amount);
     if (!amount) continue;
     const valueUsd = Math.abs(number(row.valueUsd));
-    if (valueUsd < MIN_VALUE_USD) {
+    if (valueUsd < MIN_VALUE_USD || isDustTokenValue(valueUsd)) {
       unpricedCount += 1;
       unpricedByChain[row.chain] = (unpricedByChain[row.chain] || 0) + 1;
       continue;

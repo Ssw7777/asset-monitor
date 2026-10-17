@@ -6,7 +6,7 @@ import { CHANGE_RANGES } from "@/lib/changes";
 import { amountNum, deltaClass, signedPct, signedUsd, timeAgo, usd } from "./format";
 import { TokenIcon } from "./TokenIcon";
 
-const LABEL: Record<string, string> = { okx: "OKX", binance: "Binance", gate: "Gate" };
+const LABEL: Record<string, string> = { okx: "OKX", binance: "Binance", gate: "Gate", bitget: "Bitget" };
 
 function statusText(exchange: ExchangeBalance) {
   switch (exchange.status) {
@@ -15,7 +15,7 @@ function statusText(exchange: ExchangeBalance) {
     case "missing_keys":
       return { text: "未配置 API · 保留上次余额", cls: "" };
     case "missing_passphrase":
-      return { text: "缺少 OKX Passphrase · 保留上次余额", cls: "" };
+      return { text: "缺少 Passphrase · 保留上次余额", cls: "" };
     case "error":
       return { text: `读取失败 · 保留上次余额`, cls: "neg" };
     default:
@@ -49,7 +49,7 @@ export function ExchangeSection({
       <div className="section-head">
         <div className="section-title">
           <h2>交易所</h2>
-          <span className="hint">OKX / Binance / Gate · 只读 API，密钥仅服务端</span>
+          <span className="hint">OKX / Binance / Gate / Bitget · 只读 API，密钥仅服务端</span>
         </div>
         <span className="section-total num">{usd(totalUsd)}</span>
       </div>

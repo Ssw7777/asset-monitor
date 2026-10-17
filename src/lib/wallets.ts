@@ -63,3 +63,31 @@ export function makeWallet(partial: {
     status: "baseline",
   };
 }
+
+/** Abstract 地址管理页这 10 个已提空地址：停更，只保留展示。 */
+export const PAUSED_ABSTRACT_ADDRESSES = new Set([
+  "0x97a1f45f3e64d99d2e222547e20f9fcc8f2d5ff0",
+  "0x1897868924ba4722e9c01e9619aad55d83c17f34",
+  "0x9f600c729e953536f90fbf5dd41891eee68e1de7",
+  "0x5d79bc991884f2316c06631f9de704c441f57121",
+  "0x3bfd51e42705873fbca47f22484820c9e09dcf61",
+  "0x446018c09bd2a9c50cba161e90b1bca5433acdeb",
+  "0xe8094c9380899205af6ac43181625cad21840c1e",
+  "0xabd87fc5e600ca7205b95f6d9b26e7c974067caa",
+  "0x41c0f5ca063da149c227c21d106a7838cbc74d19",
+  "0x3a7a0477ad09d8abc78254bf1e53dcc7ed5f030d",
+].map((a) => a.toLowerCase()));
+
+export function isWalletRefreshEnabled(wallet: Pick<Wallet, "address" | "refreshPaused">): boolean {
+  if (wallet.refreshPaused === true) return false;
+  return !PAUSED_ABSTRACT_ADDRESSES.has(normalizeAddress(wallet.address));
+}
+
+/** One-shot Abstract dust rescans for paused wallets (junk-priced totals replaced). */
+export const PAUSED_ABSTRACT_RESCANNED_USD: Record<string, number> = {
+  "0x97a1f45f3e64d99d2e222547e20f9fcc8f2d5ff0": 0.02,
+};
+
+export function activeRefreshWallets<T extends Pick<Wallet, "address" | "refreshPaused">>(wallets: T[]): T[] {
+  return wallets.filter(isWalletRefreshEnabled);
+}

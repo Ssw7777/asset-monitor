@@ -5,14 +5,16 @@ import type {
   PortfolioState,
   SnapshotPoint,
 } from "./types";
+import { isWalletRefreshEnabled } from "./wallets";
 
 export type { FlowDirection, FlowEntityType, FlowEvent } from "./types";
 
-export type FlowRangeKey = "24h" | "7d" | "all";
+export type FlowRangeKey = "24h" | "7d" | "30d" | "all";
 
 export const FLOW_RANGES: Array<{ key: FlowRangeKey; label: string; ms: number | null }> = [
   { key: "24h", label: "24 小时", ms: 24 * 60 * 60 * 1000 },
   { key: "7d", label: "7 天", ms: 7 * 24 * 60 * 60 * 1000 },
+  { key: "30d", label: "30 天", ms: 30 * 24 * 60 * 60 * 1000 },
   { key: "all", label: "全部记录", ms: null },
 ];
 
@@ -32,11 +34,11 @@ export interface FlowSummary {
   note: string;
 }
 
-const EXCHANGE_LABEL: Record<string, string> = { okx: "OKX", binance: "Binance", gate: "Gate" };
+const EXCHANGE_LABEL: Record<string, string> = { okx: "OKX", binance: "Binance", gate: "Gate", bitget: "Bitget" };
 /** 间隔超过 6 小时就不做归因：中间可能发生了多次变动，硬算会得出错误结论。 */
 const MAX_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** UI 的最低提示档。达到这个金额的记录会立即持久化，不随七天快照淘汰。 */
-export const PERSISTED_FLOW_MIN_USD = 50;
+export const PERSISTED_FLOW_MIN_USD = 1;
 /** 约可保存多年日常记录，同时限制单行 Turso JSON 的无限增长。 */
 export const PERSISTED_FLOW_LIMIT = 10_000;
 
@@ -83,11 +85,15 @@ function collectDeltas(state: PortfolioState, prev: SnapshotPoint, cur: Snapshot
     if (prevBasis !== curBasis) continue;
     // Discovery/removal and incomplete valuations are not comparable observations.
     if (!(address in (prev.wallets ?? {})) || !(address in (cur.wallets ?? {}))) continue;
-    if ([prevBasis, curBasis].some((basis) => basis === "public-partial" || basis === "zerion")) continue;
+    // public-partial = fresh Rabby total with a held (stale) App slice. Same-basis
+    // partial→partial deltas are like-for-like token movements; basis switches and
+    // Zerion fallbacks above/below stay excluded so App re-audits never fake a flow.
+    if ([prevBasis, curBasis].some((basis) => basis === "zerion")) continue;
     const before = Number(prev.wallets?.[address]);
     const after = Number(cur.wallets?.[address]);
     if (!Number.isFinite(before) || !Number.isFinite(after)) continue;
     const wallet = walletByAddress.get(address);
+    if (wallet && !isWalletRefreshEnabled(wallet)) continue;
     out.push({
       entityType: "wallet",
       entityKey: `wallet:${address}`,
@@ -230,7 +236,7 @@ export function buildFlowSummary(
 ): FlowSummary {
   const rangeKey = opts.range ?? "24h";
   const range = FLOW_RANGES.find((item) => item.key === rangeKey) ?? FLOW_RANGES[0];
-  const minUsd = Math.max(0, opts.minUsd ?? 50);
+  const minUsd = Math.max(0, opts.minUsd ?? 1);
   const limit = Math.max(1, opts.limit ?? 120);
   const now = Date.now();
   const baselineMs = flowBaselineMs(state);

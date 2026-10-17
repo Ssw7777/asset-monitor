@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { DappAllocation, DappWalletShare } from "@/lib/types";
 import type { ProtocolPerformanceSummary } from "@/lib/protocols";
 import type { ChangeRangeKey } from "@/lib/changes";
@@ -39,7 +39,7 @@ function ChainIcon({ id, name, size = 16 }: { id: string; name: string; size?: n
 
 /** Token rows for asset or debt (rewards count as assets). */
 function tokensOf(wallet: DappWalletShare, role: "asset" | "debt") {
-  return wallet.tokens
+  return (wallet.tokens ?? [])
     .filter((token) => (role === "asset" ? token.role !== "debt" : token.role === "debt"))
     .sort((left, right) => Math.abs(right.valueUsd) - Math.abs(left.valueUsd));
 }
@@ -85,7 +85,10 @@ function PositionDetail({
   );
 }
 
-/** DeBank 的协议区块：协议头 + 各钱包份额表；小于 1 USDT 的协议默认折叠成一行。 */
+/** 净值（仓位 USD）低于此阈值的协议 / 钱包份额不展示。 */
+const MIN_NET_USD = 10;
+
+/** DeBank 的协议区块：协议头 + 各钱包份额表；净值低于 10 USDT 的协议 / 份额不展示。 */
 export function ProtocolSections({
   dapps,
   perf,
@@ -97,21 +100,29 @@ export function ProtocolSections({
   range: ChangeRangeKey;
   onRangeChange: (range: ChangeRangeKey) => void;
 }) {
-  const [showDust, setShowDust] = useState(false);
   const perfByName = useMemo(() => {
     const map = new Map<string, ProtocolPerformanceSummary["items"][number]>();
     for (const item of perf?.items ?? []) map.set(item.name, item);
     return map;
   }, [perf]);
 
-  const { major, dust, dustTotal } = useMemo(() => {
-    const majorList = dapps.filter((dapp) => Math.abs(dapp.netUsd) >= 1);
-    const dustList = dapps.filter((dapp) => Math.abs(dapp.netUsd) < 1);
-    return {
-      major: majorList,
-      dust: dustList,
-      dustTotal: dustList.reduce((sum, dapp) => sum + dapp.netUsd, 0),
-    };
+  const { visible, hiddenCount } = useMemo(() => {
+    const list: DappAllocation[] = [];
+    let hidden = 0;
+    for (const dapp of dapps) {
+      const wallets = (dapp.wallets ?? []).filter((wallet) => Math.abs(wallet.netUsd) >= MIN_NET_USD);
+      if (Math.abs(dapp.netUsd) < MIN_NET_USD || !wallets.length) {
+        hidden += 1;
+        continue;
+      }
+      hidden += dapp.wallets.length - wallets.length;
+      // 按可见钱包重算资产 / 负债 / 净值口径，避免表头仍含已隐藏份额
+      const assetUsd = wallets.reduce((sum, wallet) => sum + wallet.assetUsd, 0);
+      const debtUsd = wallets.reduce((sum, wallet) => sum + wallet.debtUsd, 0);
+      const netUsd = wallets.reduce((sum, wallet) => sum + wallet.netUsd, 0);
+      list.push({ ...dapp, wallets, assetUsd, debtUsd, netUsd });
+    }
+    return { visible: list, hiddenCount: hidden };
   }, [dapps]);
 
   if (!dapps.length) {
@@ -124,6 +135,20 @@ export function ProtocolSections({
           </div>
         </div>
         <div className="empty">没有读到协议仓位：点击右上角刷新</div>
+      </section>
+    );
+  }
+
+  if (!visible.length) {
+    return (
+      <section className="section" id="defi">
+        <div className="section-head">
+          <div className="section-title">
+            <h2>DeFi 仓位</h2>
+            <span className="hint">净值低于 {MIN_NET_USD} USDT 的仓位已隐藏</span>
+          </div>
+        </div>
+        <div className="empty">没有达到 {MIN_NET_USD} USDT 的协议仓位可展示</div>
       </section>
     );
   }
@@ -239,7 +264,10 @@ export function ProtocolSections({
       <div className="section-head">
         <div className="section-title">
           <h2>DeFi 仓位</h2>
-          <span className="hint">{dapps.length} 个协议 · 展示资产与负债明细，净值=资产−负债；不重复计入总额</span>
+          <span className="hint">
+            {visible.length} 个协议 · 展示资产与负债明细，净值=资产−负债；不重复计入总额
+            {hiddenCount > 0 ? ` · 已隐藏净值低于 ${MIN_NET_USD} USDT 的 ${hiddenCount} 项` : ""}
+          </span>
         </div>
         <span className="inline">
           {perf?.available ? (
@@ -262,35 +290,12 @@ export function ProtocolSections({
             ))}
           </span>
           <span className="section-total num">
-            {usd(dapps.reduce((sum, dapp) => sum + dapp.netUsd, 0))}
+            {usd(visible.reduce((sum, dapp) => sum + dapp.netUsd, 0))}
           </span>
         </span>
       </div>
 
-      {major.map(renderDapp)}
-
-      {dust.length > 0 && (
-        <div className="dust-block">
-          <button
-            type="button"
-            className="dust-row"
-            onClick={() => setShowDust((value) => !value)}
-            aria-expanded={showDust}
-          >
-            <span className="cell-token">
-              <span className="token-icon fallback" style={{ width: 24, height: 24 }}>
-                ⋯
-              </span>
-              <span className="cell-token-text">
-                <b>小额协议 {dust.length} 个</b>
-                <span>每个低于 1 USDT · {showDust ? "点击收起" : "点击展开"}</span>
-              </span>
-            </span>
-            <span className="section-total num">{usd(dustTotal)}</span>
-          </button>
-          {showDust && <div className="dust-body">{dust.map(renderDapp)}</div>}
-        </div>
-      )}
+      {visible.map(renderDapp)}
     </section>
   );
 }

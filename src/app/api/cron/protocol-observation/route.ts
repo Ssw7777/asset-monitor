@@ -3,6 +3,7 @@ import {hasCronAuthorization} from '@/lib/cron-auth';
 import {mutateLiveStore as mutateStore} from '@/lib/store';
 import {applyProtocolObservation} from '@/lib/onchain/protocol-observation';
 import {refreshOnchainBreakdown} from '@/lib/onchain/debank';
+import {isWalletRefreshEnabled} from '@/lib/wallets';
 
 export const preferredRegion=['hkg1'];
 export const dynamic='force-dynamic';
@@ -19,7 +20,9 @@ export async function POST(req:NextRequest){
       for(const row of rows){
         if(typeof row?.address!=='string'||typeof row.observedAt!=='string')throw new Error('invalid_observation');
         const address=row.address.toLowerCase();
-        if(!state.wallets.some(w=>w.address.toLowerCase()===address))throw new Error('unknown_wallet');
+        const wallet=state.wallets.find(w=>w.address.toLowerCase()===address);
+        if(!wallet)throw new Error('unknown_wallet');
+        if(!isWalletRefreshEnabled(wallet))continue;
         cache[address]=applyProtocolObservation(cache[address],row.observation,row.observedAt);
       }
       state.protocolCache=cache;

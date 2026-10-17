@@ -1,4 +1,4 @@
-import { fetchBinanceBalance, fetchGateBalance, fetchOkxBalance, type CexResult } from "@/lib/cex/balances";
+import { fetchBinanceBalance, fetchBitgetBalance, fetchGateBalance, fetchOkxBalance, type CexResult } from "@/lib/cex/balances";
 import {
   parseAppDetail,
   parseProtocolDetail,
@@ -12,16 +12,25 @@ import { walletFreshness } from "@/lib/freshness";
 import {
   computeTotals,
   mutateStore,
+  mutateLiveStore,
   publicState,
   pushSnapshot,
+  pushSnapshotLive,
   readStore,
+  readLiveStore,
   updateExchanges,
+  updateExchangesLive,
   updateCexValuationVersions,
+  updateCexValuationVersionsLive,
   writeStore,
 } from "@/lib/store";
 import type { ExchangeBalance, PortfolioState } from "@/lib/types";
 import { applySpecificTokenObservation, applyTokenObservation, parseRabbyTokenObservation, tokenUuid } from "@/lib/onchain/rabby-token-observation";
 import { auditTokens } from "@/lib/token-audit";
+import { isJunkTokenSymbol } from "@/lib/onchain/junk-tokens";
+import { shouldRejectTotalUpdate, comparedTokensFromLines } from "@/lib/onchain/total-calibration";
+import { activeRefreshWallets, isWalletRefreshEnabled } from "./wallets";
+import { isCryptoManual, manualToUsd, sumManualCryptoUsd } from "./manual-assets";
 
 const APP_AUDIT_REFRESH_MS = 5.5 * 60 * 60 * 1000;
 const APP_AUDIT_BATCH_SIZE = 10;
@@ -53,7 +62,7 @@ function timestampMs(value: string | null | undefined) {
  */
 async function refreshStaleAppAudits(seedState: PortfolioState) {
   const nowMs = Date.now();
-  const targets = [...seedState.wallets]
+  const targets = [...seedState.wallets].filter(isWalletRefreshEnabled)
     .filter((wallet) => {
       const entry = seedState.protocolCache?.[wallet.address.toLowerCase()];
       const appAt = entry?.appAt;
@@ -202,7 +211,7 @@ async function refreshStaleAppAudits(seedState: PortfolioState) {
       state.wallets = wallets;
       state.chainCache = chainCache;
       state.protocolCache = protocolCache;
-      state.onchainCacheUsd = wallets.reduce(
+      state.onchainCacheUsd = wallets.filter(isWalletRefreshEnabled).reduce(
         (sum, wallet) => sum + (Number(wallet.balanceUsd) || 0),
         0
       );
@@ -229,6 +238,26 @@ async function refreshStaleAppAudits(seedState: PortfolioState) {
   };
 }
 
+/**
+ * Reject CEX misreads that would sawtooth the K-line: a sudden large jump
+ * while the previous OK reading is still fresh. Keep last-good balance.
+ * Real deposits/withdrawals land once the prior reading ages past the window.
+ */
+function shouldRejectCexJump(prev: ExchangeBalance | undefined, nextUsd: number, nowMs = Date.now()): boolean {
+  if (!prev || prev.status !== "ok") return false;
+  const previous = Number(prev.balanceUsd);
+  if (!Number.isFinite(previous) || !Number.isFinite(nextUsd)) return false;
+  const prevAt = prev.lastUpdated ? Date.parse(prev.lastUpdated) : Number.NaN;
+  // Only guard while the last good read is fresh (~12 min). Older gaps may be real moves.
+  if (!Number.isFinite(prevAt) || nowMs < prevAt || nowMs - prevAt > 12 * 60_000) return false;
+  const delta = Math.abs(nextUsd - previous);
+  const scale = Math.max(previous, nextUsd, 1);
+  // Night 10/16 sawtooth: reject jumps above max($400, 20%).
+  if (delta < 400) return false;
+  if (delta / scale < 0.2) return false;
+  return true;
+}
+
 function mapExchange(
   exchange: ExchangeBalance["exchange"],
   result: CexResult,
@@ -239,6 +268,17 @@ function mapExchange(
   const keepBalance = result.status === "ok" ? result.balanceUsd : (prev?.balanceUsd ?? baseline);
 
   if (result.status === "ok") {
+    if (shouldRejectCexJump(prev, result.balanceUsd)) {
+      console.warn(
+        `[refresh] CEX spike rejected for ${exchange}: kept ${prev?.balanceUsd} rejected ${result.balanceUsd}`
+      );
+      return {
+        exchange,
+        balanceUsd: prev?.balanceUsd ?? baseline,
+        lastUpdated: prev?.lastUpdated ?? null,
+        status: "ok",
+      };
+    }
     return { exchange, balanceUsd: result.balanceUsd, lastUpdated: now, status: "ok" };
   }
   if (result.status === "missing_passphrase") {
@@ -417,6 +457,8 @@ export async function ingestWalletObservations(
     for (const entry of parsed) {
       const walletIndex = walletIndexByAddress.get(entry.normalized)!;
       const wallet = wallets[walletIndex];
+      // Paused Abstract wallets stay frozen; ignore scheduler/observation writes.
+      if (!isWalletRefreshEnabled(wallet)) continue;
       const previousChains = chainCache[entry.normalized]?.chains ?? [];
       const previousAppChains = previousChains.filter((chain) => chain.id.startsWith("app:"));
       const previousAppUsd = previousAppChains.reduce(
@@ -472,6 +514,8 @@ export async function ingestWalletObservations(
         protocolsRefreshed += 1;
       }
 
+      let rejectZero = false;
+      let rejectSpikeOrRisk = false;
       if (applyTotal || applyApp) {
         const appChains = applyApp && entry.appDetail ? entry.appDetail.chains : previousAppChains;
         const appUsd = appChains.reduce((sum, chain) => sum + (Number(chain.valueUsd) || 0), 0);
@@ -486,6 +530,40 @@ export async function ingestWalletObservations(
           (left, right) => right.valueUsd - left.valueUsd
         );
         const balanceUsd = Math.round((baseUsd + appUsd) * 100) / 100;
+        const previousBalance = Number(wallet.balanceUsd) || 0;
+        const tokenEvidence = (tokenCache[entry.normalized]?.tokens ?? [])
+          .filter((token) => !isJunkTokenSymbol(token.symbol))
+          .reduce((sum, token) => sum + (Number(token.valueUsd) || 0), 0);
+        rejectZero =
+          applyTotal &&
+          balanceUsd < 0.01 &&
+          previousBalance >= 1 &&
+          (tokenEvidence >= 5 || entry.detail.explicitEmpty !== true);
+        const cachedLines = tokenCache[entry.normalized]?.tokens;
+        rejectSpikeOrRisk =
+          applyTotal &&
+          shouldRejectTotalUpdate({
+            previousUsd: previousBalance,
+            nextUsd: balanceUsd,
+            confirmedEmpty: entry.detail.explicitEmpty === true,
+            previousTokens: cachedLines ? comparedTokensFromLines(cachedLines) : null,
+            nextTokens: null,
+          });
+        if (rejectZero || rejectSpikeOrRisk) {
+          // Keep the last-good NAV, but still stamp lastSuccess so CF/GH observations
+          // that confirm a coverage flap do not leave the wallet aging past 5 minutes.
+          if (applyTotal) {
+            wallets[walletIndex] = {
+              ...wallet,
+              balanceUsd: previousBalance,
+              lastUpdated: entry.observationTime,
+              updatedAt: entry.observationTime,
+              lastSuccess: { at: entry.observationTime, balanceUsd: previousBalance },
+              status: "ok" as const,
+              source: wallet.source ?? "public",
+            };
+          }
+        } else {
         const appAt = protocolCache[entry.normalized]?.appAt;
         const appAtMs = appAt ? new Date(appAt).getTime() : Number.NaN;
         const hasCompleteAppAudit =
@@ -512,8 +590,10 @@ export async function ingestWalletObservations(
           totalUsd: balanceUsd,
           chains: combinedChains,
         };
+        }
       }
 
+      // Accepted writes and intentional keep-previous touches both refresh the clock.
       if (applyTotal) {
         totalRefreshed += 1;
         latestAppliedObservationMs = Math.max(latestAppliedObservationMs, entry.observedMs);
@@ -533,11 +613,11 @@ export async function ingestWalletObservations(
         Math.max(previousWalletObservationMs || 0, latestAppliedObservationMs)
       ).toISOString();
     }
-    state.onchainCacheUsd = wallets.reduce(
+    state.onchainCacheUsd = wallets.filter(isWalletRefreshEnabled).reduce(
       (sum, wallet) => sum + (Number(wallet.balanceUsd) || 0),
       0
     );
-    const allWalletsFresh = wallets.every((wallet) => {
+    const allWalletsFresh = wallets.filter(isWalletRefreshEnabled).every((wallet) => {
       const successMs = wallet.lastSuccess?.at
         ? new Date(wallet.lastSuccess.at).getTime()
         : Number.NaN;
@@ -549,10 +629,10 @@ export async function ingestWalletObservations(
       return Number.isFinite(valueMs) && valueMs <= receivedMs + 60_000 &&
         receivedMs - valueMs <= 6 * 60 * 60 * 1000;
     };
-    const appsStale = wallets.filter(
+    const appsStale = wallets.filter(isWalletRefreshEnabled).filter(
       (wallet) => !cacheFresh(protocolCache[wallet.address.toLowerCase()]?.appAt)
     ).length;
-    const protocolsStale = wallets.filter(
+    const protocolsStale = wallets.filter(isWalletRefreshEnabled).filter(
       (wallet) => !cacheFresh(protocolCache[wallet.address.toLowerCase()]?.at)
     ).length;
     if (applied > 0) {
@@ -592,11 +672,12 @@ export async function ingestWalletObservations(
   } = mutation.result;
   const skipped = parsed.length - applied;
 
-  const walletOk = state.wallets.filter((wallet) => wallet.status === "ok").length;
+  const activeWallets = activeRefreshWallets(state.wallets);
+  const walletOk = activeWallets.filter((wallet) => wallet.status === "ok").length;
   return {
     state,
     walletOk,
-    walletTotal: state.wallets.length,
+    walletTotal: activeWallets.length,
     batchAttempted: parsed.length,
     batchSucceeded: applied,
     totals: computeTotals(state),
@@ -704,20 +785,69 @@ async function refreshOnchainSlice(
     console.error("[refresh] on-chain breakdown failed", error);
   }
 
-  // Persist the entire on-chain slice once. The old per-field helpers each read and
-  // rewrote the same large JSON document, multiplying Turso traffic for every batch.
-  state.wallets = wallets;
-  state.onchainCacheUsd = wallets.reduce((total, wallet) => total + wallet.balanceUsd, 0);
-  state.tokenCache = tokenCache;
-  state.protocolCache = protocolCache;
-  state.chainCache = chainCache;
-  state.zerionDefi = defiCache;
-  state.longtailCache = longtailCache;
-  state.onchainBreakdown = breakdown;
-  if (batchSucceeded > 0) state.lastWalletObservationAt = now;
-  await writeStore(state);
+  // Persist via CAS-aware mutateLiveStore. Blind writeStore raced with rpc/web3
+  // observation writers (they do not hold the refresh lease) and threw StoreConflictError.
+  // Only merge wallets/caches this batch actually attempted so concurrent updates survive.
+  if (batchAttempted === 0) {
+    return { state, wallets, partial, breakdown: state.onchainBreakdown ?? breakdown, batchAttempted, batchSucceeded };
+  }
 
-  return { state, wallets, partial, breakdown, batchAttempted, batchSucceeded };
+  const attemptedIds = new Set(
+    wallets
+      .filter((wallet) => (wallet.updatedAt ?? null) !== previousAttemptById.get(wallet.id))
+      .map((wallet) => wallet.id)
+  );
+  const attemptedAddrs = new Set(
+    wallets.filter((wallet) => attemptedIds.has(wallet.id)).map((wallet) => wallet.address.toLowerCase())
+  );
+  const refreshedById = new Map(wallets.map((wallet) => [wallet.id, wallet]));
+
+  const { state: persisted } = await mutateLiveStore(async (latest) => {
+    latest.wallets = latest.wallets.map((wallet) =>
+      attemptedIds.has(wallet.id) ? refreshedById.get(wallet.id) ?? wallet : wallet
+    );
+    const mergeAddr = <T,>(dest: Record<string, T> | undefined, src: Record<string, T>) => {
+      const out: Record<string, T> = { ...(dest || {}) };
+      for (const addr of attemptedAddrs) {
+        if (Object.prototype.hasOwnProperty.call(src, addr)) out[addr] = src[addr];
+      }
+      return out;
+    };
+    latest.tokenCache = mergeAddr(latest.tokenCache, tokenCache);
+    latest.protocolCache = mergeAddr(latest.protocolCache, protocolCache);
+    latest.chainCache = mergeAddr(latest.chainCache, chainCache);
+    latest.zerionDefi = mergeAddr(latest.zerionDefi, defiCache);
+    latest.longtailCache = mergeAddr(latest.longtailCache, longtailCache);
+    latest.onchainCacheUsd =
+      Math.round(activeRefreshWallets(latest.wallets).reduce((total, wallet) => total + wallet.balanceUsd, 0) * 100) / 100;
+    if (breakdown) {
+      const previous = latest.onchainBreakdown ?? null;
+      const richer = !previous || breakdown.successfulWallets >= previous.successfulWallets;
+      latest.onchainBreakdown = richer || !previous
+        ? breakdown
+        : {
+            ...previous,
+            partial: true,
+            tokens: breakdown.tokens.length ? breakdown.tokens : previous.tokens,
+            tokensTotalUsd: breakdown.tokens.length
+              ? breakdown.tokensTotalUsd
+              : previous.tokensTotalUsd,
+            tokenSource: breakdown.tokenSource || previous.tokenSource,
+            cachedWallets: breakdown.cachedWallets,
+            rateLimitedUntil: breakdown.rateLimitedUntil ?? null,
+          };
+    }
+    if (batchSucceeded > 0) latest.lastWalletObservationAt = now;
+  });
+
+  return {
+    state: persisted,
+    wallets: persisted.wallets,
+    partial,
+    breakdown: persisted.onchainBreakdown ?? breakdown,
+    batchAttempted,
+    batchSucceeded,
+  };
 }
 
 /**
@@ -737,8 +867,9 @@ export async function runWalletBatch(
     live: opts.live,
   });
   const finalState = onchain.state;
-  const walletOk = finalState.wallets.filter((wallet) => wallet.status === "ok").length;
-  const walletUsable = finalState.wallets.filter(
+  const activeWallets = activeRefreshWallets(finalState.wallets);
+  const walletOk = activeWallets.filter((wallet) => wallet.status === "ok").length;
+  const walletUsable = activeWallets.filter(
     (wallet) => wallet.status !== "error" || wallet.balanceUsd > 0
   ).length;
   // No due wallets (all fresh within skip window, or staleMinutes filter empty) is success.
@@ -747,7 +878,7 @@ export async function runWalletBatch(
   return {
     state: finalState,
     walletOk,
-    walletTotal: finalState.wallets.length,
+    walletTotal: activeWallets.length,
     batchAttempted: onchain.batchAttempted,
     batchSucceeded: onchain.batchSucceeded,
     totals: computeTotals(finalState),
@@ -761,7 +892,7 @@ export async function runWalletBatch(
         ? "ok"
         : onchain.batchSucceeded === 0
           ? "failed"
-          : walletOk === finalState.wallets.length
+          : walletOk === activeWallets.length
           ? "ok"
           : walletUsable > 0
             ? "partial"
@@ -772,39 +903,44 @@ export async function runWalletBatch(
 
 /**
  * 刷新：
- * - fast：刷新三家交易所和到期的 App 原生资产审计，再写一条快照。
+ * - fast：刷新各交易所和到期的 App 原生资产审计，再写一条快照。
  *   钱包链上余额由云端分片任务按十分钟周期更新。
  * - full：交易所 + 一小批轮转地址余额 + DApp / 代币缓存补齐；云端任务连续分批调用。
  */
 export async function runRefresh(
   opts: { fast?: boolean; auto?: boolean; walletBudget?: number; live?: boolean } = {}
 ): Promise<RefreshResult> {
-  const state = await readStore();
+  // Explicit fast must not materialize snapshot history (Workers Free ~10ms CPU / Error 1102).
+  // auto still probes lastFullRefreshAt via a full read, then falls back to live writes when fast.
+  const forcedFast = opts.fast === true;
+  const probe = forcedFast ? await readLiveStore() : await readStore();
   // auto：用略短于 5 分钟的容差判断是否全量，避免定时器提前数秒时误判为快速刷新。
   // 计划任务存在数秒调度抖动；用 4 分钟门槛，确保 PT5M 调用不会因 4:58 而误判成 fast。
   const fullIntervalMs = 4 * 60 * 1000;
-  const sinceFull = state.lastFullRefreshAt
-    ? Date.now() - new Date(state.lastFullRefreshAt).getTime()
+  const sinceFull = probe.lastFullRefreshAt
+    ? Date.now() - new Date(probe.lastFullRefreshAt).getTime()
     : Number.MAX_SAFE_INTEGER;
-  const fast = opts.fast === true ? true : opts.auto === true ? sinceFull < fullIntervalMs : false;
+  const fast = forcedFast ? true : opts.auto === true ? sinceFull < fullIntervalMs : false;
+  const liveState = fast ? (forcedFast ? probe : await readLiveStore()) : probe;
   const now = new Date().toISOString();
-  const blob = state.encryptedSecrets;
+  const blob = liveState.encryptedSecrets;
 
-  const [okx, binance, gate] = await Promise.all([
+  const [okx, binance, gate, bitget] = await Promise.all([
     fetchOkxBalance(blob),
     fetchBinanceBalance(blob),
     fetchGateBalance(blob),
+    fetchBitgetBalance(blob),
   ]);
 
   // 全账户估值口径首次成功时只建立新基准，不把“旧算法 → 新算法”的差额记成交易。
   const valuationVersion = 2;
-  const previousVersions = state.cexValuationVersions ?? {};
-  const cexResults = { okx, binance, gate } as const;
+  const previousVersions = liveState.cexValuationVersions ?? {};
+  const cexResults = { okx, binance, gate, bitget } as const;
   const suppressExchangeFlows = (Object.keys(cexResults) as Array<keyof typeof cexResults>).filter(
     (exchange) => cexResults[exchange].status === "ok" && previousVersions[exchange] !== valuationVersion
   );
 
-  const prevMap = Object.fromEntries(state.exchanges.map((item) => [item.exchange, item])) as Record<
+  const prevMap = Object.fromEntries(liveState.exchanges.map((item) => [item.exchange, item])) as Record<
     string,
     ExchangeBalance | undefined
   >;
@@ -812,9 +948,13 @@ export async function runRefresh(
     mapExchange("okx", okx, prevMap.okx, BASELINE.okx, now),
     mapExchange("binance", binance, prevMap.binance, BASELINE.binance, now),
     mapExchange("gate", gate, prevMap.gate, BASELINE.gate, now),
+    mapExchange("bitget", bitget, prevMap.bitget, BASELINE.bitget, now),
   ];
-  let latest = await updateExchanges(exchanges);
-  const appAudit = await refreshStaleAppAudits(latest);
+  let latest = fast ? await updateExchangesLive(exchanges) : await updateExchanges(exchanges);
+  // App audits pull Zerion and rewrite caches — skip on Workers-friendly fast lane.
+  const appAudit = fast
+    ? { state: latest, attempted: 0, refreshed: 0 }
+    : await refreshStaleAppAudits(latest);
   latest = appAudit.state;
 
   let partial = latest.wallets.some(
@@ -833,13 +973,18 @@ export async function runRefresh(
 
   const totals = computeTotals(latest);
   // A newly written snapshot does not make old component observations current.
-  partial = partial || walletFreshness(latest.wallets).stale > 0 ||
+  partial = partial || walletFreshness(activeRefreshWallets(latest.wallets)).stale > 0 ||
     latest.exchanges.some((item) => item.status !== "ok");
-  let finalState = await pushSnapshot({
-    totalUsd: totals.totalUsd,
+  // K 线只记加密资产：人民币（链下）手动资产仍进总额 / 手动区，但不写入趋势快照。
+  const rate = Number(latest.usdCnyRate) || 6.66;
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const manualForChart = sumManualCryptoUsd(latest.manual, rate);
+  const cryptoManualItems = latest.manual.filter(isCryptoManual);
+  const snapInput = {
+    totalUsd: round2(totals.onchainUsd + totals.cexUsd + manualForChart),
     onchain: totals.onchainUsd,
     cex: totals.cexUsd,
-    manual: totals.manualUsd,
+    manual: manualForChart,
     exchanges: Object.fromEntries(latest.exchanges.map((item) => [item.exchange, item.balanceUsd])),
     wallets: Object.fromEntries(latest.wallets.map((wallet) => [wallet.address.toLowerCase(), wallet.balanceUsd])),
     walletBasis: Object.fromEntries(
@@ -851,23 +996,30 @@ export async function runRefresh(
     zerionWallets: latest.wallets
       .filter((wallet) => wallet.source === "zerion")
       .map((wallet) => wallet.address.toLowerCase()),
-    manualItems: Object.fromEntries(latest.manual.map((item) => [item.name, item.amountUsd])),
+    manualItems: Object.fromEntries(
+      cryptoManualItems.map((item) => [item.name, manualToUsd(item, rate)])
+    ),
     dapps: breakdown
       ? Object.fromEntries(breakdown.dapps.map((dapp) => [dapp.name, dapp.netUsd]))
       : undefined,
     partial,
     suppressExchangeFlows: suppressExchangeFlows.length ? suppressExchangeFlows : undefined,
-  });
+  };
+  let finalState = fast ? await pushSnapshotLive(snapInput) : await pushSnapshot(snapInput);
   if (suppressExchangeFlows.length) {
-    finalState = await updateCexValuationVersions({
+    const versions = {
       ...previousVersions,
       ...Object.fromEntries(suppressExchangeFlows.map((exchange) => [exchange, valuationVersion])),
-    });
+    };
+    finalState = fast
+      ? await updateCexValuationVersionsLive(versions)
+      : await updateCexValuationVersions(versions);
   }
-  const walletOk = walletFreshness(finalState.wallets).fresh;
+  const activeWallets = activeRefreshWallets(finalState.wallets);
+  const walletOk = walletFreshness(activeWallets).fresh;
   // “可用”= 本轮拿到实时数据，或沿用了上次成功数据（余额依然有效）。
   // 只有所有地址都没有任何余额、交易所也全失败时，才算整体失败。
-  const walletUsable = finalState.wallets.filter(
+  const walletUsable = activeWallets.filter(
     (wallet) => wallet.status !== "error" || wallet.balanceUsd > 0
   ).length;
   const exchangeOk = exchanges.some((item) => item.status === "ok");
@@ -875,7 +1027,7 @@ export async function runRefresh(
   return {
     state: finalState,
     walletOk,
-    walletTotal: finalState.wallets.length,
+    walletTotal: activeWallets.length,
     totals: computeTotals(finalState),
     payload: {
       ...publicState(finalState),
@@ -886,7 +1038,7 @@ export async function runRefresh(
       appAuditsRefreshed: appAudit.refreshed,
       /** 只有“一个地址、一个交易所都没读到”才算整体失败；部分成功仍算成功 */
       refreshStatus:
-        walletOk === finalState.wallets.length && exchanges.every((item) => item.status === "ok") && !partial
+        walletOk === activeWallets.length && exchanges.every((item) => item.status === "ok") && !partial
           ? "ok"
           : walletUsable > 0 || exchangeOk
             ? "partial"

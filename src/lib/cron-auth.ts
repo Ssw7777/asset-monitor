@@ -4,6 +4,9 @@ import type { NextRequest } from "next/server";
 
 const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const GITHUB_OIDC_AUDIENCES = [
+  "http://43.167.222.67",
+  "https://0xstudy.0xstudybank.workers.dev",
+  "https://0xstudybank.0xstudybank.workers.dev",
   "https://0xstudybank-six.vercel.app",
   "https://0xstudybank.vercel.app",
 ] as const;

@@ -11,6 +11,7 @@ export interface CexResult {
 const BINANCE_BASE = "https://api.binance.com";
 const OKX_BASE = "https://www.okx.com";
 const GATE_BASE = "https://api.gateio.ws";
+const BITGET_BASE = "https://api.bitget.com";
 
 function missing(...keys: (string | undefined)[]) {
   return keys.some((k) => !k || !k.trim());
@@ -265,3 +266,92 @@ export async function fetchGateBalance(blob?: EncryptedSecretsBlob | null): Prom
     return { balanceUsd: 0, status: "error", error: e instanceof Error ? e.message : "gate fail" };
   }
 }
+
+// ─── Bitget ──────────────────────────────────────────────────────────────────
+
+async function bitgetSignedGet(
+  path: string,
+  apiKey: string,
+  secret: string,
+  passphrase: string,
+  query = ""
+): Promise<{ ok: boolean; data: any; error?: string }> {
+  const ts = Date.now().toString();
+  const requestPath = query ? `${path}?${query}` : path;
+  const prehash = ts + "GET" + requestPath;
+  const sign = crypto.createHmac("sha256", secret).update(prehash).digest("base64");
+  const res = await fetch(BITGET_BASE + requestPath, {
+    headers: {
+      "ACCESS-KEY": apiKey,
+      "ACCESS-SIGN": sign,
+      "ACCESS-TIMESTAMP": ts,
+      "ACCESS-PASSPHRASE": passphrase,
+      "Content-Type": "application/json",
+      locale: "en-US",
+    },
+    cache: "no-store",
+    signal: AbortSignal.timeout(12_000),
+  });
+  let data: any;
+  try {
+    data = await res.json();
+  } catch {
+    data = {};
+  }
+  if (!res.ok || data.code !== "00000") {
+    return {
+      ok: false,
+      data,
+      error: data.msg || res.statusText || `HTTP ${res.status}`,
+    };
+  }
+  return { ok: true, data };
+}
+
+export async function fetchBitgetBalance(blob?: EncryptedSecretsBlob | null): Promise<CexResult> {
+  const keys = resolveCexKeys(blob);
+  const apiKey = keys.bitget.apiKey;
+  const secret = keys.bitget.secret;
+  const passphrase = keys.bitget.passphrase;
+
+  if (!missing(apiKey, secret) && missing(passphrase)) {
+    return {
+      balanceUsd: 0,
+      status: "missing_passphrase",
+      error: "Bitget passphrase missing (BITGET_API_PASSPHRASE or encrypted keys)",
+    };
+  }
+  if (missing(apiKey, secret, passphrase)) {
+    return { balanceUsd: 0, status: "missing_keys", error: "Bitget API key/secret/passphrase not configured" };
+  }
+
+  try {
+    // Bitget 官方全账户估值：覆盖 spot / futures / funding / earn / bots / margin。
+    const overview = await bitgetSignedGet(
+      "/api/v2/account/all-account-balance",
+      apiKey!,
+      secret!,
+      passphrase!
+    );
+    if (!overview.ok) {
+      return { balanceUsd: 0, status: "error", error: `all-account-balance: ${overview.error}` };
+    }
+    const rows = overview.data?.data;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return { balanceUsd: 0, status: "error", error: "Bitget all-account-balance returned no accounts" };
+    }
+    let total = 0;
+    for (const row of rows) {
+      const raw = row?.usdtBalance;
+      const value = Number(raw);
+      if (raw == null || !Number.isFinite(value)) {
+        return { balanceUsd: 0, status: "error", error: "Bitget all-account-balance returned an invalid usdtBalance" };
+      }
+      total += value;
+    }
+    return { balanceUsd: roundUsd(total), status: "ok" };
+  } catch (e) {
+    return { balanceUsd: 0, status: "error", error: e instanceof Error ? e.message : "bitget fail" };
+  }
+}
+

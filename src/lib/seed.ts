@@ -8,6 +8,7 @@ export const BASELINE = {
   okx: 1646.73,
   binance: 5071.73,
   gate: 42007.84,
+  bitget: 0,
   evmUsd: 15492.21,
   abstractUsd: 6609.63,
 } as const;
@@ -76,4 +77,5 @@ export const MIGRATION_WALLETS: Array<{ name: string; address: string; chain: "E
   { name: "币安钱包", address: "0x55Df444C20B0f570F72Ebb766CfC916A84D93368", chain: "EVM" },
   { name: "Trust 钱包美股活动", address: "0xf48d3f1ad016e3b75f3e8c343074a93f236e6bfa", chain: "EVM" },
   { name: "Bitget 本机钱包", address: "0x95866FeA70aa403F2D6e22D76a8627CC2368Cd11", chain: "EVM" },
+  { name: "Linea钱包2", address: "0x07ecdf2d21f1281ce5bf86671049e1c14e825810", chain: "EVM" },
 ];

@@ -1,4 +1,6 @@
 import type { PortfolioState, SnapshotPoint } from "./types";
+import { isWalletRefreshEnabled } from "./wallets";
+import { cnyManualNames, isCryptoManual, stripCnyManualFromSnapshot } from "./manual-assets";
 
 export type ChangeRangeKey = "1h" | "12h" | "24h" | "7d";
 
@@ -102,7 +104,9 @@ export function buildChangeSummary(
   const includeDapps = opts.includeDapps === true;
   const now = opts.now ?? Date.now();
   const range = CHANGE_RANGES.find((item) => item.key === rangeKey) ?? CHANGE_RANGES[2];
-  const snapshots = state.snapshots;
+  // 变动区间与 K 线一致：人民币手动资产不计入加密资产趋势。
+  const cnyNames = cnyManualNames(state.manual);
+  const snapshots = state.snapshots.map((point) => stripCnyManualFromSnapshot(point, cnyNames));
   const latest = snapshots.length ? snapshots[snapshots.length - 1] : null;
   const picked = pickPastSnapshot(snapshots, now - range.ms);
 
@@ -155,7 +159,7 @@ export function buildChangeSummary(
     key: "onchain",
     type: "onchain",
     label: "链上资产",
-    detail: `${state.wallets.length} 个钱包合计`,
+    detail: `${state.wallets.filter(isWalletRefreshEnabled).length} 个钱包合计`,
     address: null,
     before: round2(past.onchain ?? 0),
     after: round2(latest.onchain ?? 0),
@@ -167,7 +171,7 @@ export function buildChangeSummary(
     push({
       key: `exchange:${exchange.exchange}`,
       type: "exchange",
-      label: { okx: "OKX", binance: "Binance", gate: "Gate" }[exchange.exchange] || exchange.exchange,
+      label: { okx: "OKX", binance: "Binance", gate: "Gate", bitget: "Bitget" }[exchange.exchange] || exchange.exchange,
       detail: "交易所余额",
       address: null,
       before: round2(past.exchanges?.[exchange.exchange] ?? 0),
@@ -186,6 +190,7 @@ export function buildChangeSummary(
 
   if (detailAvailable) {
     for (const item of state.manual) {
+      if (!isCryptoManual(item)) continue;
       push({
         key: `manual:${item.id}`,
         type: "manual",
@@ -227,6 +232,7 @@ export function buildChangeSummary(
     : new Set<string>();
   for (const address of walletKeys) {
     const wallet = byAddress.get(address);
+    if (wallet && !isWalletRefreshEnabled(wallet)) continue;
     push({
       key: `wallet:${address}`,
       type: "wallet",

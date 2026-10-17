@@ -42,10 +42,16 @@ export async function isAuthenticated() {
   return verifySessionToken(token);
 }
 
+function cookieSecure() {
+  // Allow plain HTTP on VPS IP until TLS is configured.
+  if (process.env.FORCE_INSECURE_COOKIES === "1") return false;
+  return process.env.NODE_ENV === "production";
+}
+
 export function setSessionCookie(res: NextResponse, token: string) {
   res.cookies.set(COOKIE, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: cookieSecure(),
     sameSite: "lax",
     path: "/",
     maxAge: MAX_AGE,
@@ -55,7 +61,7 @@ export function setSessionCookie(res: NextResponse, token: string) {
 export function clearSessionCookie(res: NextResponse) {
   res.cookies.set(COOKIE, "", {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: cookieSecure(),
     sameSite: "lax",
     path: "/",
     maxAge: 0,

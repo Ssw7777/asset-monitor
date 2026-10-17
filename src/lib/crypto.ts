@@ -48,6 +48,7 @@ export function resolveCexKeys(blob: EncryptedSecretsBlob | null | undefined): {
   okx: { apiKey?: string; secret?: string; passphrase?: string; simulated: boolean };
   binance: { apiKey?: string; secret?: string };
   gate: { apiKey?: string; secret?: string };
+  bitget: { apiKey?: string; secret?: string; passphrase?: string };
   hasEncrypted: boolean;
 } {
   let stored: CexKeyMaterial = {};
@@ -72,6 +73,11 @@ export function resolveCexKeys(blob: EncryptedSecretsBlob | null | undefined): {
     gate: {
       apiKey: process.env.GATE_API_KEY || stored.gate?.apiKey,
       secret: process.env.GATE_API_SECRET || stored.gate?.apiSecret,
+    },
+    bitget: {
+      apiKey: process.env.BITGET_API_KEY || stored.bitget?.apiKey,
+      secret: process.env.BITGET_API_SECRET || stored.bitget?.apiSecret,
+      passphrase: process.env.BITGET_API_PASSPHRASE || stored.bitget?.passphrase,
     },
     hasEncrypted: !!blob,
   };

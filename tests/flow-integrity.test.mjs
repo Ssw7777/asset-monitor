@@ -58,3 +58,14 @@ test('pending, spam and hashless records are not confirmed transactions', () => 
   assert.equal(parseTransactionRecords({ data }).length, 0);
   assert.throws(() => parseTransactionRecords({ error: '429' }));
 });
+
+test('paused Abstract wallets are excluded from freshness totals', () => {
+  const now = ts;
+  const active = { status: 'ok', address: '0x1111111111111111111111111111111111111111', lastSuccess: { at: new Date(now - 60_000).toISOString() } };
+  const paused = { status: 'ok', address: '0x97a1f45f3e64d99d2e222547e20f9fcc8f2d5ff0', refreshPaused: true, lastSuccess: { at: new Date(now - 1186 * 60_000).toISOString() } };
+  const result = walletFreshness([active, paused], now);
+  assert.equal(result.total, 1);
+  assert.equal(result.fresh, 1);
+  assert.equal(result.stale, 0);
+  assert.equal(result.oldestAgeMs, 60_000);
+});

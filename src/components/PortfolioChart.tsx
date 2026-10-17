@@ -44,17 +44,17 @@ function ChartTooltip({
       <div className="time num">{cny(point.v * rate)}</div>
       <div className="grid">
         <span>
-          <i className="tip-dot" style={{ background: "#5089ff" }} />
+          <i className="tip-dot" style={{ background: "var(--blue)" }} />
           链上
         </span>
         <b>{usd(point.onchain)}</b>
         <span>
-          <i className="tip-dot" style={{ background: "#00a76f" }} />
+          <i className="tip-dot" style={{ background: "var(--ink-2)" }} />
           交易所
         </span>
         <b>{usd(point.cex)}</b>
         <span>
-          <i className="tip-dot" style={{ background: "#fe815f" }} />
+          <i className="tip-dot" style={{ background: "var(--accent)" }} />
           手动
         </span>
         <b>{usd(point.manual)}</b>
@@ -173,7 +173,12 @@ export function PortfolioChart({
         </div>
       )}
 
-      <div className="chart-canvas">
+      {data.length < 2 ? (
+        <div className="notice" style={{ marginBottom: 10 }}>
+          暂无足够快照绘制趋势（当前 {snapshots.length} 条）。每分钟 CEX 刷新会写入总资产快照，稍候再看。
+        </div>
+      ) : null}
+      <div className="chart-canvas" aria-label="资产趋势图">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={data}
@@ -187,20 +192,20 @@ export function PortfolioChart({
           >
             <defs>
               <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#5089ff" stopOpacity={0.22} />
-                <stop offset="100%" stopColor="#5089ff" stopOpacity={0.02} />
+                <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.22} />
+                <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.02} />
               </linearGradient>
             </defs>
             <XAxis
               dataKey="t"
-              tick={{ fontSize: 11, fill: "#8b93a7" }}
+              tick={{ fontSize: 12, fill: "var(--ink-3)" }}
               axisLine={false}
               tickLine={false}
               minTickGap={48}
             />
             <YAxis
               domain={yDomain}
-              tick={{ fontSize: 11, fill: "#8b93a7" }}
+              tick={{ fontSize: 12, fill: "var(--ink-3)" }}
               axisLine={false}
               tickLine={false}
               width={70}
@@ -211,7 +216,7 @@ export function PortfolioChart({
             />
             <Tooltip
               content={<ChartTooltip rate={rate} />}
-              cursor={{ stroke: "#e1e5f2", strokeWidth: 1 }}
+              cursor={{ stroke: "var(--line)", strokeWidth: 1 }}
               isAnimationActive={false}
               allowEscapeViewBox={{ x: false, y: true }}
             />
@@ -225,12 +230,12 @@ export function PortfolioChart({
             <Line
               type="monotone"
               dataKey="v"
-              stroke="#5089ff"
+              stroke="var(--accent)"
               strokeWidth={2.25}
               strokeLinecap="round"
               strokeLinejoin="round"
               dot={false}
-              activeDot={{ r: 4, stroke: "#fff", strokeWidth: 2, fill: "#5089ff" }}
+              activeDot={{ r: 4, stroke: "#fff", strokeWidth: 2, fill: "var(--accent)" }}
               isAnimationActive={false}
             />
           </ComposedChart>

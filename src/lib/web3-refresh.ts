@@ -9,7 +9,7 @@ import {preserveRpcProtocols} from './onchain/protocol-observation';
 
 const wait=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 const safeError=(error:unknown)=>error instanceof Error&&/^web3_[a-z0-9_]+$/.test(error.message)?error.message:'web3_request_failed';
-const BATCH=5,MAX_CALLS=24,FREE_CALL_CAP=1_200_000;
+const BATCH=3,MAX_CALLS=24,FREE_CALL_CAP=1_200_000;
 
 export async function refreshWeb3Observations(){
   if(!web3Credentials())return {ok:true,ran:'disabled'};
@@ -63,7 +63,7 @@ export async function refreshWeb3Observations(){
     if(rateLimited||Date.now()-start>32_000)break;
     const result:Result={wallet},address=wallet.address.toLowerCase();
     try{
-      const data=await read('/api/v6/dex/balance/all-token-balances-by-address?'+new URLSearchParams({address,chains:chains.join(','),excludeRiskToken:'0'}));
+      const data=await read('/api/v6/dex/balance/all-token-balances-by-address?'+new URLSearchParams({address,chains:chains.join(','),excludeRiskToken:'1'}));
       result.tokensAt=new Date().toISOString();result.tokens=parseWeb3Tokens(data,address,chains,result.tokensAt);
     }catch(error){result.error=safeError(error);}
     const fablesRpcAt=reservation.state.protocolCache?.[address]?.protocolRpcOwnership?.hood_fables?.at;
@@ -83,9 +83,23 @@ export async function refreshWeb3Observations(){
       }
     }catch(error){result.protocolError=safeError(error);}
     try{
-      const begin=Date.now()-7*86400000;
-      const history=await read('/api/v6/dex/post-transaction/transactions-by-address?'+new URLSearchParams({address,chains:chains.join(','),begin:String(begin),limit:'20'}));
-      result.history=parseWeb3History(history,address,chains,begin);result.historyAt=new Date().toISOString();
+      const begin=Date.now()-30*86400000;
+      const collected:TransactionRecord[]=[];
+      let cursor='';
+      // OKX now rejects multi-chain limit>20 (code 81001), so walk four 20-row pages
+      // (3 wallets x ~6 calls fits MAX_CALLS). Order is not strictly by time across chains.
+      for(let page=0;page<4;page++){
+        const params=new URLSearchParams({address,chains:chains.join(','),begin:String(begin),limit:'20'});
+        if(cursor)params.set('cursor',cursor);
+        let history:Record<string,unknown>;
+        try{history=await read('/api/v6/dex/post-transaction/transactions-by-address?'+params);}
+        catch(error){if(!collected.length)throw error;break;}
+        const parsed=parseWeb3History(history,address,chains,begin);
+        collected.push(...parsed.records);
+        cursor=parsed.cursor;
+        if(!cursor)break;
+      }
+      result.history={records:collected,cursor};result.historyAt=new Date().toISOString();
     }catch(error){result.historyError=safeError(error);}
     results.push(result);
   }
@@ -118,12 +132,12 @@ export async function refreshWeb3Observations(){
       if(result.history&&Date.parse(result.historyAt!)>(Date.parse(history[address]?.at??'')||0)){
         const combined=new Map<string,TransactionRecord>();
         for(const tx of [...(history[address]?.records??[]),...result.history.records]){
-          if(Date.now()-Date.parse(tx.minedAt)>7*86400000)continue;
+          if(Date.now()-Date.parse(tx.minedAt)>30*86400000)continue;
           const id=tx.chain+':'+tx.hash,previous=combined.get(id);
           if(previous){for(const t of tx.transfers)if(!previous.transfers.some(p=>JSON.stringify(p)===JSON.stringify(t)))previous.transfers.push(t);}
           else combined.set(id,{...tx,transfers:[...tx.transfers]});
         }
-        history[address]={at:result.historyAt!,source:'okx-web3',more:!!result.history.cursor,records:[...combined.values()].sort((a,b)=>Date.parse(b.minedAt)-Date.parse(a.minedAt)).slice(0,100)};
+        history[address]={at:result.historyAt!,source:'okx-web3',more:!!result.history.cursor,records:[...combined.values()].sort((a,b)=>Date.parse(b.minedAt)-Date.parse(a.minedAt)).slice(0,500)};
         audit.historyAt=result.historyAt;
       }
     }

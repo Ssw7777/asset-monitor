@@ -17,3 +17,8 @@ data/*.json
 output/playwright/
 .playwright-cli/
 output/
+.env*
+
+.open-next
+.dev.vars
+.wrangler

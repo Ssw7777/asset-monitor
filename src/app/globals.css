@@ -3,38 +3,55 @@
 @tailwind utilities;
 
 /* =========================================================================
-   0xStudy Checker — 视觉体系对齐 DeBank（取自 debank.com 真实计算样式）
-   字体：Lato, PingFang SC, Microsoft YaHei, Helvetica, Arial
-   字号档位：12 / 13 / 14 / 16 / 20 / 32
-   主色：#FE815F（橙红）· 文字 #19233C · 次级 #616B84 · 弱化 #8B93A7
-   分隔线 #E1E5F2 / #F0F2F7 · 表头底色 #F7F8FA · 卡片圆角 16px
+   0xStudy Checker — 轻色、克制、全站同一套字阶与色板
+   字体：next/font Geist（拉丁与数字）+ Noto Sans SC（中文，实际下载，非空 fallback）
+   字重：Geist 400/500/600/700 · Noto Sans SC 400/500/600（同一套可变字体切片）
+   字阶：12 说明 · 13 次级 · 14 正文 · 16 标题 · 20 强调 · 28 总额
+   数字：tabular-nums。页面底 / 卡片底 / 主文 / 次文 / 弱化 / 涨跌 / 强调色
    全站不使用内部滚动容器：所有内容随页面自然滚动
    ========================================================================= */
 
 :root {
   color-scheme: light;
-  --ink: #19233c;
-  --ink-2: #616b84;
-  --ink-3: #8b93a7;
-  --ink-4: #b3bcd2;
-  --line: #e1e5f2;
-  --line-2: #f0f2f7;
-  --fill: #eff3f8;
-  --fill-2: #f7f8fa;
-  --accent: #fe815f;
-  --accent-ink: #e4502f;
-  --accent-soft: #fff3ef;
-  --blue: #5089ff;
-  --pos: #00a76f;
-  --neg: #f6465d;
+  --page: #f4f6f8;
+  --card: #ffffff;
+  --ink: #1c2433;
+  --ink-2: #5e6a7d;
+  --ink-3: #8a93a5;
+  --ink-4: #c5ccd6;
+  --line: #e5e9f0;
+  --line-2: #eef1f5;
+  --fill: #eef2f6;
+  --fill-2: #f7f8fb;
+  --accent: #d4654a;
+  --accent-ink: #b55038;
+  --accent-soft: #fbf3f0;
+  --blue: #4f6f9f;
+  --pos: #0c9a6b;
+  --neg: #e23d52;
+  /* Movement markers stay inside the same palette (accent / ink), not extra hues. */
+  --transfer-accent: var(--accent);
+  --transfer-accent-soft: var(--card);
+  --transfer-direction: var(--ink-2);
+  --valuation-accent: var(--ink-2);
+  --valuation-accent-soft: var(--card);
+  --flow-accent: var(--ink-2);
+  --flow-accent-soft: var(--card);
   --radius: 16px;
   --radius-sm: 8px;
+  --fs-caption: 12px;
+  --fs-meta: 13px;
+  --fs-body: 14px;
+  --fs-title: 16px;
+  --fs-emphasis: 20px;
+  --fs-display: 28px;
+  --font-sans: var(--font-geist), var(--font-noto-sc), sans-serif;
 }
 
 html,
 body {
   min-height: 100%;
-  background: #f6f7fb;
+  background: var(--page);
   color: var(--ink);
   overflow-x: hidden;
   -webkit-text-size-adjust: 100%;
@@ -46,11 +63,13 @@ body {
 }
 
 body {
-  font-family: Lato, "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, Helvetica, Arial,
-    sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 *,
@@ -103,12 +122,12 @@ a {
 
 .muted {
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--fs-meta);
 }
 
 .small {
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 /* ── 布局 ───────────────────────────────────────────────────────────── */
@@ -135,8 +154,8 @@ a {
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 18px;
-  background: #ffffff;
-  box-shadow: 0 1px 3px rgba(25, 35, 60, 0.04);
+  background: var(--card);
+  box-shadow: 0 1px 3px rgba(28, 36, 51, 0.04);
 }
 
 .section-surface {
@@ -151,9 +170,9 @@ a {
   gap: 18px 14px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: #ffffff;
+  background: var(--card);
   padding: 18px;
-  box-shadow: 0 1px 3px rgba(25, 35, 60, 0.04);
+  box-shadow: 0 1px 3px rgba(28, 36, 51, 0.04);
 }
 
 .summary-panel .stats {
@@ -193,7 +212,7 @@ a {
   grid-column: 2;
   grid-row: 1;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 5px 12px;
+  gap: 8px 12px;
   min-width: 0;
   margin: 0;
   text-align: left;
@@ -202,27 +221,50 @@ a {
 .summary-label {
   align-self: center;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: var(--fs-caption);
+}
+
+.summary-panel .networth-trio {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 20px;
+  align-items: start;
+}
+
+.summary-panel .networth-col {
+  min-width: 0;
+}
+
+.summary-panel .networth-col .summary-label {
+  margin-bottom: 4px;
 }
 
 .summary-panel .networth-value {
-  grid-column: 1 / -1;
-  font-size: 28px;
+  font-size: var(--fs-display);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.summary-panel .networth-cny,
+.summary-panel .networth-cny {
+  font-size: calc(var(--fs-display) * 0.92);
+}
+
 .summary-panel .networth-rate {
+  grid-column: 1 / -1;
   margin-top: 0;
   align-self: center;
+  justify-self: start;
 }
 
 .profile-status {
   display: flex;
+  grid-column: 1 / -1;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  margin-bottom: 3px;
+  margin-bottom: 0;
 }
 
 .overview-duo {
@@ -297,17 +339,17 @@ a {
   min-height: calc(36px + 8 * 64px);
 }
 
-.flow-explanation { color: var(--muted); font-size: 12px; margin: -2px 0 12px; }
+.flow-explanation { color: var(--ink-3); font-size: var(--fs-caption); margin: -2px 0 12px; }
 .flow-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
 .flow-pagination .btn { padding: 5px 9px; font-size: 12px; }
 .transaction-page { padding-top: 32px; padding-bottom: 40px; }
 .transaction-wallets { display: flex; gap: 8px; flex-wrap: wrap; margin: 20px 0; }
-.transaction-wallets [aria-current="page"] { background: #eaf1ff; border-color: #5089ff; }
+.transaction-wallets [aria-current="page"] { background: var(--fill); border-color: var(--ink-4); }
 .transaction-record { padding: 18px 0; border-bottom: 1px solid var(--line); }
 .transaction-hash { font-size: 12px; overflow-wrap: anywhere; }
 .transaction-transfer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-top: 10px; }
 
-/* 分区用非常浅的底色区分，既有层次，也不干扰资产正负色。 */
+/* 分区共用卡片底与分隔线，层次靠留白，不靠各页不同色调。 */
 #trend,
 .section-tokens,
 .section-exchanges,
@@ -315,24 +357,80 @@ a {
 #manual,
 #changes,
 #addresses,
-#export {
-  border-color: var(--line);
-  background: #ffffff;
-}
-
-#trend {
-  border-color: #d8e4ff;
-  background: #f9fbff;
-}
-
+#export,
 .section-flows {
-  border-color: #dce7fa;
-  background: #fbfdff;
+  border-color: var(--line);
+  background: var(--card);
+}
+
+/* Valuation changes use the amber flow card. On-chain transfers share that card. */
+.section-transfers {
+  border-color: var(--line);
+  background: var(--card);
+  box-shadow: 0 1px 3px rgba(28, 36, 51, 0.04);
+}
+
+.section-transfers .section-title h2::before,
+.section-flows .section-title h2::before,
+.section-asset-changes .section-title h2::before {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin: 0 8px 2px 0;
+  border-radius: 999px;
+  content: "";
+  vertical-align: middle;
+}
+
+.section-transfers .section-title h2::before {
+  background: var(--transfer-accent);
+}
+
+.section-flows .section-title h2::before {
+  background: var(--flow-accent);
+}
+
+.section-asset-changes#changes {
+  border-color: var(--line);
+  background: var(--card);
+  box-shadow: 0 1px 3px rgba(28, 36, 51, 0.04);
+}
+
+.section-asset-changes .section-title h2::before {
+  background: var(--valuation-accent);
+}
+
+.section-transfers .transfer-summary .pos,
+.section-transfers .transfer-summary .neg {
+  color: var(--transfer-direction);
+}
+
+.section-transfers .transfer-summary b::before {
+  display: inline-block;
+  margin-right: 5px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.section-transfers .transfer-summary b.pos::before {
+  color: var(--transfer-direction);
+  content: "↙";
+}
+
+.section-transfers .transfer-summary b.neg::before {
+  color: var(--transfer-direction);
+  content: "↗";
+}
+
+.section-flows .flow-net,
+.section-flows .section-total,
+.section-asset-changes .section-total {
+  color: var(--ink);
 }
 
 #chains {
-  border-color: #dce9e4;
-  background: #fbfefa;
+  border-color: var(--line);
+  background: var(--card);
 }
 
 .section-head {
@@ -353,7 +451,7 @@ a {
 
 .section-title h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--fs-title);
   font-weight: 600;
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -361,12 +459,12 @@ a {
 
 .section-title .hint {
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--fs-meta);
   font-weight: 400;
 }
 
 .section-total {
-  font-size: 16px;
+  font-size: var(--fs-title);
   font-weight: 600;
 }
 
@@ -376,7 +474,7 @@ a {
   top: 0;
   z-index: 40;
   border-bottom: 1px solid var(--line);
-  background: #fff;
+  background: var(--card);
 }
 
 .topbar-inner {
@@ -401,7 +499,7 @@ a {
 }
 
 .brand-name {
-  font-size: 16px;
+  font-size: var(--fs-title);
   font-weight: 700;
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -413,15 +511,26 @@ a {
   align-items: center;
   gap: 4px;
   min-width: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  touch-action: pan-x;
+}
+
+.topnav::-webkit-scrollbar {
+  display: none;
 }
 
 .topnav a {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
   border-radius: 8px;
   color: var(--ink-2);
   padding: 6px 11px;
-  font-size: 15px;
+  font-size: var(--fs-body);
   font-weight: 500;
   white-space: nowrap;
   transition: background 140ms ease, color 140ms ease;
@@ -433,6 +542,7 @@ a {
 }
 
 .topnav a.active {
+  background: var(--fill-2);
   color: var(--ink);
   font-weight: 600;
 }
@@ -444,9 +554,43 @@ a {
   gap: 10px;
 }
 
+/* 窄屏：顶栏换行，第二行全宽横向滑动分页（原先 display:none 导致手机无法切页） */
 @media (max-width: 980px) {
+  .topbar-inner {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 56px;
+    padding-top: 10px;
+    padding-bottom: 8px;
+    gap: 8px 12px;
+  }
+
+  .brand {
+    order: 1;
+  }
+
+  .topbar-actions {
+    order: 2;
+    margin-left: auto;
+  }
+
   .topnav {
-    display: none;
+    order: 3;
+    flex: 1 1 100%;
+    width: 100%;
+    gap: 2px;
+    margin: 0 -4px;
+    padding: 0 4px 2px;
+  }
+
+  .topnav a {
+    min-height: 40px;
+    padding: 8px 12px;
+    font-size: 14px;
+  }
+
+  .brand-name {
+    font-size: 14px;
   }
 }
 
@@ -479,7 +623,7 @@ a {
 }
 
 .btn-accent:hover {
-  background: #ff7048;
+  background: #c4563c;
 }
 
 .btn-outline {
@@ -599,7 +743,7 @@ textarea.field {
   display: block;
   margin-bottom: 5px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .inline {
@@ -634,7 +778,7 @@ textarea.field {
 }
 
 .profile-name {
-  font-size: 20px;
+  font-size: var(--fs-emphasis);
   font-weight: 600;
   line-height: 1.3;
   letter-spacing: -0.01em;
@@ -706,7 +850,7 @@ textarea.field {
 }
 
 .networth-value {
-  font-size: 22px;
+  font-size: var(--fs-emphasis);
   font-weight: 700;
   line-height: 1.15;
   letter-spacing: -0.02em;
@@ -760,12 +904,12 @@ textarea.field {
   align-items: center;
   gap: 4px;
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--fs-meta);
 }
 
 .stat-value {
   margin-top: 2px;
-  font-size: 16px;
+  font-size: var(--fs-title);
   font-weight: 600;
 }
 
@@ -798,7 +942,7 @@ textarea.field {
 .card {
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: #fff;
+  background: var(--card);
 }
 
 .panel {
@@ -824,8 +968,9 @@ textarea.field {
   background: var(--fill-2);
   color: var(--ink-3);
   padding: 8px 16px;
-  font-size: 12px;
-  font-weight: 400;
+  font-size: var(--fs-caption);
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .trow {
@@ -878,23 +1023,55 @@ textarea.field {
     minmax(140px, 1fr) minmax(120px, 0.85fr) minmax(150px, 0.9fr);
 }
 
-/* 资金流水表：三列紧凑版（时间/变动/钱包），余额变化列彻底移除，绝不横向滚动 */
+/* 资金流水：一行四列。时间 | 明细 | 金额 | 标签。标签独立成列，禁止被挤成竖排。 */
 .grid-flow {
-  grid-template-columns: minmax(56px, 0.55fr) minmax(88px, 0.75fr) minmax(0, 1.3fr);
-  gap: 8px;
+  grid-template-columns: 108px minmax(0, 1fr) max-content max-content;
+  gap: 4px 12px;
+  align-items: center;
 }
 
-.grid-flow .flow-balance {
-  display: none;
+.flow-time,
+.flow-detail {
+  min-width: 0;
+}
+
+.flow-amount {
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+
+.flow-kind {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 /* 流水净额并入标题行：小号、与标题同行 */
 .flow-net {
   margin-left: 10px;
-  font-size: 15px;
+  font-size: var(--fs-title);
   font-weight: 600;
   letter-spacing: -0.01em;
 }
+
+.section-transfers { margin-top: 8px; }
+.grid-transfer {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1.6fr) minmax(0, 0.8fr) 100px;
+  gap: 8px 12px;
+  align-items: center;
+}
+.transfer-summary b { font-weight: 650; }
+@media (max-width: 860px) {
+  .grid-transfer {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+}
+
 
 .section-flows .thead,
 .section-flows .trow {
@@ -903,7 +1080,7 @@ textarea.field {
 }
 
 .section-flows .thead {
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .section-flows .cell-token-text b {
@@ -911,7 +1088,7 @@ textarea.field {
 }
 
 .section-flows .cell-token-text span {
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .section-flows .cell-main,
@@ -921,12 +1098,13 @@ textarea.field {
   white-space: nowrap;
 }
 
-/* 右栏窄而信息密集：钱包/交易所名称允许自然换行，不用省略号藏掉。 */
-.section-flows .flow-entity b {
-  overflow: visible;
-  line-height: 1.35;
-  text-overflow: clip;
-  white-space: normal;
+/* 明细标题单行省略，副标题在其下，避免把金额和标签挤乱。 */
+.section-flows .flow-detail b,
+.section-flows .flow-detail span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 代币卡片：桌面双列，压缩纵向空间，同时保留完整价格、数量和分布信息。 */
@@ -960,8 +1138,8 @@ textarea.field {
 
 .token-card:hover,
 .token-card.open {
-  border-color: #c8bce7;
-  box-shadow: 0 5px 14px rgba(57, 41, 94, 0.07);
+  border-color: var(--ink-4);
+  box-shadow: 0 5px 14px rgba(28, 36, 51, 0.06);
 }
 
 /* 单行代币卡：价格 / 数量 / 分布与币名同行，卡片高度减半 */
@@ -997,13 +1175,13 @@ textarea.field {
 
 .token-card-metrics span {
   color: var(--ink-3);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .token-card-metrics b {
   overflow: hidden;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: var(--fs-caption);
   font-weight: 500;
   line-height: 1.4;
   text-overflow: ellipsis;
@@ -1026,7 +1204,7 @@ textarea.field {
   width: 100%;
   border: 1px solid var(--line-2);
   border-radius: 9px;
-  background: #f8f6fc;
+  background: var(--fill-2);
   color: var(--ink);
   padding: 11px 14px;
   font: inherit;
@@ -1035,8 +1213,8 @@ textarea.field {
 }
 
 .token-dust-card:hover {
-  border-color: #c8bce7;
-  background: #f5f1fc;
+  border-color: var(--ink-4);
+  background: var(--fill);
 }
 
 .token-dust-meta {
@@ -1056,9 +1234,46 @@ textarea.field {
   line-height: 1.5;
 }
 
-/* 手动资产表 */
+.flow-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  height: 20px;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+  word-break: keep-all;
+  writing-mode: horizontal-tb;
+}
+.flow-tag-chain { color: var(--ink-2); background: var(--fill); border-color: var(--line); }
+.flow-tag-value { color: var(--accent-ink); background: var(--accent-soft); border-color: #f0ddd6; }
+.flow-tag-spam { color: #9a3412; background: #fff7ed; border-color: #fed7aa; }
+.flow-spam-amount { color: #9a3412; font-weight: 600; }
+.flow-unpriced { color: var(--ink-3); font-weight: 500; }
+.flow-spam-row { opacity: 0.85; }
+
+
+/* 手动资产表：用途 | 金额 | 单位 | 操作 */
 .grid-manual {
-  grid-template-columns: minmax(0, 1fr) minmax(140px, 0.5fr) minmax(90px, 0.3fr);
+  grid-template-columns: minmax(0, 1.2fr) minmax(110px, 0.45fr) minmax(96px, 0.35fr) minmax(72px, 0.28fr);
+}
+
+.manual-currency {
+  min-width: 0;
+  padding-inline: 8px;
+  font-size: 13px;
+}
+
+.manual-cny-hint {
+  color: var(--ink-3);
 }
 
 .cell-token {
@@ -1698,7 +1913,7 @@ textarea.field {
 }
 
 .chart-delta strong {
-  font-size: 20px;
+  font-size: var(--fs-emphasis);
   font-weight: 700;
   letter-spacing: -0.01em;
 }
@@ -1841,6 +2056,17 @@ textarea.field {
   }
 }
 
+@media (max-width: 900px) {
+  .summary-panel .networth-trio {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px 12px;
+  }
+
+  .summary-panel .networth-value {
+    font-size: 20px;
+  }
+}
+
 @media (max-width: 700px) {
   .summary-panel {
     grid-template-columns: minmax(0, 1fr);
@@ -1856,12 +2082,18 @@ textarea.field {
   }
 
   .summary-panel .networth-value {
-    font-size: 24px;
+    font-size: 22px;
+  }
+
+  .summary-panel .networth-trio {
+    grid-template-columns: 1fr;
+    gap: 10px 14px;
   }
 
   .summary-panel .profile-status {
     flex-wrap: wrap;
     gap: 3px 8px;
+    justify-content: flex-start;
   }
 
   .summary-panel .stats {
@@ -1878,6 +2110,17 @@ textarea.field {
 
   .summary-panel .stats > div:nth-child(n + 4) {
     grid-column: span 1;
+  }
+}
+
+@media (max-width: 420px) {
+  .summary-panel .networth-trio {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .summary-panel .networth-value {
+    font-size: 24px;
   }
 }
 
@@ -2063,18 +2306,22 @@ textarea.field {
     grid-template-columns: minmax(130px, 1.3fr) minmax(104px, 1fr) auto;
   }
 
-  .grid-flow {
-    grid-template-columns: minmax(104px, 0.8fr) minmax(120px, 1fr);
-  }
-
-  .grid-flow .hide-md,
-  .grid-flow .hide-lg {
+  .thead.grid-flow {
     display: none;
   }
 
-  .flow-meta {
-    display: block;
+  .trow.grid-flow {
+    grid-template-columns: minmax(0, 1fr) max-content max-content;
+    grid-template-areas:
+      "time amount kind"
+      "detail detail detail";
+    row-gap: 2px;
   }
+
+  .trow.grid-flow > .flow-time { grid-area: time; }
+  .trow.grid-flow > .flow-detail { grid-area: detail; }
+  .trow.grid-flow > .flow-amount { grid-area: amount; }
+  .trow.grid-flow > .flow-kind { grid-area: kind; }
 
   .grid-wallet .hide-md {
     display: none;
@@ -2091,4 +2338,737 @@ textarea.field {
   .chart-canvas {
     height: 170px;
   }
+}
+
+/* 可排序列头（资产变动表） */
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  user-select: none;
+}
+.th-sort:hover {
+  color: var(--ink-1);
+}
+.th-sort.active {
+  color: var(--ink-1);
+  font-weight: 600;
+}
+.th-sort-mark {
+  font-size: 10px;
+  opacity: 0.85;
+  line-height: 1;
+}
+
+/* ── 独立分页：正常滚动；总览用基线 overview-duo，不再强塞一屏 ───── */
+.page-scroll {
+  padding-bottom: 24px;
+}
+
+.page-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+/* 已访问分页保活：隐藏但不卸载，避免顶栏来回切换重装大表/图表 */
+.dash-pane-hidden {
+  display: none !important;
+}
+
+.page-pane > .section,
+.page-pane-defi > .section {
+  margin-top: 0;
+}
+
+.page-pane-manual,
+.page-pane-exchanges {
+  gap: 14px;
+}
+
+.page-pane-exchanges {
+  overflow: visible;
+}
+
+.overview-change-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.overview-change-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+
+.section-asset-changes .overview-change-card {
+  border-left: 3px solid var(--line);
+}
+
+.overview-change-card strong {
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+@media (max-width: 960px) {
+  .overview-change-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── 总览质感（不改 overview-duo 分区位置） ───────────────────────── */
+.overview-root .summary-panel,
+.overview-root #trend,
+.overview-root #flows,
+.overview-root #chains {
+  border-radius: 16px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 1px 2px rgba(25, 35, 60, 0.04),
+    0 10px 28px rgba(25, 35, 60, 0.035);
+}
+
+.overview-root .summary-panel {
+  gap: 16px 14px;
+  padding: 18px 18px 16px;
+  border-color: var(--line);
+  background: var(--card);
+}
+
+.overview-root .summary-panel > .avatar {
+  box-shadow: 0 0 0 1px rgba(25, 35, 60, 0.06);
+}
+
+.overview-root .summary-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.overview-root .summary-panel .networth-value {
+  margin-top: 1px;
+  font-size: var(--fs-display);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.overview-root .summary-panel .networth-trio {
+  padding-top: 2px;
+}
+
+.overview-root .summary-panel .networth-cny {
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.01em;
+}
+
+.overview-root .summary-panel .tag {
+  height: 22px;
+  border-radius: 999px;
+  padding: 0 9px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.overview-root .summary-panel .stats {
+  gap: 12px 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-2);
+}
+
+.overview-root .summary-panel .stat-label {
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+
+.overview-root .summary-panel .stat-value {
+  margin-top: 3px;
+  font-size: var(--fs-title);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.overview-root .summary-panel .stats > div:nth-child(n + 4) {
+  padding-top: 12px;
+}
+
+.overview-root #trend {
+  border-color: var(--line);
+  background: var(--card);
+}
+
+.overview-root #trend .section-title h2,
+.overview-root #flows .section-title h2,
+.overview-root #chains .section-title h2 {
+  font-size: var(--fs-title);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.overview-root #trend .section-title .hint,
+.overview-root #flows .section-title .hint,
+.overview-root #chains .section-title .hint {
+  font-size: var(--fs-caption);
+}
+
+.overview-root #trend .chart-delta strong {
+  font-size: var(--fs-emphasis);
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.overview-root #trend .chart-delta span {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.overview-root #trend .chart-head > .muted,
+.overview-root #trend .chart-delta .muted {
+  font-size: 12px;
+}
+
+.overview-root #trend .chart-canvas {
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.overview-root #trend .recharts-cartesian-axis-tick text {
+  font-variant-numeric: tabular-nums;
+}
+
+.overview-root #flows {
+  border-color: var(--line);
+  background: var(--card);
+}
+
+.overview-root .flow-explanation {
+  margin: 0 0 10px;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.overview-root .flow-explanation a {
+  color: var(--ink-2);
+  border-bottom: 1px solid transparent;
+}
+
+.overview-root .flow-explanation a:hover {
+  color: var(--ink);
+  border-bottom-color: var(--ink-4);
+}
+
+.overview-root #flows .flow-net {
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.02em;
+}
+
+.overview-root #flows .table {
+  border-color: var(--line);
+  background: var(--card);
+}
+
+.overview-root #flows .thead {
+  background: var(--fill-2);
+  color: var(--ink-3);
+  letter-spacing: 0.03em;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line-2);
+  border-radius: 9px 9px 0 0;
+}
+
+.overview-root #flows .flow-scroll {
+  min-height: calc(32px + 8 * 56px);
+}
+
+.overview-root #flows .flow-scroll > .trow {
+  flex-basis: auto;
+  min-height: 56px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.overview-root #flows .trow {
+  border-bottom-color: var(--line-2);
+}
+
+.overview-root #flows .trow:nth-child(even) {
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.overview-root #flows .trow:hover {
+  background: #fff;
+}
+
+.overview-root #flows .cell-main,
+.overview-root #flows .cell-sub,
+.overview-root #flows .cell-token-text b {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.overview-root #flows .cell-main {
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.overview-root .flow-tag {
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.overview-root .flow-tag-chain {
+  color: var(--ink-2);
+  background: var(--fill);
+  border-color: var(--line);
+}
+
+.overview-root .flow-tag-value {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: #f0ddd6;
+}
+
+.overview-root #flows > .empty {
+  min-height: calc(32px + 8 * 56px);
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.overview-root .flow-pagination {
+  margin-top: 10px;
+}
+
+.overview-root .flow-pagination .small {
+  font-variant-numeric: tabular-nums;
+}
+
+.overview-root #chains {
+  border-color: var(--line);
+  background: var(--card);
+}
+
+.overview-root #chains .section-total {
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.02em;
+}
+
+.overview-root #chains .chain-strip {
+  gap: 8px;
+}
+
+.overview-root #chains .chain-card,
+.overview-root #chains .chain-dust-card {
+  border-color: var(--line-2);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8);
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.overview-root #chains .chain-card:hover,
+.overview-root #chains .chain-dust-card:hover {
+  border-color: #cfdad4;
+  background: #fff;
+  box-shadow: 0 6px 16px rgba(25, 35, 60, 0.05);
+}
+
+.overview-root #chains .chain-card.active {
+  border-color: var(--ink-4);
+  background: var(--card);
+  box-shadow: 0 0 0 1px rgba(28, 36, 51, 0.06);
+}
+
+.overview-root #chains .chain-card .name,
+.overview-root #chains .chain-dust-card .name {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.overview-root #chains .chain-card .value,
+.overview-root #chains .chain-dust-card .value {
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.01em;
+}
+
+.overview-root .seg {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(25, 35, 60, 0.04);
+}
+
+.overview-root .seg button.active {
+  box-shadow: 0 1px 2px rgba(25, 35, 60, 0.08);
+}
+
+@media (max-width: 760px) {
+  .overview-root .summary-panel .networth-value {
+    font-size: 26px;
+  }
+
+  .overview-root #flows .flow-scroll,
+  .overview-root #flows > .empty {
+    min-height: 0;
+  }
+
+  .overview-root #flows .flow-scroll > .trow {
+    flex: 0 0 auto;
+    min-height: 0;
+    height: auto;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+
+  .overview-root #chains .chain-strip {
+    gap: 8px;
+  }
+}
+
+/* === phone-comfort-390 (auto) === */
+/* 手机总览：收紧留白、卡片全宽、表格换行/横滑，桌面布局不动 */
+@media (max-width: 430px) {
+  .container {
+    padding: 0 12px;
+  }
+
+  .page {
+    padding-bottom: 48px;
+  }
+
+  .page-scroll {
+    padding-bottom: 16px;
+  }
+
+  .overview-duo {
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  /* 覆盖 760px 负边距：卡片贴齐内容区，内边距更舒服 */
+  .section {
+    margin-left: 0;
+    margin-right: 0;
+    margin-top: 14px;
+    padding: 12px;
+    border-radius: 14px;
+  }
+
+  .overview-root .summary-panel,
+  .overview-root #trend,
+  .overview-root #flows,
+  .overview-root #chains {
+    border-radius: 14px;
+  }
+
+  .summary-panel,
+  .overview-root .summary-panel {
+    padding: 14px 12px;
+    gap: 12px;
+  }
+
+  .summary-panel .networth-value,
+  .overview-root .summary-panel .networth-value {
+    font-size: 28px;
+    line-height: 1.15;
+    word-break: break-word;
+  }
+
+  .summary-panel .networth-cny {
+    font-size: 14px;
+  }
+
+  .summary-panel .stat-value {
+    font-size: 15px;
+    white-space: normal;
+  }
+
+  .summary-panel .stats {
+    gap: 10px 12px;
+  }
+
+  .summary-panel .profile-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    align-items: center;
+  }
+
+  .summary-panel .profile-status .tag {
+    max-width: 100%;
+    height: auto;
+    min-height: 22px;
+    padding: 3px 9px;
+    white-space: normal;
+    line-height: 1.35;
+    font-size: 12px;
+  }
+
+  .summary-panel .profile-status .small {
+    flex: 1 1 100%;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .summary-panel .networth-rate {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .summary-panel .networth-rate input {
+    flex: 1 1 120px;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .section > .section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px 10px;
+    padding-left: 0;
+    padding-right: 0;
+    padding-bottom: 8px;
+  }
+
+  .section > .section-head .section-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .section-title h2 {
+    white-space: normal;
+  }
+
+  .section > .section-head .section-title .hint {
+    margin-top: 0;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .section-total,
+  .flow-net {
+    font-size: 15px;
+  }
+
+  /* 链卡片：两列满宽，避免挤成窄条 / 截断 */
+  .chain-strip,
+  .overview-root #chains .chain-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .chain-card,
+  .chain-dust-card {
+    min-height: 52px;
+    padding: 8px 10px 8px 12px;
+    gap: 8px;
+  }
+
+  .chain-card .name,
+  .chain-dust-card .name {
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chain-card .value,
+  .chain-dust-card .value {
+    font-size: 12px;
+  }
+
+  .chain-dust-card {
+    grid-column: 1 / -1;
+  }
+
+  /* 资金变动 / 流水：筛选条换行，行高自适应 */
+  .seg {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
+  .seg button {
+    min-height: 32px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+
+  .section-flows .section-head > .inline {
+    width: 100%;
+    gap: 8px;
+  }
+
+  .overview-duo #trend .section-head {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .overview-duo #trend .chart-canvas {
+    min-height: 180px;
+    flex-basis: 180px;
+  }
+
+  .overview-duo #trend .chart-head {
+    flex-wrap: wrap;
+    gap: 6px 10px;
+  }
+
+  .overview-duo #trend .chart-delta,
+  .overview-duo #trend .chart-head > .muted {
+    font-size: 13px;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .overview-root #flows .flow-scroll > .trow,
+  .trow.grid-flow {
+    min-height: 0;
+    height: auto;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+
+  .trow.grid-flow {
+    grid-template-columns: minmax(0, 1fr) max-content max-content;
+    column-gap: 8px;
+    row-gap: 4px;
+  }
+
+  .flow-detail,
+  .flow-time,
+  .cell-token-text {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .flow-amount {
+    font-size: 13px;
+  }
+
+  .flow-tag {
+    font-size: 11px;
+  }
+
+  /* 表格类：允许横向轻滑，避免挤碎字 */
+  .table {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .theads,
+  .thead,
+  .trow {
+    padding-left: 8px;
+    padding-right: 8px;
+    gap: 8px;
+  }
+
+  .grid-token,
+  .grid-change,
+  .grid-protocol,
+  .grid-wallet {
+    grid-template-columns: minmax(0, 1.4fr) minmax(96px, 1fr);
+  }
+
+  .exchange-balance-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(96px, 0.7fr);
+  }
+
+  .exchange-change-panel {
+    margin: 0;
+  }
+
+  .overview-change-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .overview-change-card {
+    padding: 10px 12px;
+  }
+
+  .overview-change-card strong {
+    font-size: 16px;
+  }
+
+  .topbar-inner {
+    gap: 6px 10px;
+    padding-top: 8px;
+    padding-bottom: 6px;
+  }
+
+  .brand-name {
+    font-size: 15px;
+  }
+
+  .topnav a {
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+
+  .topbar-actions .btn {
+    height: 30px;
+    padding: 0 9px;
+    font-size: 12px;
+  }
+
+  .protocol-history {
+    max-width: 100%;
+  }
+}
+
+/* Login page — warm yellow/amber matching avatar orange (#F2A13B) */
+.login-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-color: #fbbf24;
+  background-image:
+    radial-gradient(ellipse 85% 65% at 15% 5%, rgba(255, 251, 235, 0.95), transparent 55%),
+    radial-gradient(ellipse 70% 55% at 90% 15%, rgba(251, 146, 60, 0.45), transparent 52%),
+    radial-gradient(ellipse 65% 45% at 45% 100%, rgba(245, 158, 11, 0.55), transparent 55%),
+    linear-gradient(160deg, #fef3c7 0%, #fde68a 28%, #fbbf24 58%, #f59e0b 82%, #ea580c 100%);
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+.login-card {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 20px;
+  box-shadow:
+    0 25px 50px -12px rgba(180, 83, 9, 0.28),
+    0 0 0 1px rgba(180, 83, 9, 0.06);
 }

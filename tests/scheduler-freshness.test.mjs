@@ -5,10 +5,10 @@ import { needsProtocolRefresh } from '../src/lib/scheduler-freshness.ts';
 const now = Date.parse('2026-09-25T00:00:00Z');
 const ago = minutes => new Date(now - minutes * 60_000).toISOString();
 
-test('protocol observations refresh before ten minutes, independently of app audits', () => {
-  assert.equal(needsProtocolRefresh(ago(3), now), false);
-  assert.equal(needsProtocolRefresh(ago(8), now), false);
-  assert.equal(needsProtocolRefresh(ago(8.01), now), true);
+test('protocol observations refresh before five minutes, independently of app audits', () => {
+  assert.equal(needsProtocolRefresh(ago(2), now), false);
+  assert.equal(needsProtocolRefresh(ago(3.5), now), false);
+  assert.equal(needsProtocolRefresh(ago(3.51), now), true);
   assert.equal(needsProtocolRefresh(ago(180), now), true);
 });
 test('missing, invalid and future protocol timestamps are due', () => {

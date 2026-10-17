@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { requireAuth } from "@/lib/auth";
 import { hasCronAuthorization } from "@/lib/cron-auth";
 import { runRefresh, runWalletBatch } from "@/lib/refresh-run";
-import { acquireRefreshLease, releaseRefreshLease } from "@/lib/store";
+import { acquireRefreshLease, releaseRefreshLease, StoreConflictError } from "@/lib/store";
 
 export const preferredRegion = ["hkg1"];
 export const dynamic = "force-dynamic";
@@ -22,7 +22,7 @@ async function handle(req: NextRequest) {
   /**
    * mode=fast：只刷新交易所 + 写一条快照。
    * mode=wallet-batch：只刷新最多 3 个轮转钱包，不读交易所、不写快照。
-   *   - staleMinutes=N：只刷「成功时间超过 N 分钟」的地址（调度器 20 分钟补查批次）。
+   *   - staleMinutes=N：只刷「成功时间超过 N 分钟」的地址（调度器 5 分钟补查批次）。
    *   - walletId=x：只刷指定地址（地址管理页「检查」按钮）。
    * mode=full / auto：兼容页面手动刷新与每日兜底，同样使用安全的小批量钱包预算。
    */
@@ -31,7 +31,7 @@ async function handle(req: NextRequest) {
   const walletBudgetParam = searchParams.get("walletBudget");
   const requestedWalletBudget = walletBudgetParam === null ? Number.NaN : Number(walletBudgetParam);
   const walletBudget = Number.isInteger(requestedWalletBudget)
-    ? Math.max(1, Math.min(2, requestedWalletBudget))
+    ? Math.max(1, Math.min(3, requestedWalletBudget))
     : undefined;
   const staleMinutesParam = Number(searchParams.get("staleMinutes"));
   const staleMinutes =
@@ -52,7 +52,9 @@ async function handle(req: NextRequest) {
         ? await runRefresh({ fast: true })
         : mode === "wallet-batch"
           ? await runWalletBatch({
-              walletBudget,
+              // Rabby-only lane: Vercel egress 429-loops above ~1 total/min while
+              // the GitHub cycle also reads Rabby. Clamp scheduler batches to 1.
+              walletBudget: walletId ? walletBudget : Math.min(walletBudget ?? 1, 1),
               staleMinutes,
               walletIds: walletId ? [walletId] : undefined,
               live,
@@ -77,6 +79,14 @@ async function handle(req: NextRequest) {
       },
       { status: refreshStatus === "failed" ? 503 : 200 }
     );
+  } catch (error) {
+    if (error instanceof StoreConflictError) {
+      return NextResponse.json(
+        { ok: false, mode, reason: "store_conflict", retryable: true },
+        { status: 503, headers: { "Retry-After": "2" } }
+      );
+    }
+    throw error;
   } finally {
     await releaseRefreshLease(leaseOwner);
   }

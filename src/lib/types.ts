@@ -52,7 +52,12 @@ export interface TokenHolding {
 export interface ManualAsset {
   id: string;
   name: string;
+  /** 折合 USDT，计入总额 / 快照。旧数据仅有此字段。 */
   amountUsd: number;
+  /** 记账单位。缺省或 USD = USDT；CNY = 人民币。 */
+  currency?: "USD" | "CNY";
+  /** 本币金额（CNY 条为人民币，USD 条与 amountUsd 相同）。旧数据可缺省。 */
+  amount?: number;
   updatedAt: string;
 }
 
@@ -72,10 +77,12 @@ export interface Wallet {
   lastSuccess?: { at: string; balanceUsd: number } | null;
   /** public = DeBank/Rabby 完整口径；public-partial = App 接口限流时暂缺 App 资产。 */
   source?: "public" | "public-partial" | "zerion" | "direct";
+  /** true = 暂停自动刷新（页面仍展示最后余额，不进 targets/observation/cron）。 */
+  refreshPaused?: boolean;
 }
 
 export interface ExchangeBalance {
-  exchange: "okx" | "binance" | "gate";
+  exchange: "okx" | "binance" | "gate" | "bitget";
   balanceUsd: number;
   lastUpdated: string | null;
   status: "ok" | "missing_keys" | "missing_passphrase" | "error" | "baseline";
@@ -322,7 +329,7 @@ export interface PortfolioState {
     usage?:{month:string;reservedCalls:number};
     wallets:Record<string,{lastAttemptAt:string;retryAt?:string;tokensAt?:string;tokenCount?:number;protocolAt?:string;fablesAbsentSince?:string;error?:string;protocolError?:string;historyError?:string;historyAt?:string}>;
   };
-  transactionHistory?:Record<string,{at:string;source:'okx-web3';more:boolean;records:import('./transaction-records').TransactionRecord[]}>;
+  transactionHistory?:Record<string,{at:string;source:'okx-web3'|'alchemy'|'zerion';more:boolean;records:import('./transaction-records').TransactionRecord[]}>;
   marketAudit?: {month:string;reservedCredits:number;lastAttemptAt?:string;lastSuccessAt?:string;cooldownUntil?:string;remainingCredits?:number;error?:string;updated?:number};
   rpcAudit?: {
     fablesWallets?: Record<string,{lastAttemptAt:string;at?:string;block?:string;error?:string}>;
@@ -374,4 +381,5 @@ export interface CexKeyMaterial {
   okx?: { apiKey?: string; apiSecret?: string; passphrase?: string; simulated?: boolean };
   binance?: { apiKey?: string; apiSecret?: string };
   gate?: { apiKey?: string; apiSecret?: string };
+  bitget?: { apiKey?: string; apiSecret?: string; passphrase?: string };
 }

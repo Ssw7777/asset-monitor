@@ -1,5 +1,6 @@
 /** Pure parsing/pagination helpers; never logs provider payloads or credentials. */
 import {canonicalTokenId} from './token-identity.ts';
+import {isJunkTokenSymbol} from './junk-tokens.ts';
 export type PositionPartialReason =
   | "page_limit" | "budget" | "deadline" | "http_error"
   | "invalid_response" | "unsafe_next" | "pagination_loop";
@@ -78,6 +79,7 @@ export function parseZerionPositionPage(body: unknown, normalizeChain: (value: s
     const rawChain = text(chainData?.id);
     const chain = normalizeChain(rawChain);
     const symbol = text(info?.symbol);
+    if (symbol && isJunkTokenSymbol(symbol, text(info?.name))) continue;
     const quantity = parseZerionQuantity(attributes?.quantity);
     const positionId = text(row?.id);
     const fungibleId = text(info?.id) || text(object(object(relationships?.fungible)?.data)?.id);

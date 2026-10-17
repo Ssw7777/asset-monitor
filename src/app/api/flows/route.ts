@@ -14,8 +14,9 @@ export async function GET(req: NextRequest) {
   const range = (FLOW_RANGES.some((item) => item.key === requestedRange)
     ? requestedRange
     : "24h") as FlowRangeKey;
-  const minParam = Number(params.get("min"));
-  const minUsd = Number.isFinite(minParam) && minParam >= 0 ? minParam : 50;
+  const rawMin = params.get("min");
+  const minParam = rawMin === null || rawMin.trim() === "" ? Number.NaN : Number(rawMin);
+  const minUsd = Number.isFinite(minParam) && minParam >= 0 ? minParam : 1;
 
   const state = await readStore();
   return NextResponse.json(buildFlowSummary(state, { range, minUsd }));

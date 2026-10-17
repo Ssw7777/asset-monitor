@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
 import { hasCronAuthorization } from "@/lib/cron-auth";
-import { readStore } from "@/lib/store";
+import { readLiveStore, countSnapshots } from "@/lib/store";
 import { auditTokens } from "@/lib/token-audit";
+import { isWalletRefreshEnabled } from "@/lib/wallets";
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +18,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
 
-  const state = await readStore();
-  const wallets = state.wallets;
+  const state = await readLiveStore();
+  const snapshotCount = await countSnapshots();
+  const allWallets = state.wallets;
+  const wallets = allWallets.filter(isWalletRefreshEnabled);
   const now = Date.now();
+  const fiveMinutes = 5 * 60 * 1000;
   const tenMinutes = 10 * 60 * 1000;
   const twentyMinutes = 20 * 60 * 1000;
   const threeHours = 3 * 60 * 60 * 1000;
@@ -54,16 +58,20 @@ export async function GET(req: NextRequest) {
     lastWalletObservationAt: state.lastWalletObservationAt ?? null,
     lastFullRefreshAt: state.lastFullRefreshAt ?? null,
     refreshAgeSeconds,
-    snapshotCount: state.snapshots.length,
-    walletCount: wallets.length,
+    snapshotCount,
+    walletCount: allWallets.length,
+    activeWalletCount: wallets.length,
+    pausedWalletCount: allWallets.length - wallets.length,
+    walletsOver5min: walletAges.filter(age => age > fiveMinutes).length,
     walletsOver10min: walletAges.filter(age => age > tenMinutes).length,
     oldestWalletAgeSeconds: oldestAgeSeconds(walletAges),
+    protocolsWithin5min: protocolAges.filter(age => age <= fiveMinutes).length,
     protocolsWithin10min: protocolAges.filter(age => age <= tenMinutes).length,
     oldestProtocolAgeSeconds: oldestAgeSeconds(protocolAges),
     walletsLive: wallets.filter((wallet) => {
       const at = wallet.lastSuccess?.at ?? wallet.lastUpdated;
       const atMs = at ? new Date(at).getTime() : Number.NaN;
-      return wallet.status === "ok" && Number.isFinite(atMs) && atMs <= now + 60_000 && now - atMs <= tenMinutes;
+      return wallet.status === "ok" && Number.isFinite(atMs) && atMs <= now + 60_000 && now - atMs <= fiveMinutes;
     }).length,
     walletsOver20min: wallets.filter((wallet) => {
       const at = wallet.lastSuccess?.at;
@@ -80,14 +88,15 @@ export async function GET(req: NextRequest) {
     protocolsFresh,
     protocolsStale: wallets.length - protocolsFresh,
     sourceCounts: {
-      direct: wallets.filter((wallet) => wallet.source === "direct").length,
-      public: wallets.filter((wallet) => wallet.source === "public").length,
-      publicPartial: wallets.filter((wallet) => wallet.source === "public-partial").length,
-      other: wallets.filter(
+      direct: allWallets.filter((wallet) => wallet.source === "direct").length,
+      public: allWallets.filter((wallet) => wallet.source === "public").length,
+      publicPartial: allWallets.filter((wallet) => wallet.source === "public-partial").length,
+      other: allWallets.filter(
         (wallet) => wallet.source !== "direct" && wallet.source !== "public" && wallet.source !== "public-partial"
       ).length,
     },
     walletsTotalUsd: Math.round(wallets.reduce((sum, wallet) => sum + wallet.balanceUsd, 0) * 100) / 100,
+    pausedWalletsTotalUsd: Math.round((allWallets.length - wallets.length ? allWallets.filter(w => !isWalletRefreshEnabled(w)).reduce((sum, wallet) => sum + wallet.balanceUsd, 0) : 0) * 100) / 100,
     zerionDefiNetUsd: Math.round(
       Object.values(state.zerionDefi ?? {}).reduce((sum, entry) => sum + entry.netUsd, 0) * 100
     ) / 100,

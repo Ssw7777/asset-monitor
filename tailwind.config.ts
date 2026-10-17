@@ -8,7 +8,7 @@ const config: Config = {
   ],
   theme: {
     extend: {
-      colors: { surface: "#f5f6f8", card: "#ffffff" },
+      colors: { surface: "#f4f6f8", card: "#ffffff", ink: "#1c2433" },
       boxShadow: {
         soft: "0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03)",
         card: "0 2px 8px rgba(0,0,0,0.04)",

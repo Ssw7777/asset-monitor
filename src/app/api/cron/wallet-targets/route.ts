@@ -4,6 +4,7 @@ import { readStore } from "@/lib/store";
 import { needsProtocolRefresh } from "@/lib/scheduler-freshness";
 import { requiredTokenChains } from "@/lib/token-audit";
 import { tokenUuid } from "@/lib/onchain/rabby-token-observation";
+import { isWalletRefreshEnabled } from "@/lib/wallets";
 
 export const preferredRegion = ["hkg1"];
 export const dynamic = "force-dynamic";
@@ -25,8 +26,9 @@ export async function GET(req: NextRequest) {
   // App audits consume a limited authenticated quota. Keep that separate from
   // public protocol positions, which must follow the ten-minute wallet cadence.
   const detailRefreshBefore = now - 5.5 * 60 * 60 * 1000;
+  const activeWallets = state.wallets.filter(isWalletRefreshEnabled);
   const appRefreshIndexes = new Set(
-    state.wallets
+    activeWallets
     .map((wallet, index) => {
       const rawAt = state.protocolCache?.[wallet.address.toLowerCase()]?.appAt;
       const parsedAt = rawAt ? new Date(rawAt).getTime() : Number.NaN;
@@ -39,7 +41,7 @@ export async function GET(req: NextRequest) {
       .map((entry) => entry.index)
   );
   const protocolRefreshIndexes = new Set(
-    state.wallets
+    activeWallets
       .map((wallet, index) => {
         const rawAt = state.protocolCache?.[wallet.address.toLowerCase()]?.at;
         return { index, due: needsProtocolRefresh(rawAt, now) };
@@ -47,7 +49,7 @@ export async function GET(req: NextRequest) {
       .filter((entry) => entry.due)
       .map((entry) => entry.index)
   );
-  const wallets = state.wallets.map((wallet, index) => {
+  const wallets = activeWallets.map((wallet, index) => {
     const key = wallet.address.toLowerCase();
     const tokens = state.tokenCache?.[key];
     const tokenChains = requiredTokenChains(state, key).map(chain => ({

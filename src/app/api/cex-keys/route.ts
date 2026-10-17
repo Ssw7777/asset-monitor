@@ -9,7 +9,7 @@ export async function GET() {
   const denied = await requireAuth();
   if (denied) return denied;
   const s = await readStore();
-  let configured: Record<string, boolean> = { okx: false, binance: false, gate: false };
+  let configured: Record<string, boolean> = { okx: false, binance: false, gate: false, bitget: false };
   if (s.encryptedSecrets && canEncrypt()) {
     try {
       const m = decryptJson(s.encryptedSecrets);
@@ -17,6 +17,7 @@ export async function GET() {
         okx: !!(m.okx?.apiKey && m.okx?.apiSecret && m.okx?.passphrase),
         binance: !!(m.binance?.apiKey && m.binance?.apiSecret),
         gate: !!(m.gate?.apiKey && m.gate?.apiSecret),
+        bitget: !!(m.bitget?.apiKey && m.bitget?.apiSecret && m.bitget?.passphrase),
       };
     } catch {
       /* ignore */
@@ -30,6 +31,7 @@ export async function GET() {
       okx: !!(process.env.OKX_API_KEY && process.env.OKX_API_SECRET && process.env.OKX_API_PASSPHRASE),
       binance: !!(process.env.BINANCE_API_KEY && process.env.BINANCE_API_SECRET),
       gate: !!(process.env.GATE_API_KEY && process.env.GATE_API_SECRET),
+      bitget: !!(process.env.BITGET_API_KEY && process.env.BITGET_API_SECRET && process.env.BITGET_API_PASSPHRASE),
     },
   });
 }
@@ -75,6 +77,10 @@ export async function POST(req: NextRequest) {
       body.binance
     ) as CexKeyMaterial["binance"],
     gate: merge(existing.gate as Record<string, unknown> | undefined, body.gate) as CexKeyMaterial["gate"],
+    bitget: merge(
+      existing.bitget as Record<string, unknown> | undefined,
+      body.bitget
+    ) as CexKeyMaterial["bitget"],
   };
 
   if (body.clear === true) {

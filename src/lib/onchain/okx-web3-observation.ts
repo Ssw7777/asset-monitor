@@ -1,6 +1,7 @@
 import type {WalletTokenCacheEntry,WalletProtocolCacheEntry} from '../types';
 import type {TransactionRecord} from '../transaction-records';
 import {canonicalTokenId} from './token-identity.ts';
+import {isJunkTokenSymbol} from './junk-tokens.ts';
 
 // Balance coverage is obtained from the live supported-chain endpoint, not this map.
 // The map only converts established EVM IDs to the dashboard's canonical IDs.
@@ -29,6 +30,7 @@ export function parseWeb3Tokens(payload:unknown,address:string,requested:string[
     if(!Number.isFinite(valueUsd))throw new Error('web3_invalid_value');
     if(typeof r.isRiskToken!=='boolean')throw new Error('web3_missing_risk_flag');
     if(r.isRiskToken)continue;
+    if(isJunkTokenSymbol(String(r.symbol||'')))continue;
     const contract=String(r.tokenContractAddress).toLowerCase();
     if(contract!==''&&!/^0x[a-f0-9]{40}$/.test(contract))throw new Error('web3_invalid_contract');
     if(typeof r.symbol!=='string'||!r.symbol.trim()||r.symbol.length>100)throw new Error('web3_invalid_symbol');
@@ -73,7 +75,8 @@ export function applyWeb3Tokens(previous:WalletTokenCacheEntry|undefined,rows:Wa
     rpcTokenMetadata[uuid]=merged;if(!rpcVerified)delete tokenErrors[uuid];
   }
   // No advance of full-chain coverage, full wallet value, or its successful timestamp.
-  return {...base,tokens:tokens.sort((a,b)=>b.valueUsd-a.valueUsd),inventory,rpcTokenMetadata,tokenErrors};
+  const visible=tokens.filter(row=>!isJunkTokenSymbol(row.symbol));
+  return {...base,tokens:visible.sort((a,b)=>b.valueUsd-a.valueUsd),inventory,rpcTokenMetadata,tokenErrors};
 }
 
 export function parseWeb3DefiOverview(payload:unknown,at:string,now=Date.now()){
@@ -122,27 +125,74 @@ export function applyFablesDetail(previous:WalletProtocolCacheEntry|undefined,de
   return {...base,protocolUpdatedAt:{...base.protocolUpdatedAt,hood_fables:at},protocols:[...base.protocols.filter(p=>p.id!=='hood_fables'),...(net>.005?[protocol]:[])]};
 }
 
+const evmAddress=(value:unknown)=>{
+  const text=String(value??'').trim().toLowerCase();
+  return /^0x[a-f0-9]{40}$/.test(text)?text:null;
+};
+/** Human amount as returned by OnchainOS (not raw wei). Invalid rows are skipped, never fatal. */
+function positiveAmount(value:unknown):string|null{
+  const text=typeof value==='number'&&Number.isFinite(value)?String(value):typeof value==='string'?value.trim():'';
+  if(!/^\d+(?:\.\d+)?$/.test(text))return null;
+  const amount=Number(text);
+  return Number.isFinite(amount)&&amount>0?text:null;
+}
+function party(value:unknown){
+  try{const row=record(value);return {address:evmAddress(row.address),amount:positiveAmount(row.amount)};}
+  catch{return {address:null,amount:null};}
+}
+
 export function parseWeb3History(payload:unknown,address:string,chains:string[],beginMs:number,now=Date.now()):{records:TransactionRecord[];cursor:string} {
   const envelope=record(payload);if(String(envelope.code)!=='0'||!Array.isArray(envelope.data)||envelope.data.length!==1)throw new Error('web3_invalid_history');
   const data=record(envelope.data[0]),raw=data.transactions??data.transactionList;
   // Verified live: a successful empty history is {cursor:'',transactions:null}.
-  if(data.transactions===null&&data.cursor==='')return {records:[],cursor:''};
+  if((data.transactions===null||data.transactionList===null)&&data.cursor===''&&(raw==null))return {records:[],cursor:''};
+  // Multi-chain queries may return up to 100 rows. One bad amount must not drop the page.
   if(!Array.isArray(raw)||raw.length>100)throw new Error('web3_invalid_history');
+  const wallet=address.toLowerCase();
   const records=new Map<string,TransactionRecord>();
   for(const value of raw){
-    const t=record(value),id=String(t.chainIndex),chain=chainsById[id],ms=Number(t.txTime);
+    let t:Record<string,unknown>;
+    try{t=record(value);}catch{continue;}
+    const id=String(t.chainIndex),chain=chainsById[id],ms=Number(t.txTime);
     // The live multi-chain endpoint returned old transactions despite begin. Filter locally, too.
     if(t.txStatus!=='success'||t.hitBlacklist!==false||!chain||!chains.includes(id)||!Number.isFinite(ms)||ms<beginMs||ms>now+60000)continue;
     const hash=String(t.txHash).toLowerCase();if(!/^0x[a-f0-9]{64}$/.test(hash))continue;
-    if(!Array.isArray(t.from)||!Array.isArray(t.to)||t.from.length!==1||t.to.length!==1)continue;
-    const sender=String(record(t.from[0]).address).toLowerCase(),recipient=String(record(t.to[0]).address).toLowerCase();
-    if(!/^0x[a-f0-9]{40}$/.test(sender)||!/^0x[a-f0-9]{40}$/.test(recipient)||![sender,recipient].includes(address.toLowerCase()))continue;
-    const amount=decimal(t.amount),contract=String(t.tokenContractAddress??'').toLowerCase();
+    if(!Array.isArray(t.from)||!Array.isArray(t.to)||!t.from.length||!t.to.length)continue;
+    const from=t.from.map(party).filter(row=>row.address),to=t.to.map(party).filter(row=>row.address);
+    if(!from.length||!to.length)continue;
+    const contract=String(t.tokenContractAddress??'').toLowerCase();
     if(contract!==''&&!/^0x[a-f0-9]{40}$/.test(contract))continue;
-    const key=chain+':'+hash,tx=records.get(key)??{hash,chain,minedAt:new Date(ms).toISOString(),operation:t.methodId==='0x095ea7b3'?'approve':t.methodId?'execute':sender===address.toLowerCase()?'send':'receive',transfers:[]};
-    const transfer={sender,recipient,symbol:String(t.symbol??''),quantity:String(t.amount),valueUsd:null,contractAddress:contract||undefined};
-    // Keep distinct transfers under the same hash; never infer a USD value from today's price.
-    if(amount>0&&!tx.transfers.some(row=>row.sender===sender&&row.recipient===recipient&&row.quantity===transfer.quantity&&row.contractAddress===transfer.contractAddress))tx.transfers.push(transfer);
+    const top=positiveAmount(t.amount);
+    const legs:{sender:string;recipient:string;quantity:string}[]=[];
+    if(from.length===1&&to.length===1){
+      const sender=from[0].address!,recipient=to[0].address!;
+      if(sender!==wallet&&recipient!==wallet)continue;
+      // OnchainOS amount is already a human quantity. Checked against BSC/ETH logs:
+      // USDC 1000 (6 dp) and USD1/USDT (18 dp) matched; do not divide by decimals again.
+      const quantity=top||from[0].amount||to[0].amount;
+      if(quantity)legs.push({sender,recipient,quantity});
+    }else{
+      // Swaps often list several counterparties. A length===1 gate dropped those whole txs.
+      for(const row of from){
+        if(row.address!==wallet)continue;
+        const recipient=to.length===1?to[0].address!:null;
+        const quantity=row.amount||(to.length===1?top:null);
+        if(recipient&&quantity)legs.push({sender:wallet,recipient,quantity});
+      }
+      for(const row of to){
+        if(row.address!==wallet)continue;
+        const sender=from.length===1?from[0].address!:null;
+        const quantity=row.amount||(from.length===1?top:null);
+        if(sender&&quantity)legs.push({sender,recipient:wallet,quantity});
+      }
+    }
+    if(!legs.length)continue;
+    const sender=legs[0].sender;
+    const key=chain+':'+hash,tx=records.get(key)??{hash,chain,minedAt:new Date(ms).toISOString(),operation:t.methodId==='0x095ea7b3'?'approve':t.methodId?'execute':sender===wallet?'send':'receive',transfers:[]};
+    for(const leg of legs){
+      const transfer={sender:leg.sender,recipient:leg.recipient,symbol:String(t.symbol??''),quantity:leg.quantity,valueUsd:null as number|null,contractAddress:contract||undefined};
+      if(!tx.transfers.some(row=>row.sender===transfer.sender&&row.recipient===transfer.recipient&&row.quantity===transfer.quantity&&row.contractAddress===transfer.contractAddress))tx.transfers.push(transfer);
+    }
     records.set(key,tx);
   }
   return {records:[...records.values()].sort((a,b)=>Date.parse(b.minedAt)-Date.parse(a.minedAt)),cursor:typeof data.cursor==='string'?data.cursor:''};

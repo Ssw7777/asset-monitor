@@ -96,3 +96,18 @@ test('verified successful null history is empty, but error/missing envelopes are
   assert.throws(()=>parseWeb3History({code:'50011',data:[{transactions:null,cursor:''}]},address,['1'],now-600000,now),/invalid/);
   assert.throws(()=>parseWeb3History({code:'0',data:[{}]},address,['1'],now-600000,now),/invalid/);
 });
+
+test('a bad amount or multi-party row does not drop the rest of the page',()=>{
+  const hash='0x'+'b'.repeat(64),other='0x4444444444444444444444444444444444444444';
+  const good={chainIndex:'1',txHash:hash,txTime:String(now-10000),itype:'2',from:[{address}],to:[{address:other}],amount:'12.5',symbol:'USDC',tokenContractAddress:contract,txStatus:'success',hitBlacklist:false};
+  const bad={...good,txHash:'0x'+'c'.repeat(64),amount:''};
+  const multiHash='0x'+'d'.repeat(64);
+  const multi={...good,txHash:multiHash,amount:'999',from:[{address,amount:'40'},{address:other,amount:'1'}],to:[{address:other,amount:'40'}],symbol:'USDT'};
+  const parsed=parseWeb3History({code:'0',data:[{cursor:'',transactions:[bad,good,multi]}]},address,['1'],now-600000,now);
+  assert.equal(parsed.records.length,2);
+  const single=parsed.records.find(row=>row.hash===hash);
+  assert.equal(single.transfers[0].quantity,'12.5');
+  const many=parsed.records.find(row=>row.hash===multiHash);
+  assert.equal(many.transfers.length,1);
+  assert.equal(many.transfers[0].quantity,'40');
+});

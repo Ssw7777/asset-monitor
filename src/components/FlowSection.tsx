@@ -2,7 +2,8 @@
 
 import type { FlowEvent, FlowRangeKey, FlowSummary } from "@/lib/flows";
 import { FLOW_RANGES } from "@/lib/flows";
-import { useEffect, useState } from "react";
+import type { TransferLine, TransferSummary } from "@/lib/transfers";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { amountNum, shortAddr, timeAgo, usd } from "./format";
 
@@ -18,15 +19,21 @@ function formatTime(iso: string) {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "Asia/Shanghai",
   });
 }
 
+type Row =
+  | { kind: "flow"; id: string; ts: string; event: FlowEvent }
+  | { kind: "transfer"; id: string; ts: string; line: TransferLine };
+
 /**
- * 资金变动流水：每轮刷新都会把“超过阈值的余额变化”记一条，
- * 并给出金额、方向、变动钱包 / 交易所与前后余额。
+ * 资金变动流水：余额估值变动和链上转入/转出在同一张卡片里。
+ * 净额只统计估值变动，避免和链上转账重复相加。
  */
 export function FlowSection({
   summary,
+  transfers,
   loading,
   range,
   minUsd,
@@ -34,26 +41,38 @@ export function FlowSection({
   onMinChange,
 }: {
   summary: FlowSummary | null;
+  transfers: TransferSummary | null;
   loading: boolean;
   range: FlowRangeKey;
   minUsd: number;
   onRangeChange: (range: FlowRangeKey) => void;
   onMinChange: (min: number) => void;
 }) {
-  const events = summary?.events ?? [];
   const net = summary?.netUsd ?? 0;
+  const rows = useMemo<Row[]>(() => {
+    const events = summary?.events ?? [];
+    const lines = transfers?.lines ?? [];
+    const merged: Row[] = [
+      ...events.map((event) => ({ kind: "flow" as const, id: `flow:${event.id}`, ts: event.ts, event })),
+      ...lines.map((line) => ({ kind: "transfer" as const, id: `xfer:${line.id}`, ts: line.ts, line })),
+    ];
+    merged.sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+    return merged;
+  }, [summary, transfers]);
+  const events = summary?.events ?? [];
+  const lines = transfers?.lines ?? [];
   const [page, setPage] = useState(0);
   const pageSize = 8;
-  const pages = Math.max(1, Math.ceil(events.length / pageSize));
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
   const currentPage = Math.min(page, pages - 1);
-  const visibleEvents = events.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
-  useEffect(() => setPage(0), [range, minUsd]);
+  const visible = rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  useEffect(() => setPage(0), [range, minUsd, transfers?.generatedAt]);
 
   return (
     <section className="section section-surface section-flows" id="flows">
       <div className="section-head">
         <div className="section-title">
-          <h2 title="余额估值变化，不等于转账。没有交易哈希时不推断资金去向。">资金变动流水</h2>
+          <h2 title="同一列表里有余额估值变动和链上转入/转出。净额只算估值，不算转账。">资金变动流水</h2>
           <strong className={`flow-net num ${net >= 0 ? "pos" : "neg"}`}>
             {net > 0 ? "+" : net < 0 ? "-" : ""}
             {usd(Math.abs(net))}
@@ -73,7 +92,7 @@ export function FlowSection({
             ))}
           </span>
           <span className="seg">
-            {[50, 100, 500].map((value) => (
+            {[1, 30, 100, 500].map((value) => (
               <button
                 key={value}
                 type="button"
@@ -86,44 +105,87 @@ export function FlowSection({
           </span>
         </div>
       </div>
-      <div className="flow-explanation">余额估值变动 · 非转账记录 · <Link prefetch={false} href="/transactions" target="_blank">核验链上交易 ↗</Link></div>
+      <div className="flow-explanation">
+        估值变动（≥{minUsd} U）与链上转入/转出（≥1 U）· 净额只统计估值 ·{" "}
+        <Link prefetch={false} href="/transactions" target="_blank">
+          核验链上交易 ↗
+        </Link>
+      </div>
 
-      {events.length ? (
+      {rows.length ? (
         <div className="table">
           <div className="flow-scroll">
             <div className="thead grid-flow">
               <div>时间</div>
+              <div>明细</div>
               <div className="right">变动</div>
-              <div className="hide-md">变动钱包/交易所</div>
-              <div className="right flow-balance">余额变化</div>
+              <div className="right">类型</div>
             </div>
-            {visibleEvents.map((event) => {
-              const direction = DIRECTION[event.direction];
+            {visible.map((row) => {
+              if (row.kind === "transfer") {
+                const line = row.line;
+                const spam = line.risk === "spam";
+                const detail = spam
+                  ? `${line.chain} · ${line.counterparty} · ${line.quantity} ${line.symbol} · 不计估值`
+                  : `${line.chain} · ${line.counterparty}${
+                      line.valueUsd == null || line.valueUsd <= 0
+                        ? ""
+                        : ` · ${line.quantity} ${line.symbol}`
+                    }`;
+                const amountNode = spam ? (
+                  <span className="flow-spam-amount">钓鱼 $0</span>
+                ) : line.valueUsd == null ? (
+                  <span className="flow-unpriced">未定价</span>
+                ) : (
+                  <>
+                    {line.direction === "in" ? "+" : "-"}
+                    {usd(line.valueUsd)}
+                  </>
+                );
+                return (
+                  <div className={`trow grid-flow${spam ? " flow-spam-row" : ""}`} key={row.id}>
+                    <div className="flow-time cell-token-text">
+                      <b>{formatTime(line.ts)}</b>
+                      <span>{timeAgo(line.ts)}</span>
+                    </div>
+                    <div className="flow-detail cell-token-text">
+                      <b title={line.summary}>{line.summary}</b>
+                      <span title={detail}>{detail}</span>
+                    </div>
+                    <div className={`flow-amount num ${spam ? "" : line.direction === "in" ? "pos" : "neg"}`}>
+                      {amountNode}
+                    </div>
+                    <div className="flow-kind">
+                      {spam ? (
+                        <span className="flow-tag flow-tag-spam">钓鱼</span>
+                      ) : (
+                        <span className="flow-tag flow-tag-chain">链上</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+              const event = row.event;
+              const direction = DIRECTION[event.direction] ?? DIRECTION.transfer;
+              const who = event.entityAddress ? shortAddr(event.entityAddress) : "";
+              const moved = `${amountNum(event.before)} → ${usd(event.after)}`;
+              const detail = who ? `${moved} · ${who}` : moved;
               return (
-                <div className="trow grid-flow" key={event.id}>
-                  <div className="cell-token-text">
+                <div className="trow grid-flow" key={row.id}>
+                  <div className="flow-time cell-token-text">
                     <b>{formatTime(event.ts)}</b>
                     <span>{timeAgo(event.ts)}</span>
                   </div>
-                  <div className={`right num ${direction.cls}`}>
-                    <div className="cell-main">
-                      {event.direction === "out" ? "-" : event.direction === "in" ? "+" : "±"}
-                      {usd(event.amountUsd)}
-                    </div>
+                  <div className="flow-detail cell-token-text">
+                    <b title={event.entityLabel}>{event.entityLabel}</b>
+                    <span className="num" title={detail}>{detail}</span>
                   </div>
-                  <div className="cell-token-text flow-entity hide-md">
-                    <b>{event.entityLabel}</b>
-                    <span>
-                      {event.entityAddress ? shortAddr(event.entityAddress) : event.entityLabel}
-                    </span>
+                  <div className={`flow-amount num ${direction.cls}`}>
+                    {event.direction === "out" ? "-" : event.direction === "in" ? "+" : "±"}
+                    {usd(event.amountUsd)}
                   </div>
-                  <div className="right cell-sub num flow-balance">
-                    {amountNum(event.before)} → {usd(event.after)}
-                  </div>
-                  <div className="flow-meta cell-sub">
-                    {event.entityLabel}
-                    {event.entityAddress ? ` · ${shortAddr(event.entityAddress)}` : ""} · {amountNum(event.before)} →{" "}
-                    {usd(event.after)}
+                  <div className="flow-kind">
+                    <span className="flow-tag flow-tag-value">估值</span>
                   </div>
                 </div>
               );
@@ -134,11 +196,13 @@ export function FlowSection({
         <div className="empty">
           {loading
             ? "读取中…"
-            : `还没有超过 ${minUsd} U 的变动记录：每轮刷新会自动比对并记录，时间越久记录越完整`}
+            : `还没有超过 ${minUsd} U 的估值变动，也没有不低于 1 美元的链上转入/转出`}
         </div>
       )}
       <div className="flow-pagination">
-        <span className="small">{currentPage + 1} / {pages} 页 · 已载入 {events.length} 条</span>
+        <span className="small">
+          {currentPage + 1} / {pages} 页 · 估值 {events.length} 条 · 链上 {lines.length} 条
+        </span>
         <div className="inline">
           <button className="btn btn-outline" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>上一页</button>
           <button className="btn btn-outline" disabled={currentPage === pages - 1} onClick={() => setPage(currentPage + 1)}>下一页</button>

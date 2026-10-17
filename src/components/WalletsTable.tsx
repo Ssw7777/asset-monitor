@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { ChainType, Wallet } from "@/lib/types";
 import { shortAddr, timeAgo, usd } from "./format";
+import { isWalletRefreshEnabled } from "@/lib/wallets";
 
 type Filter = "all" | "EVM" | "ABSTRACT";
 
@@ -24,6 +25,14 @@ export function WalletsTable({
   const [batchText, setBatchText] = useState("");
   const [batchChain, setBatchChain] = useState<ChainType>("EVM");
   const [msg, setMsg] = useState("");
+  const [sortKey, setSortKey] = useState<"balance" | "updated">("balance");
+  const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
+
+  function walletUpdatedAt(wallet: Wallet) {
+    const raw = wallet.lastSuccess?.at ?? wallet.lastUpdated;
+    const ms = raw ? new Date(raw).getTime() : 0;
+    return Number.isFinite(ms) ? ms : 0;
+  }
 
   const filtered = useMemo(() => {
     let list = wallets;
@@ -36,12 +45,61 @@ export function WalletsTable({
           wallet.address.toLowerCase().includes(keyword)
       );
     }
-    return [...list].sort((left, right) => right.balanceUsd - left.balanceUsd);
-  }, [wallets, filter, q]);
+    const mul = sortDir === "desc" ? -1 : 1;
+    return [...list].sort((left, right) => {
+      if (sortKey === "updated") {
+        const diff = (walletUpdatedAt(left) - walletUpdatedAt(right)) * mul;
+        if (diff !== 0) return diff;
+        return right.balanceUsd - left.balanceUsd;
+      }
+      const diff = (left.balanceUsd - right.balanceUsd) * mul;
+      if (diff !== 0) return diff;
+      return walletUpdatedAt(right) - walletUpdatedAt(left);
+    });
+  }, [wallets, filter, q, sortKey, sortDir]);
+
+  function toggleSort(key: "balance" | "updated") {
+    if (sortKey === key) {
+      setSortDir((dir) => (dir === "desc" ? "asc" : "desc"));
+    } else {
+      setSortKey(key);
+      setSortDir("desc"); // 余额：从大到小；状态：从最近到最晚
+    }
+  }
+
+  function sortLabel(key: "balance" | "updated", label: string) {
+    const active = sortKey === key;
+    const mark = active ? (sortDir === "desc" ? "↓" : "↑") : "";
+    const tip =
+      key === "balance"
+        ? active
+          ? sortDir === "desc"
+            ? "当前：余额从大到小，再点切换升序"
+            : "当前：余额从小到大，再点切换降序"
+          : "点击按余额从大到小排序"
+        : active
+          ? sortDir === "desc"
+            ? "当前：更新时间从近到远，再点切换升序"
+            : "当前：更新时间从远到近，再点切换降序"
+          : "点击按更新时间从近到远排序";
+    return (
+      <button
+        type="button"
+        className={`th-sort${active ? " active" : ""}`}
+        onClick={() => toggleSort(key)}
+        aria-label={`按${label}排序`}
+        title={tip}
+      >
+        {label}
+        {mark ? <span className="th-sort-mark" aria-hidden="true">{mark}</span> : null}
+      </button>
+    );
+  }
 
   const evmCount = wallets.filter((wallet) => wallet.chain === "EVM").length;
   const absCount = wallets.filter((wallet) => wallet.chain === "ABSTRACT").length;
   const over20 = wallets.filter((wallet) => {
+    if (!isWalletRefreshEnabled(wallet)) return false;
     const at = wallet.lastSuccess?.at;
     return !at || Date.now() - new Date(at).getTime() > 20 * 60 * 1000;
   }).length;
@@ -168,6 +226,9 @@ export function WalletsTable({
   }
 
   function statusText(wallet: Wallet) {
+    if (!isWalletRefreshEnabled(wallet)) {
+      return { text: "已停更 · 余额冻结", cls: "muted" };
+    }
     const successAt = wallet.lastSuccess?.at ?? wallet.lastUpdated;
     const successAge = successAt ? Date.now() - new Date(successAt).getTime() : Number.POSITIVE_INFINITY;
     if (wallet.status === "ok" && successAge <= 10 * 60 * 1000) {
@@ -374,8 +435,8 @@ export function WalletsTable({
         <div className="thead grid-wallet">
           <div>钱包</div>
           <div className="hide-lg">类型</div>
-          <div className="right">余额</div>
-          <div className="right hide-md">状态</div>
+          <div className="right">{sortLabel("balance", "余额")}</div>
+          <div className="right hide-md">{sortLabel("updated", "状态")}</div>
           <div className="right hide-lg">DeBank</div>
           <div className="right">操作</div>
         </div>

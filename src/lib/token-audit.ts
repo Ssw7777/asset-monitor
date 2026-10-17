@@ -1,5 +1,6 @@
 import type { PortfolioState, TokenAuditSummary } from "./types";
 import {canonicalTokenId} from './onchain/token-identity.ts';
+import { isWalletRefreshEnabled } from "./wallets";
 
 export const TOKEN_FRESHNESS_MS = 10 * 60_000;
 
@@ -18,7 +19,9 @@ export function auditTokens(state: Pick<PortfolioState, "wallets" | "tokenCache"
   let aggregateMismatches = 0;
   let oldestMs = Infinity;
   const expected = new Map<string, { amount: number; value: number }>();
-  const wallets = state.wallets.map(wallet => {
+  // Token freshness UI only covers wallets still being refreshed.
+  const sourceWallets = state.wallets.filter(isWalletRefreshEnabled);
+  const wallets = sourceWallets.map(wallet => {
     const cache = state.tokenCache?.[wallet.address.toLowerCase()];
     const chains = requiredTokenChains(state, wallet.address);
     const chainTimes = chains.map(chain => {
@@ -71,7 +74,7 @@ export function auditTokens(state: Pick<PortfolioState, "wallets" | "tokenCache"
   const count = (status: string) => wallets.filter(wallet => wallet.status === status).length;
   const freshWallets = count("fresh");
   const rpcKeys = new Set<string>();
-  for (const wallet of state.wallets) {
+  for (const wallet of sourceWallets) {
     const address=wallet.address.toLowerCase(),cache=state.tokenCache?.[address];
     for(const uuid of Object.keys(cache?.inventory??{}))rpcKeys.add(`${address}:${uuid}`);
     for(const token of cache?.tokens??[]){

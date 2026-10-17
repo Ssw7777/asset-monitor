@@ -16,21 +16,65 @@ import type {
   Wallet,
 } from "./types";
 import { deriveFlowEventsFromSnapshots, PERSISTED_FLOW_LIMIT, PERSISTED_FLOW_MIN_USD } from "./flows";
+import { reconcileSnapshotTotalsToWallets, sanitizeOscillatingBasisBands, sanitizeOscillatingTotals, sanitizeRoundTripBasisBands, sanitizeSpuriousWalletSpikes, sanitizeValueRoundTrips } from "./onchain/snapshot-sanitize";
 import { BASELINE, MIGRATION_WALLETS, SEED_MANUAL, seedWallets } from "./seed";
-import { WALLET_LIMIT, normalizeAddress } from "./wallets";
+import { WALLET_LIMIT, normalizeAddress, PAUSED_ABSTRACT_ADDRESSES, PAUSED_ABSTRACT_RESCANNED_USD, isWalletRefreshEnabled } from "./wallets";
 import { auditTokens } from "./token-audit";
 import {preserveRpcProtocols} from './onchain/protocol-observation';
 import {serializedFields,changedFields,deltaSql} from './store-delta';
+import { cnyManualNames, manualToUsd, normalizeManualAsset, revalueManualForRate, stripCnyManualFromSnapshot } from "./manual-assets";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const LOCAL_STORE = path.join(DATA_DIR, "store.json");
 const TMP_STORE = "/tmp/asset-monitor-store.json";
 const TURSO_ROW_KEY = "portfolio";
-/** 5 分钟一张快照 × 2016 ≈ 7 天历史。 */
-export const SNAPSHOT_LIMIT = 2016;
-const FLOW_DATA_VERSION = 2;
+/**
+ * 快照每 ~1 分钟写一次。最近 24 小时保留全部（约 1440 条），更早的压成每 5 分钟 1 条
+ * （6 天 × 288 ≈ 1728 条），合计 ≈ 3170 条覆盖 7 天；上限 3600 只是兜底。
+ */
+export const SNAPSHOT_LIMIT = 3600;
+const SNAPSHOT_FULL_RES_MS = 24 * 60 * 60 * 1000;
+const SNAPSHOT_THIN_BUCKET_MS = 5 * 60 * 1000;
+const FLOW_DATA_VERSION = 4;
 /** 保留全部快照的逐钱包 / 逐 DApp 明细（2016 条 ≈ 7 天），这样 7 天窗口也能按钱包归因。 */
-const SNAPSHOT_DETAIL_KEEP = SNAPSHOT_LIMIT;
+const SNAPSHOT_DETAIL_KEEP = 2016;
+
+/** Keep every snapshot from the last 24h; older ones thinned to one per 5-minute bucket. */
+export function thinSnapshots(list: SnapshotPoint[], nowMs = Date.now()): SnapshotPoint[] {
+  const cutoff = nowMs - SNAPSHOT_FULL_RES_MS;
+  const seen = new Set<number>();
+  const out: SnapshotPoint[] = [];
+  for (const point of list) {
+    const ms = Date.parse(point.ts);
+    if (!Number.isFinite(ms) || ms >= cutoff || point.seeded) {
+      out.push(point);
+      continue;
+    }
+    const bucket = Math.floor(ms / SNAPSHOT_THIN_BUCKET_MS);
+    if (seen.has(bucket)) continue;
+    seen.add(bucket);
+    out.push(point);
+  }
+  return out;
+}
+
+const gThin = globalThis as unknown as { __amLastThinAt?: number };
+/** At most every 20 min: compact old snapshots so 7 days fit under SNAPSHOT_LIMIT. */
+async function maybeThinSnapshots() {
+  const now = Date.now();
+  if (gThin.__amLastThinAt && now - gThin.__amLastThinAt < 20 * 60 * 1000) return;
+  gThin.__amLastThinAt = now;
+  try {
+    const n = await countSnapshots();
+    if (n < 1500) return;
+    await mutateStore((s) => {
+      const thinned = thinSnapshots(s.snapshots, now);
+      if (thinned.length !== s.snapshots.length) s.snapshots = trimSnapshots(thinned);
+    });
+  } catch (error) {
+    console.error("[store] snapshot thinning failed", error);
+  }
+}
 
 export class StoreConflictError extends Error {
   constructor(message = "Portfolio store revision conflict") {
@@ -87,6 +131,7 @@ function defaultExchanges(): ExchangeBalance[] {
     { exchange: "okx", balanceUsd: BASELINE.okx, lastUpdated: now, status: "baseline" },
     { exchange: "binance", balanceUsd: BASELINE.binance, lastUpdated: now, status: "baseline" },
     { exchange: "gate", balanceUsd: BASELINE.gate, lastUpdated: now, status: "baseline" },
+    { exchange: "bitget", balanceUsd: BASELINE.bitget, lastUpdated: now, status: "baseline" },
   ];
 }
 
@@ -103,7 +148,7 @@ function seedSnapshots(): SnapshotPoint[] {
       onchain: BASELINE.onchainUsd,
       cex: BASELINE.cexUsd,
       manual: BASELINE.manualUsd,
-      exchanges: { okx: BASELINE.okx, binance: BASELINE.binance, gate: BASELINE.gate },
+      exchanges: { okx: BASELINE.okx, binance: BASELINE.binance, gate: BASELINE.gate, bitget: BASELINE.bitget },
       seeded: true,
     });
   }
@@ -158,9 +203,41 @@ export function applyWalletMigrations(wallets: Wallet[]): Wallet[] {
       createdAt: now,
       updatedAt: now,
       lastSuccess: null,
+      refreshPaused: PAUSED_ABSTRACT_ADDRESSES.has(key) || undefined,
     });
   }
-  return out;
+  // Mark the emptied Abstract wallets as paused without deleting them.
+  let pausedChanged = false;
+  for (let i = 0; i < out.length; i++) {
+    const key = normalizeAddress(out[i].address);
+    if (!PAUSED_ABSTRACT_ADDRESSES.has(key)) continue;
+    let next = out[i];
+    if (next.refreshPaused !== true) {
+      next = { ...next, refreshPaused: true };
+      pausedChanged = true;
+    }
+    // Replace junk-inflated frozen totals with Abstract dust rescans (e.g. Xter5 17.27 → 0.02).
+    const rescanned = PAUSED_ABSTRACT_RESCANNED_USD[key];
+    if (rescanned != null && Number.isFinite(rescanned)) {
+      const balanceUsd = Math.round(rescanned * 100) / 100;
+      const balGap = Math.abs((Number(next.balanceUsd) || 0) - balanceUsd);
+      const successGap = next.lastSuccess
+        ? Math.abs((Number(next.lastSuccess.balanceUsd) || 0) - balanceUsd)
+        : 0;
+      if (balGap >= 0.5 || successGap >= 0.5) {
+        next = {
+          ...next,
+          balanceUsd,
+          lastSuccess: next.lastSuccess
+            ? { ...next.lastSuccess, balanceUsd }
+            : next.lastSuccess,
+        };
+        pausedChanged = true;
+      }
+    }
+    out[i] = next;
+  }
+  return pausedChanged ? [...out] : out;
 }
 
 function normalizeSnapshot(raw: unknown): SnapshotPoint | null {
@@ -207,6 +284,38 @@ function normalizeSnapshot(raw: unknown): SnapshotPoint | null {
   };
 }
 
+
+
+/**
+ * Headline totals are the live wallet rows, not the chart series. If a flapping
+ * wallet was pinned to the high/public band on the chart, show that same band
+ * live — even when the gap sits under the old percent tolerance. A real step
+ * larger than 12% is left alone (Gate → on-chain ~$10k).
+ */
+function stickFlappingWalletBalances(wallets: Wallet[], preferred: Record<string, number>): Wallet[] {
+  if (!Object.keys(preferred).length) return wallets;
+  let changed = false;
+  const next = wallets.map((wallet) => {
+    const sticky = preferred[wallet.address.toLowerCase()];
+    if (sticky == null || !Number.isFinite(sticky)) return wallet;
+    const current = Number(wallet.balanceUsd) || 0;
+    const gap = Math.abs(current - sticky);
+    // Already on the pinned band.
+    if (gap < 1) return wallet;
+    // Only raise (or snap) onto the preferred high/public band; never chop a
+    // higher live reading down to a stale sticky.
+    if (current > sticky + 1) return wallet;
+    const nonPublic = wallet.source === "direct" || wallet.source === "zerion";
+    // Coverage holes (Base NVDAc missing on OKX/Zerion) exceed 12% of NAV.
+    // Non-public live sources always snap up onto the sticky Rabby band.
+    // Public sources still use the 12% guard so a real withdrawal sticks.
+    if (!nonPublic && gap > Math.abs(sticky) * 0.12) return wallet;
+    changed = true;
+    return { ...wallet, balanceUsd: sticky, source: "public" as const };
+  });
+  return changed ? next : wallets;
+}
+
 function normalizeState(raw: Partial<PortfolioState> | null | undefined): PortfolioState {
   const d = defaultState();
   if (!raw || typeof raw !== "object") return d;
@@ -221,23 +330,58 @@ function normalizeState(raw: Partial<PortfolioState> | null | undefined): Portfo
   const rawSnapshots = Array.isArray(raw.snapshots)
     ? raw.snapshots.map(normalizeSnapshot).filter((point): point is SnapshotPoint => point !== null)
     : [];
+  // Workers Free (~10ms CPU) cannot re-sanitize ~2016 snapshots on every /api/portfolio|/api/status.
+  // Set SANITIZE_ON_READ=1 only for deliberate repair jobs.
+  const sanitizeOnRead = process.env.SANITIZE_ON_READ === "1";
+  let stickyBands: Record<string, number> = {};
+  let snapshotsOut = rawSnapshots.length ? trimSnapshots(rawSnapshots) : d.snapshots;
+  let sanitizeChanged = 0;
+  if (sanitizeOnRead) {
+    const sanitized = sanitizeSpuriousWalletSpikes(rawSnapshots);
+    const bands = sanitizeOscillatingBasisBands(sanitized.snapshots);
+    const roundTrips = sanitizeRoundTripBasisBands(bands.snapshots);
+    const valueTrips = sanitizeValueRoundTrips(roundTrips.snapshots);
+    const totalsPinned = sanitizeOscillatingTotals(valueTrips.snapshots);
+    const totalsReconciled = reconcileSnapshotTotalsToWallets(totalsPinned.snapshots);
+    stickyBands = { ...bands.preferred, ...roundTrips.preferred, ...valueTrips.preferred };
+    snapshotsOut = totalsReconciled.snapshots.length ? trimSnapshots(totalsReconciled.snapshots) : d.snapshots;
+    sanitizeChanged =
+      sanitized.changed + bands.changed + roundTrips.changed + valueTrips.changed + totalsPinned.changed + totalsReconciled.changed;
+  }
   const storedFlowVersion = Number(raw.flowDataVersion) || 1;
+  // Spurious spikes / source-coverage flaps (NVDAc) must not keep generating fake flows.
   const flowBaselineAt =
-    storedFlowVersion >= FLOW_DATA_VERSION && typeof raw.flowBaselineAt === "string"
+    storedFlowVersion >= FLOW_DATA_VERSION &&
+    typeof raw.flowBaselineAt === "string" &&
+    sanitizeChanged === 0
       ? raw.flowBaselineAt
-      : new Date().toISOString();
+      : sanitizeOnRead
+        ? new Date().toISOString()
+        : typeof raw.flowBaselineAt === "string"
+          ? raw.flowBaselineAt
+          : new Date().toISOString();
   return {
     storeRevision: typeof raw.storeRevision === "string" ? raw.storeRevision : undefined,
     rpcAudit: raw.rpcAudit,
     web3Audit: raw.web3Audit,
     transactionHistory: raw.transactionHistory,
     marketAudit: raw.marketAudit,
-    manual: Array.isArray(raw.manual) ? raw.manual : d.manual,
+    manual: Array.isArray(raw.manual)
+      ? raw.manual.map((item: ManualAsset) => {
+          // 旧条目仅有 amountUsd：保持原值，不强制写 currency，读取时按 USDT 计。
+          if (!item || typeof item !== "object") return item;
+          if (item.currency === "CNY") {
+            return normalizeManualAsset(item, Number(raw.usdCnyRate) || d.usdCnyRate);
+          }
+          return item;
+        })
+      : d.manual,
     // Migration runs on every read: newly required addresses appear without touching existing rows.
-    wallets: applyWalletMigrations(storedWallets),
+    wallets: stickFlappingWalletBalances(applyWalletMigrations(storedWallets), stickyBands),
     exchanges: Array.isArray(raw.exchanges) ? raw.exchanges : d.exchanges,
-    snapshots: rawSnapshots.length ? trimSnapshots(rawSnapshots) : d.snapshots,
-    flowEvents: Array.isArray(raw.flowEvents) ? raw.flowEvents : [],
+    snapshots: snapshotsOut,
+    flowEvents:
+      storedFlowVersion >= FLOW_DATA_VERSION && Array.isArray(raw.flowEvents) ? raw.flowEvents : [],
     flowBaselineAt,
     flowDataVersion: FLOW_DATA_VERSION,
     onchainCacheUsd: Number(raw.onchainCacheUsd) || d.onchainCacheUsd,
@@ -300,7 +444,8 @@ function writeJsonFile(filePath: string, state: PortfolioState) {
 }
 
 async function tursoClient() {
-  const { createClient } = await import("@libsql/client");
+  // workerd/Workers: use HTTP web client (avoids node net/tls). Node/dev still fine via @libsql/client/web.
+  const { createClient } = await import("@libsql/client/http");
   return createClient({
     url: process.env.TURSO_DATABASE_URL!,
     authToken: process.env.TURSO_AUTH_TOKEN!,
@@ -570,11 +715,31 @@ export async function mutateStore<T>(
 }
 
 /** Provider observations do not download/re-upload thousands of old snapshots. */
-export async function mutateLiveStore<T>(mutator:(state:PortfolioState)=>T|Promise<T>){return mutateStore(mutator,3,false);}
+export async function mutateLiveStore<T>(mutator:(state:PortfolioState)=>T|Promise<T>,maxAttempts=8){return mutateStore(mutator,maxAttempts,false);}
 export async function readLiveStore(){
  if(!preferTurso())return readStore();
  const state=await readTurso(false);if(!state)throw new Error('live_store_missing');return state;
 }
+
+export async function countSnapshots(): Promise<number> {
+  if (!preferTurso()) {
+    const state = await readStore();
+    return state.snapshots.length;
+  }
+  try {
+    const client = await ensureTursoSchema();
+    const rs = await client.execute({
+      sql: "SELECT json_array_length(json_extract(value, '$.snapshots')) AS n FROM kv_store WHERE key = ?",
+      args: [TURSO_ROW_KEY],
+    });
+    const n = Number(rs.rows[0]?.n ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  } catch (error) {
+    console.error("[store] snapshot count failed", error);
+    return 0;
+  }
+}
+
 
 export async function updateManual(manual: ManualAsset[]) {
   return (await mutateStore((state) => { state.manual = manual; })).state;
@@ -582,9 +747,10 @@ export async function updateManual(manual: ManualAsset[]) {
 
 export async function upsertManual(item: ManualAsset) {
   return (await mutateStore((state) => {
-    const idx = state.manual.findIndex((m) => m.id === item.id);
-    if (idx >= 0) state.manual[idx] = item;
-    else state.manual.push(item);
+    const normalized = normalizeManualAsset(item, Number(state.usdCnyRate) || 6.66);
+    const idx = state.manual.findIndex((m) => m.id === normalized.id);
+    if (idx >= 0) state.manual[idx] = normalized;
+    else state.manual.push(normalized);
   })).state;
 }
 
@@ -629,9 +795,10 @@ export async function updateWallets(
         lastSuccess: current.lastSuccess,
         status: current.status,
         source: current.source,
+        refreshPaused: incoming.refreshPaused ?? current.refreshPaused,
       };
     });
-    state.onchainCacheUsd = state.wallets.reduce((sum, wallet) => sum + wallet.balanceUsd, 0);
+    state.onchainCacheUsd = state.wallets.filter(isWalletRefreshEnabled).reduce((sum, wallet) => sum + wallet.balanceUsd, 0);
   })).state;
 }
 
@@ -646,6 +813,7 @@ export async function updateExchanges(exchanges: ExchangeBalance[]) {
 export async function setUsdCnyRate(rate: number) {
   return (await mutateStore((state) => {
     state.usdCnyRate = Math.round(rate * 10000) / 10000 || 6.66;
+    state.manual = revalueManualForRate(state.manual, state.usdCnyRate);
   })).state;
 }
 
@@ -697,6 +865,10 @@ export async function updateProtocolCache(cache: Record<string, WalletProtocolCa
 
 export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: string }) {
   return (await mutateStore((s) => {
+    const cnyNames = cnyManualNames(s.manual);
+    if (cnyNames.size) {
+      s.snapshots = s.snapshots.map((p) => stripCnyManualFromSnapshot(p, cnyNames));
+    }
     const snap: SnapshotPoint = {
     ts: point.ts || new Date().toISOString(),
     totalUsd: point.totalUsd,
@@ -730,16 +902,109 @@ export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: str
       }
     }
     s.snapshots.push(snap);
-    s.snapshots = trimSnapshots(s.snapshots);
+    s.snapshots = trimSnapshots(thinSnapshots(s.snapshots));
     s.lastRefresh = snap.ts;
   })).state;
 }
 
+
+/**
+ * Cloudflare Workers Free has ~10ms CPU. Loading 2016 snapshots into JS for
+ * sanitize/normalize blows the budget (Error 1102). Append one snapshot +
+ * lastRefresh via SQL json_insert without materializing history in the isolate.
+ */
+export async function pushSnapshotLive(point: Omit<SnapshotPoint, "ts"> & { ts?: string }) {
+  if (!preferTurso()) return pushSnapshot(point);
+  await maybeThinSnapshots();
+  const snap: SnapshotPoint = {
+    ts: point.ts || new Date().toISOString(),
+    totalUsd: point.totalUsd,
+    onchain: point.onchain,
+    cex: point.cex,
+    manual: point.manual,
+    exchanges: point.exchanges,
+    wallets: point.wallets,
+    zerionWallets: point.zerionWallets?.length ? point.zerionWallets : undefined,
+    walletBasis: point.walletBasis && Object.keys(point.walletBasis).length ? point.walletBasis : undefined,
+    manualItems: point.manualItems,
+    dapps: point.dapps,
+    partial: point.partial === true ? true : undefined,
+    suppressExchangeFlows: point.suppressExchangeFlows,
+  };
+  const snapJson = JSON.stringify(snap);
+  const lastRefreshJson = JSON.stringify(snap.ts);
+  let conflict: StoreConflictError | null = null;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      const live = await readTurso(false);
+      if (!live) throw new Error("live_store_missing");
+      const client = await ensureTursoSchema();
+      const previousRevision = live.storeRevision || "";
+      const nextRevision = `${new Date().toISOString()}-${randomUUID()}`;
+      // Append snapshot; if over SNAPSHOT_LIMIT, drop the oldest via json_remove $.[0] in a loop-free CASE.
+      const result = await client.execute({
+        sql: `UPDATE kv_store SET
+                value = json_set(
+                  json_set(
+                    CASE
+                      WHEN json_array_length(json_extract(value, '$.snapshots')) >= ?
+                        THEN json_insert(json_remove(value, '$.snapshots[0]'), '$.snapshots[#]', json(?))
+                      ELSE json_insert(value, '$.snapshots[#]', json(?))
+                    END,
+                    '$.lastRefresh',
+                    json(?)
+                  ),
+                  '$.storeRevision',
+                  json(?)
+                ),
+                updated_at = ?
+              WHERE key = ? AND updated_at = ?`,
+        args: [
+          SNAPSHOT_LIMIT,
+          snapJson,
+          snapJson,
+          lastRefreshJson,
+          JSON.stringify(nextRevision),
+          nextRevision,
+          TURSO_ROW_KEY,
+          previousRevision,
+        ],
+      });
+      if (result.rowsAffected !== 1) throw new StoreConflictError();
+      live.exchanges = live.exchanges; // keep
+      live.lastRefresh = snap.ts;
+      live.storeRevision = nextRevision;
+      // Keep memory cache coherent for this isolate without reloading history.
+      live.snapshots = [];
+      live.flowEvents = [];
+      writeMemoryAndTmp(live);
+      return live;
+    } catch (error) {
+      if (!(error instanceof StoreConflictError)) throw error;
+      conflict = error;
+    }
+  }
+  throw conflict ?? new StoreConflictError();
+}
+
+export async function updateExchangesLive(exchanges: ExchangeBalance[]) {
+  return (await mutateLiveStore((state) => { state.exchanges = exchanges; })).state;
+}
+
+export async function updateCexValuationVersionsLive(
+  versions: NonNullable<PortfolioState["cexValuationVersions"]>
+) {
+  return (await mutateLiveStore((state) => { state.cexValuationVersions = versions; })).state;
+}
+
 export function computeTotals(s: PortfolioState) {
-  const manualUsd = s.manual.reduce((a, m) => a + (Number(m.amountUsd) || 0), 0);
-  const onchainUsd = s.wallets.reduce((a, w) => a + (Number(w.balanceUsd) || 0), 0);
+  const rate = Number(s.usdCnyRate) || 6.66;
+  const manualUsd = s.manual.reduce((a, m) => a + manualToUsd(m, rate), 0);
+  // Totals only sum wallets still in the refresh queue; paused Abstract dust is not noise.
+  const active = s.wallets.filter(isWalletRefreshEnabled);
+  const onchainUsd = active.reduce((a, w) => a + (Number(w.balanceUsd) || 0), 0);
   const cexUsd = s.exchanges.reduce((a, e) => a + (Number(e.balanceUsd) || 0), 0);
-  const evmUsd = s.wallets.filter((w) => w.chain === "EVM").reduce((a, w) => a + w.balanceUsd, 0);
+  const evmUsd = active.filter((w) => w.chain === "EVM").reduce((a, w) => a + w.balanceUsd, 0);
   const abstractUsd = s.wallets
     .filter((w) => w.chain === "ABSTRACT")
     .reduce((a, w) => a + w.balanceUsd, 0);
@@ -787,16 +1052,20 @@ export function publicState(s: PortfolioState) {
   void _omitLongtailCache;
   void _omitFlowEvents;
   void _omitCexValuationVersions;
-  const snapshots = s.snapshots.map((point) => ({
-    ts: point.ts,
-    totalUsd: point.totalUsd,
-    onchain: point.onchain,
-    cex: point.cex,
-    manual: point.manual,
-    exchanges: point.exchanges,
-    partial: point.partial,
-    seeded: point.seeded,
-  }));
+  const cnyNames = cnyManualNames(s.manual);
+  const snapshots = s.snapshots.map((raw) => {
+    const point = stripCnyManualFromSnapshot(raw, cnyNames);
+    return {
+      ts: point.ts,
+      totalUsd: point.totalUsd,
+      onchain: point.onchain,
+      cex: point.cex,
+      manual: point.manual,
+      exchanges: point.exchanges,
+      partial: point.partial,
+      seeded: point.seeded,
+    };
+  });
   return {
     ...rest,
     onchainBreakdown: s.onchainBreakdown ? { ...s.onchainBreakdown, tokenAudit: auditTokens(s) } : s.onchainBreakdown,
