@@ -19,6 +19,12 @@ import { mergeTokenCacheObservation, tokenCacheNeedsRefresh, tokenIdentity, hasN
 import {preserveRpcProtocols} from './protocol-observation';
 import { comparedTokensFromLines, shouldRejectIncomingWalletTotal } from './total-calibration';
 import { isDustTokenValue, isJunkTokenSymbol } from './junk-tokens';
+import { bnWeb3Credentials } from './bn-web3';
+import {
+  collectBnDefiTokenKeys,
+  fetchBnDefiProtocols,
+  mergeBnProtocolsWithPrevious,
+} from './bn-web3-observation';
 import { isWalletRefreshEnabled } from '../wallets';
 
 export interface ChainBalanceDetail {
@@ -485,6 +491,31 @@ async function fetchComplexProtocols(
         lastError: undefined,
       });
       return store[normalized].protocols;
+    }
+  }
+  // Rabby / DeBank failed or 429: Binance Web3 DeFi position/list as read-only backup.
+  // Covers supported chains (incl. USDai@Arb); unsupported protocols keep the previous Rabby cache.
+  if (bnWeb3Credentials()) {
+    try {
+      const bn = await fetchBnDefiProtocols(normalized);
+      if (bn) {
+        const merged = mergeBnProtocolsWithPrevious(hit?.protocols ?? [], bn.protocols);
+        store[normalized] = preserveRpcProtocols(store[normalized], {
+          ...store[normalized],
+          protocols: merged,
+          at: attemptIso,
+          lastAttemptAt: attemptIso,
+          lastError: undefined,
+        });
+        return store[normalized].protocols;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "bn_web3_failed";
+      store[normalized] = {
+        ...store[normalized],
+        lastAttemptAt: attemptIso,
+        lastError: /^bn_web3_[a-z0-9_]+$/.test(message) ? message : "bn_web3_failed",
+      };
     }
   }
   return hit?.protocols ?? null;
@@ -1081,10 +1112,21 @@ export async function refreshOnchainBreakdown(
         chainMap.set(chain.id, current);
       }
     }
+    // DeFi receipt tokens (e.g. sUSDai / poolCa) must not also appear as wallet spot when
+    // the same capital is already explained by a BN (or known USDai) protocol row.
+    const defiReceiptKeys = collectBnDefiTokenKeys(protocols ?? []);
+    for (const protocol of protocols ?? []) {
+      const pid = String(protocol.id || "");
+      if (pid === "arb_usdai" || pid.endsWith("_usdai")) {
+        defiReceiptKeys.add("arb:0x0b2b2b2076d95dda7817e785989fe353fe955ef9");
+      }
+    }
     if (tokenDetail) {
       for (const token of tokenDetail.tokens) {
         if (isJunkTokenSymbol(token.symbol) || isDustTokenValue(token.valueUsd)) continue;
         const chainId = token.chain;
+        const identity = tokenIdentity(token).toLowerCase();
+        if (identity.startsWith("0x") && defiReceiptKeys.has(`${chainId}:${identity}`)) continue;
         const current = chainMap.get(chainId) || {
           id: chainId,
           name: chainName(chainId),
