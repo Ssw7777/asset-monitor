@@ -108,3 +108,9 @@ journalctl -u dashboard-refresh.service -n 20 --no-pager
 2. 故意错误 Secret → 401 / 403
 3. `systemctl list-timers`（或 crontab）显示定时器在跑，看板快照时间持续推进
 4. 公开 Git 历史中无真实域名、IP、Key、钱包地址
+
+## wallet-batch 熔断与冷却
+
+完整示例脚本 `docs/examples/vps-refresh-cron.sh` 在本地 `wallet-batch` 连续失败达到阈值后会短暂熔断；**冷却约 15 分钟后自动复位重试**，避免某一轮限流把刷新停死整天。
+
+应用侧同时：优先刷新「最久未尝试」的地址（避免单个限流地址霸占预算），并在提供商限流时保留上次成功余额并推进新鲜度时间戳。

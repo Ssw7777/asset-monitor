@@ -80,7 +80,18 @@ FAIL_FILE="$LOG_DIR/wallet-batch-fail-streak"
 streak=0
 [[ -f "$FAIL_FILE" ]] && streak=$(cat "$FAIL_FILE" 2>/dev/null || echo 0)
 streak=${streak:-0}
-if [[ "$streak" -lt 3 ]] && due "$LOG_DIR/last-wallet-batch" 120; then
+[[ "$streak" =~ ^[0-9]+$ ]] || streak=0
+WB_FAIL_THRESHOLD=3
+WB_COOLDOWN_SEC=900
+if (( streak >= WB_FAIL_THRESHOLD )); then
+  fail_mtime=$(stat -c %Y "$FAIL_FILE" 2>/dev/null || echo 0)
+  if (( now_epoch - fail_mtime >= WB_COOLDOWN_SEC )); then
+    echo "$stamp {\"walletBatch\":\"wallet batch circuit reset after cooldown\",\"prevStreak\":$streak}" >>"$LOG"
+    streak=0
+    echo 0 >"$FAIL_FILE"
+  fi
+fi
+if (( streak < WB_FAIL_THRESHOLD )) && due "$LOG_DIR/last-wallet-batch" 120; then
   if [[ "$over5" != "0" ]] || [[ "$oldest" -gt 180 ]]; then
     wb_body=$(post "/api/cron/refresh?mode=wallet-batch&walletBudget=2&staleMinutes=3" "vps-wb-${now_epoch}")
     ok=$(printf '%s' "$wb_body" | python3 -c 'import sys,json
