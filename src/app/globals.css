@@ -1968,9 +1968,102 @@ textarea.field {
   /* 趋势图独占左栏，给曲线足够的纵向分辨率。 */
   height: 300px;
   width: 100%;
+  position: relative;
+  overflow: visible;
+  z-index: 1;
+}
+
+/* 悬浮窗跟着光标走，但要画在卡片外面，不能被图表或卡片裁掉。 */
+#trend.section {
+  overflow: visible;
+  position: relative;
+  z-index: 4;
+}
+
+.chart-canvas .recharts-responsive-container,
+.chart-canvas .recharts-wrapper,
+.chart-canvas .recharts-surface {
+  overflow: visible !important;
+}
+
+.chart-canvas .recharts-tooltip-wrapper {
+  z-index: 40 !important;
+  pointer-events: none;
+}
+
+.chart-pnl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.chart-pnl-item {
+  min-width: 0;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--fill-2);
+  padding: 8px 10px;
+}
+
+.chart-pnl-k {
+  display: flex;
+  align-items: center;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.chart-pnl-v {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.chart-pnl-v strong {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.chart-pnl-v em {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chart-pnl-note {
+  margin: 0 0 8px;
+}
+
+.chart-series-tag-bg {
+  fill: rgba(255, 255, 255, 0.94);
+  stroke-width: 1;
+  stroke-opacity: 0.45;
+}
+
+.chart-series-tag-title {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chart-series-tag-value {
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  .chart-pnl {
+    grid-template-columns: 1fr;
+  }
 }
 
 .chart-tooltip {
+  position: relative;
+  z-index: 40;
   min-width: 200px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -2007,31 +2100,8 @@ textarea.field {
 }
 
 /* 悬浮明细的三个资产板块用三种颜色区分，避免看混 */
-.chart-legend {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 16px;
-  margin: 0 0 8px;
-  color: var(--ink-2);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.chart-legend span {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.chart-legend b {
-  margin-left: 6px;
-  color: var(--ink);
-  font-weight: 650;
-}
-
 .chart-tooltip .tip-dot,
-.chart-legend .tip-dot {
+.chart-pnl .tip-dot {
   display: inline-block;
   width: 7px;
   height: 7px;
