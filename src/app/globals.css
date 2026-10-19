@@ -233,6 +233,8 @@ a {
 }
 
 .summary-panel .networth-col {
+  /* 列宽作为字号容器，让 ~100k 的 USDT 金额能缩进列里而不是被省略号截断。 */
+  container-type: inline-size;
   min-width: 0;
 }
 
@@ -241,10 +243,16 @@ a {
 }
 
 .summary-panel .networth-value {
-  font-size: var(--fs-display);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* 列变窄时缩小字号；放不下整句时在金额和单位之间换行，不再用省略号。 */
+  font-size: 20px;
+  font-size: clamp(16px, 14cqi, var(--fs-display));
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .summary-panel .networth-cny {
@@ -1999,7 +2007,31 @@ textarea.field {
 }
 
 /* 悬浮明细的三个资产板块用三种颜色区分，避免看混 */
-.chart-tooltip .tip-dot {
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  margin: 0 0 8px;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.chart-legend b {
+  margin-left: 6px;
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.chart-tooltip .tip-dot,
+.chart-legend .tip-dot {
   display: inline-block;
   width: 7px;
   height: 7px;
@@ -2463,9 +2495,16 @@ textarea.field {
 
 .overview-root .summary-panel .networth-value {
   margin-top: 1px;
-  font-size: var(--fs-display);
+  font-size: 20px;
+  font-size: clamp(16px, 14cqi, var(--fs-display));
   font-weight: 700;
   letter-spacing: -0.035em;
+  line-height: 1.15;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: normal;
+  word-break: normal;
   font-variant-numeric: tabular-nums lining-nums;
 }
 
@@ -2789,7 +2828,10 @@ textarea.field {
   .overview-root .summary-panel .networth-value {
     font-size: 28px;
     line-height: 1.15;
-    word-break: break-word;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: normal;
+    word-break: normal;
   }
 
   .summary-panel .networth-cny {
