@@ -20,9 +20,38 @@ interface ChartPoint {
   ts: string;
   t: string;
   v: number;
-  onchain: number;
-  cex: number;
+  onchain: number | null;
+  cex: number | null;
   manual: number;
+}
+
+const EXCHANGE_COLOR = "var(--blue)";
+const ONCHAIN_COLOR = "var(--accent)";
+
+function seriesValue(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function formatSeries(value: number | null) {
+  return value == null ? "—" : usd(value);
+}
+
+/** 各轴按自身高低留出呼吸空间，避免一条线被另一条的量级压扁。 */
+function paddedDomain(values: Array<number | null>): [number, number] {
+  const nums = values.filter((value): value is number => value != null);
+  if (!nums.length) return [0, 1];
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+  const pad = Math.max((max - min) * 0.12, Math.max(Math.abs(max) * 0.01, 0.5));
+  return [min - pad, max + pad];
+}
+
+function axisTickFormatter(domain: [number, number]) {
+  const span = domain[1] - domain[0];
+  return (value: number) =>
+    span < 1000
+      ? Number(value).toLocaleString("en-US", { maximumFractionDigits: span < 10 ? 2 : 0 })
+      : formatAxisTick(Number(value));
 }
 
 function ChartTooltip({
@@ -40,24 +69,25 @@ function ChartTooltip({
   return (
     <div className="chart-tooltip">
       <div className="time">{formatPointTime(point.ts)}</div>
-      <div className="value num">{usd(point.v)}</div>
-      <div className="time num">{cny(point.v * rate)}</div>
       <div className="grid">
         <span>
-          <i className="tip-dot" style={{ background: "var(--blue)" }} />
-          链上
+          <i className="tip-dot" style={{ background: EXCHANGE_COLOR }} />
+          交易所余额
         </span>
-        <b>{usd(point.onchain)}</b>
+        <b>{formatSeries(point.cex)}</b>
         <span>
-          <i className="tip-dot" style={{ background: "var(--ink-2)" }} />
-          交易所
+          <i className="tip-dot" style={{ background: ONCHAIN_COLOR }} />
+          链上资金
         </span>
-        <b>{usd(point.cex)}</b>
+        <b>{formatSeries(point.onchain)}</b>
         <span>
-          <i className="tip-dot" style={{ background: "var(--accent)" }} />
+          <i className="tip-dot" style={{ background: "var(--ink-3)" }} />
           手动
         </span>
         <b>{usd(point.manual)}</b>
+      </div>
+      <div className="time num">
+        合计 {usd(point.v)} · {cny(point.v * rate)}
       </div>
     </div>
   );
@@ -98,21 +128,16 @@ export function PortfolioChart({
       ts: point.ts,
       t: formatPointTime(point.ts),
       v: point.totalUsd,
-      onchain: point.onchain ?? 0,
-      cex: point.cex ?? 0,
+      onchain: seriesValue(point.onchain),
+      cex: seriesValue(point.cex),
       manual: point.manual ?? 0,
     }));
   }, [snapshots, activeRange.ms]);
 
-  const yDomain = useMemo((): [number, number] => {
-    if (!data.length) return [0, 1];
-    const values = data.map((point) => point.v);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    // 紧贴曲线实际波动区间：只留 8% 呼吸空间，波动一眼可见
-    const pad = Math.max((max - min) * 0.12, 0.5);
-    return [min - pad, max + pad];
-  }, [data]);
+  const cexDomain = useMemo(() => paddedDomain(data.map((point) => point.cex)), [data]);
+  const onchainDomain = useMemo(() => paddedDomain(data.map((point) => point.onchain)), [data]);
+  const hasCex = data.some((point) => point.cex != null);
+  const hasOnchain = data.some((point) => point.onchain != null);
 
   const total = summary?.total ?? null;
   const lastPoint = data.length ? data[data.length - 1] : null;
@@ -124,7 +149,7 @@ export function PortfolioChart({
         <div className="section-title">
           <h2>资产趋势</h2>
           <span className="hint">
-            全部资产 · 快照 {summary?.snapshotCount ?? snapshots.length} 条
+            交易所 · 链上 · 快照 {summary?.snapshotCount ?? snapshots.length} 条
           </span>
         </div>
         <span className="seg">
@@ -177,12 +202,32 @@ export function PortfolioChart({
         <div className="notice" style={{ marginBottom: 10 }}>
           暂无足够快照绘制趋势（当前 {snapshots.length} 条）。每分钟 CEX 刷新会写入总资产快照，稍候再看。
         </div>
+      ) : !hasCex || !hasOnchain ? (
+        <div className="notice" style={{ marginBottom: 10 }}>
+          {!hasCex && !hasOnchain
+            ? "快照里还没有交易所余额和链上资金分项，双轴曲线会在之后的刷新里出现。"
+            : !hasCex
+              ? "快照里还没有交易所余额分项，左轴暂无曲线。"
+              : "快照里还没有链上资金分项，右轴暂无曲线。"}
+        </div>
       ) : null}
-      <div className="chart-canvas" aria-label="资产趋势图">
+      <div className="chart-legend">
+        <span>
+          <i className="tip-dot" style={{ background: EXCHANGE_COLOR }} />
+          交易所余额 · 左轴
+          {lastPoint?.cex != null ? <b className="num">{usd(lastPoint.cex)}</b> : null}
+        </span>
+        <span>
+          <i className="tip-dot" style={{ background: ONCHAIN_COLOR }} />
+          链上资金 · 右轴
+          {lastPoint?.onchain != null ? <b className="num">{usd(lastPoint.onchain)}</b> : null}
+        </span>
+      </div>
+      <div className="chart-canvas" aria-label="资产趋势图：左轴交易所余额，右轴链上资金">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={data}
-            margin={{ top: 8, right: 12, left: 0, bottom: 0 }}
+            margin={{ top: 8, right: 4, left: 0, bottom: 0 }}
             onMouseMove={(state) => {
               if (state && state.activeTooltipIndex != null) {
                 setActiveIdx(Number(state.activeTooltipIndex));
@@ -191,9 +236,13 @@ export function PortfolioChart({
             onMouseLeave={() => setActiveIdx(null)}
           >
             <defs>
-              <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.22} />
-                <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.02} />
+              <linearGradient id="cexFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={EXCHANGE_COLOR} stopOpacity={0.2} />
+                <stop offset="100%" stopColor={EXCHANGE_COLOR} stopOpacity={0.02} />
+              </linearGradient>
+              <linearGradient id="onchainFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={ONCHAIN_COLOR} stopOpacity={0.18} />
+                <stop offset="100%" stopColor={ONCHAIN_COLOR} stopOpacity={0.02} />
               </linearGradient>
             </defs>
             <XAxis
@@ -204,15 +253,28 @@ export function PortfolioChart({
               minTickGap={48}
             />
             <YAxis
-              domain={yDomain}
-              tick={{ fontSize: 12, fill: "var(--ink-3)" }}
+              yAxisId="cex"
+              orientation="left"
+              domain={cexDomain}
+              allowDataOverflow
+              tick={{ fontSize: 12, fill: "var(--blue)" }}
               axisLine={false}
               tickLine={false}
-              width={70}
+              width={58}
               tickCount={5}
-              tickFormatter={(value) => yDomain[1] - yDomain[0] < 1000
-                ? Number(value).toLocaleString("en-US", { maximumFractionDigits: yDomain[1] - yDomain[0] < 10 ? 2 : 0 })
-                : formatAxisTick(Number(value))}
+              tickFormatter={axisTickFormatter(cexDomain)}
+            />
+            <YAxis
+              yAxisId="onchain"
+              orientation="right"
+              domain={onchainDomain}
+              allowDataOverflow
+              tick={{ fontSize: 12, fill: "var(--accent)" }}
+              axisLine={false}
+              tickLine={false}
+              width={58}
+              tickCount={5}
+              tickFormatter={axisTickFormatter(onchainDomain)}
             />
             <Tooltip
               content={<ChartTooltip rate={rate} />}
@@ -221,21 +283,51 @@ export function PortfolioChart({
               allowEscapeViewBox={{ x: false, y: true }}
             />
             <Area
+              yAxisId="cex"
               type="monotone"
-              dataKey="v"
+              dataKey="cex"
               stroke="none"
-              fill="url(#trendFill)"
+              fill="url(#cexFill)"
+              connectNulls={false}
               isAnimationActive={false}
+              activeDot={false}
+            />
+            <Area
+              yAxisId="onchain"
+              type="monotone"
+              dataKey="onchain"
+              stroke="none"
+              fill="url(#onchainFill)"
+              connectNulls={false}
+              isAnimationActive={false}
+              activeDot={false}
             />
             <Line
+              yAxisId="cex"
               type="monotone"
-              dataKey="v"
-              stroke="var(--accent)"
+              dataKey="cex"
+              name="交易所余额"
+              stroke={EXCHANGE_COLOR}
               strokeWidth={2.25}
               strokeLinecap="round"
               strokeLinejoin="round"
               dot={false}
-              activeDot={{ r: 4, stroke: "#fff", strokeWidth: 2, fill: "var(--accent)" }}
+              connectNulls={false}
+              activeDot={{ r: 4, stroke: "#fff", strokeWidth: 2, fill: EXCHANGE_COLOR }}
+              isAnimationActive={false}
+            />
+            <Line
+              yAxisId="onchain"
+              type="monotone"
+              dataKey="onchain"
+              name="链上资金"
+              stroke={ONCHAIN_COLOR}
+              strokeWidth={2.25}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              dot={false}
+              connectNulls={false}
+              activeDot={{ r: 4, stroke: "#fff", strokeWidth: 2, fill: ONCHAIN_COLOR }}
               isAnimationActive={false}
             />
           </ComposedChart>
