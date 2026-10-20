@@ -71,13 +71,19 @@ export type DashboardSection =
   | "manual"
   | "addresses";
 
-const DASH_NAV: Array<{ key: DashboardSection; href: string; label: string }> = [
+/** 看板内页走软切换。挖矿是 /pearl 独立页，不能进 DashboardSection（否则 onNavigate 会当成看板内页）。 */
+type DashNavItem =
+  | { key: DashboardSection; href: string; label: string; external?: false }
+  | { key: string; href: string; label: string; external: true };
+
+const DASH_NAV: DashNavItem[] = [
   { key: "overview", href: "/dashboard/overview", label: "总览" },
   { key: "tokens", href: "/dashboard/tokens", label: "代币" },
   { key: "defi", href: "/dashboard/defi", label: "DeFi" },
   { key: "exchanges", href: "/dashboard/exchanges", label: "交易所" },
   { key: "manual", href: "/dashboard/manual", label: "手动" },
   { key: "addresses", href: "/dashboard/addresses", label: "地址" },
+  { key: "mining", href: "/pearl", label: "挖矿", external: true },
 ];
 
 
@@ -500,24 +506,30 @@ export function Dashboard({
             <span className="brand-name">0xStudyBank</span>
           </Link>
           <nav ref={topnavRef} className="topnav" aria-label="看板分页">
-            {DASH_NAV.map((item) => (
-              <Link
-                key={item.key}
-                href={item.href}
-                prefetch
-                className={section === item.key ? "active" : undefined}
-                aria-current={section === item.key ? "page" : undefined}
-                onClick={(event) => {
-                  if (!onNavigate) return;
-                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                  if (event.button !== 0) return;
-                  event.preventDefault();
-                  onNavigate(item.key, item.href);
-                }}
-              >
-                {item.label}
-              </Link>
-            ))}
+            {DASH_NAV.map((item) =>
+              item.external ? (
+                <a key={item.key} href={item.href}>
+                  {item.label}
+                </a>
+              ) : (
+                <Link
+                  key={item.key}
+                  href={item.href}
+                  prefetch
+                  className={section === item.key ? "active" : undefined}
+                  aria-current={section === item.key ? "page" : undefined}
+                  onClick={(event) => {
+                    if (!onNavigate) return;
+                    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                    if (event.button !== 0) return;
+                    event.preventDefault();
+                    onNavigate(item.key, item.href);
+                  }}
+                >
+                  {item.label}
+                </Link>
+              )
+            )}
           </nav>
           <div className="topbar-actions">
             <span className="small">快照 {timeAgo(lastRefresh)}</span>
