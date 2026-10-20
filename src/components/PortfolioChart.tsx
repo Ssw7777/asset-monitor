@@ -266,10 +266,10 @@ function SeriesCallouts(props: {
   return (
     <g>
       {placed.cexBox && props.cexLabel ? (
-        <SeriesTag x={placed.cexBox.x} y={placed.cexBox.y} title="交易所余额 · 左轴" value={props.cexLabel} color={EXCHANGE_COLOR} />
+        <SeriesTag x={placed.cexBox.x} y={placed.cexBox.y} title="交易所余额" value={props.cexLabel} color={EXCHANGE_COLOR} />
       ) : null}
       {placed.onBox && props.onchainLabel ? (
-        <SeriesTag x={placed.onBox.x} y={placed.onBox.y} title="链上资金 · 右轴" value={props.onchainLabel} color={ONCHAIN_COLOR} />
+        <SeriesTag x={placed.onBox.x} y={placed.onBox.y} title="链上资金" value={props.onchainLabel} color={ONCHAIN_COLOR} />
       ) : null}
     </g>
   );
@@ -427,7 +427,7 @@ export function PortfolioChart({
               : "快照里还没有链上资金分项，右轴暂无曲线。"}
         </div>
       ) : null}
-      <div className="chart-canvas" aria-label="资产趋势图：左轴交易所余额，右轴链上资金">
+      <div className="chart-canvas" aria-label="资产趋势图：交易所余额，链上资金">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={data}
