@@ -1,0 +1,1342 @@
+{
+  "meta": {
+    "updated_at": "2026-10-21 00:07:16 Asia/Shanghai",
+    "dashboard": "Pearl P池挖矿看板",
+    "version": 1
+  },
+  "price": {
+    "usd": 2.16,
+    "source": "kryptex_rates",
+    "updated_at": "2026-10-21 00:07:15 Asia/Shanghai",
+    "error": null,
+    "note": "SafeTrade API 被 Cloudflare 拦截；用 Kryptex 公开汇率作主源"
+  },
+  "miner": {
+    "address": "prl1plveh2y6ev7xfpd8jpytyrqcznxypwktu299nft6tp340sstcrtwqz2s0ar",
+    "url": "https://pearlhash.xyz/account/prl1plveh2y6ev7xfpd8jpytyrqcznxypwktu299nft6tp340sstcrtwqz2s0ar",
+    "updated_at": "2026-10-21 00:07:15 Asia/Shanghai",
+    "http_status": 200,
+    "error": null,
+    "connected_workers": [],
+    "worker_count": 0,
+    "hashrate": {
+      "15s": 0,
+      "60s": 0,
+      "5m": 0
+    },
+    "balance_tx_count": 526,
+    "credit_tx_count": 353,
+    "recent_transactions": [
+      {
+        "amount": 0.020923580440992705,
+        "reason": "Loyalty reward, thank you",
+        "timestamp": 1780794254719,
+        "coin_type": "pearl"
+      },
+      {
+        "amount": 0.7028929980413693,
+        "reason": "Epoch 2026-06-06 00:00:00 UTC .. 2026-06-06 01:00:00 UTC credit",
+        "timestamp": 1780720801355,
+        "coin_type": "pearl"
+      },
+      {
+        "amount": -1.4629039330083002,
+        "reason": "Auto Payment",
+        "timestamp": 1780718995182,
+        "coin_type": "pearl"
+      },
+      {
+        "amount": 0.2317847165731427,
+        "reason": "Epoch 2026-06-05 23:00:00 UTC .. 2026-06-06 00:00:00 UTC credit",
+        "timestamp": 1780716586681,
+        "coin_type": "pearl"
+      },
+      {
+        "amount": 0.3096298223729532,
+        "reason": "Epoch 2026-06-05 22:00:00 UTC .. 2026-06-05 23:00:00 UTC credit",
+        "timestamp": 1780713879338,
+        "coin_type": "pearl"
+      },
+      {
+        "amount": 0.5127883100883464,
+        "reason": "Epoch 2026-06-05 21:00:00 UTC .. 2026-06-05 22:00:00 UTC credit",
+        "timestamp": 1780709851377,
+        "coin_type": "pearl"
+      },
+      {
+        "amount": 0.408701083973858,
+        "reason": "Epoch 2026-06-05 20:00:00 UTC .. 2026-06-05 21:00:00 UTC credit",
+        "timestamp": 1780706108282,
+        "coin_type": "pearl"
+      },
+      {
+        "amount": -1.4569768392523783,
+        "reason": "Auto Payment",
+        "timestamp": 1780704585950,
+        "coin_type": "pearl"
+      }
+    ],
+    "raw_keys": [
+      "balance_transactions",
+      "connected_workers",
+      "estimated_hashrate_15s",
+      "estimated_hashrate_5m",
+      "estimated_hashrate_60s"
+    ]
+  },
+  "novita": {
+    "updated_at": "2026-10-21 00:07:16 Asia/Shanghai",
+    "balance": {
+      "credit_balance": 0,
+      "unit": "USD credits (Novita account)",
+      "raw": {
+        "allow_features": [
+          "upload_model"
+        ],
+        "free_trial": {
+          "training": 0
+        }
+      }
+    },
+    "price_unit": "USD/hr = raw_integer / 100000",
+    "products": [
+      {
+        "source": "v1",
+        "id": "26",
+        "name": "RTX 4090 24GB",
+        "gpu_match": "RTX 4090",
+        "on_demand_usd_hr": 0.67,
+        "spot_usd_hr": 0.175,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "US-01 (Dallas)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "67000",
+        "raw_spot": "17500",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "4090.16c125g",
+        "name": "RTX 4090 24GB",
+        "gpu_match": "RTX 4090",
+        "on_demand_usd_hr": 0.33,
+        "spot_usd_hr": 0.17,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "AS-SGP-02 (Singapore)",
+          "US-CA-06 (California)",
+          "AF-ZA-01 (South Africa)",
+          "AS-AE-01 (UAE)",
+          "AS-IN-01 (India)",
+          "CN-HK-01 (Hong Kong)",
+          "EU-GER-02 (Germany)",
+          "JP-TYO-02 (Japan)",
+          "OC-AU-01 (Australia)",
+          "SA-BR-01 (Brazil)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "33000",
+        "raw_spot": "17000",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "4090.16c125g.nas",
+        "name": "RTX 4090 24GB",
+        "gpu_match": "RTX 4090",
+        "on_demand_usd_hr": 0.67,
+        "spot_usd_hr": 0.335,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "US-01 (Dallas)",
+          "US-Dallas-NAS-02 (Dallas)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "67000",
+        "raw_spot": "33500",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "4090.16c62g",
+        "name": "RTX 4090 24GB",
+        "gpu_match": "RTX 4090",
+        "on_demand_usd_hr": 0.33,
+        "spot_usd_hr": 0.17,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "EU-GER-02 (Germany)",
+          "JP-TYO-02 (Japan)",
+          "US-CA-06 (California)",
+          "US-CA-NAS-01 (California)",
+          "AF-ZA-01 (South Africa)",
+          "AS-AE-01 (UAE)",
+          "AS-IN-01 (India)",
+          "AS-SGP-02 (Singapore)",
+          "CN-HK-01 (Hong Kong)",
+          "SA-BR-01 (Brazil)",
+          "OC-AU-01 (Australia)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "33000",
+        "raw_spot": "17000",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "4090.16c62g.os",
+        "name": "RTX 4090 24GB",
+        "gpu_match": "RTX 4090",
+        "on_demand_usd_hr": 0.33,
+        "spot_usd_hr": 0.17,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "AS-AE-01 (UAE)",
+          "AS-IN-01 (India)",
+          "EU-GB-01 (United Kingdom)",
+          "SA-BR-01 (Brazil)",
+          "AS-SGP-02 (Singapore)",
+          "EU-GER-02 (Germany)",
+          "JP-TYO-02 (Japan)",
+          "US-CA-06 (California)",
+          "CN-HK-01 (Hong Kong)",
+          "AF-ZA-01 (South Africa)",
+          "OC-AU-01 (Australia)",
+          "US-CA-NAS-01 (California)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "33000",
+        "raw_spot": "17000",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "4090.16c96g.v2",
+        "name": "RTX 4090 24GB",
+        "gpu_match": "RTX 4090",
+        "on_demand_usd_hr": 0.33,
+        "spot_usd_hr": 0.17,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "AS-AE-01 (UAE)",
+          "AS-IN-01 (India)",
+          "AS-SGP-02 (Singapore)",
+          "EU-GB-01 (United Kingdom)",
+          "SA-BR-01 (Brazil)",
+          "EU-GER-02 (Germany)",
+          "JP-TYO-02 (Japan)",
+          "OC-AU-01 (Australia)",
+          "AF-ZA-01 (South Africa)",
+          "US-CA-06 (California)",
+          "CN-HK-01 (Hong Kong)",
+          "US-CA-NAS-04 (California)",
+          "US-CA-NAS-02 (California)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "33000",
+        "raw_spot": "17000",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "5090.16c120g",
+        "name": "RTX 5090 32GB",
+        "gpu_match": "RTX 5090",
+        "on_demand_usd_hr": 0.69,
+        "spot_usd_hr": 0.35,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "AS-AE-01 (UAE)",
+          "AS-IN-01 (India)",
+          "AS-SGP-02 (Singapore)",
+          "CN-HK-01 (Hong Kong)",
+          "EU-GER-02 (Germany)",
+          "JP-TYO-02 (Japan)",
+          "EU-GB-01 (United Kingdom)",
+          "SA-BR-01 (Brazil)",
+          "US-CA-06 (California)",
+          "US-CA-NAS-A (California)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "69000",
+        "raw_spot": "35000",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "5090.16c58g",
+        "name": "NVIDIA GeForce RTX 5090 32GB",
+        "gpu_match": "RTX 5090",
+        "on_demand_usd_hr": 0.56,
+        "spot_usd_hr": null,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "US-CA-08 (California)",
+          "US-CA-NAS-12 (California)",
+          "US-OHIO-NAS-01(OHIO)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "monthly"
+        ],
+        "raw_price": "56000",
+        "raw_spot": "0",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "5090.16c96g",
+        "name": "RTX 5090 32GB",
+        "gpu_match": "RTX 5090",
+        "on_demand_usd_hr": 0.69,
+        "spot_usd_hr": 0.35,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "AF-ZA-01 (South Africa)",
+          "AS-AE-01 (UAE)",
+          "AS-IN-01 (India)",
+          "EU-GER-02 (Germany)",
+          "JP-TYO-02 (Japan)",
+          "SA-BR-01 (Brazil)",
+          "US-CA-06 (California)",
+          "US-CA-NAS-03 (California)",
+          "US-CA-NAS-02 (California)",
+          "CN-HK-01 (Hong Kong)",
+          "AS-SGP-02 (Singapore)",
+          "US-CA-NAS-10 (California)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "69000",
+        "raw_spot": "35000",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "5090.16c96g.os",
+        "name": "RTX 5090 32GB",
+        "gpu_match": "RTX 5090",
+        "on_demand_usd_hr": 0.73,
+        "spot_usd_hr": 0.365,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "US-Dallas-NAS-02 (Dallas)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "73000",
+        "raw_spot": "36500",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "5090.24c120g",
+        "name": "RTX 5090 32GB",
+        "gpu_match": "RTX 5090",
+        "on_demand_usd_hr": 0.69,
+        "spot_usd_hr": 0.35,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "US-CA-NAS-05 (California)",
+          "US-CA-06 (California)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "69000",
+        "raw_spot": "35000",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "6000ada.22c125g",
+        "name": "RTX 6000 Ada 48GB",
+        "gpu_match": null,
+        "on_demand_usd_hr": 0.77,
+        "spot_usd_hr": 0.385,
+        "available": true,
+        "inventory": "low",
+        "regions": [
+          "US-CA-NAS-01 (California)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "77000",
+        "raw_spot": "38500",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "H100-80GB.16c128g",
+        "name": "H100 SXM 80GB",
+        "gpu_match": null,
+        "on_demand_usd_hr": 3.39,
+        "spot_usd_hr": 1.7,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "EU-IS-01 (Iceland)",
+          "US-CA-07 (California)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "339000",
+        "raw_spot": "170000",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "H100-80GB.22c150g",
+        "name": "H100 SXM 80GB",
+        "gpu_match": null,
+        "on_demand_usd_hr": 3.39,
+        "spot_usd_hr": 1.7,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "AS-AE-01 (UAE)",
+          "AS-IN-01 (India)",
+          "EU-GB-01 (United Kingdom)",
+          "SA-BR-01 (Brazil)",
+          "US-CA-06 (California)",
+          "AF-ZA-01 (South Africa)",
+          "OC-AU-01 (Australia)",
+          "CN-HK-01 (Hong Kong)",
+          "AS-SGP-02 (Singapore)",
+          "EU-GER-02 (Germany)",
+          "JP-TYO-02 (Japan)",
+          "US-CA-NAS-11 (California)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot",
+          "monthly"
+        ],
+        "raw_price": "339000",
+        "raw_spot": "170000",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "L40S.22c125g",
+        "name": "NVIDIA L40S 48GB",
+        "gpu_match": "L40S",
+        "on_demand_usd_hr": 0.55,
+        "spot_usd_hr": null,
+        "available": true,
+        "inventory": "high",
+        "regions": [
+          "AF-ZA-01 (South Africa)",
+          "AS-AE-01 (UAE)",
+          "AS-IN-01 (India)",
+          "AS-SGP-02 (Singapore)",
+          "EU-GB-01 (United Kingdom)",
+          "EU-GER-02 (Germany)",
+          "EU-IS-01 (Iceland)",
+          "JP-TYO-02 (Japan)",
+          "OC-AU-01 (Australia)",
+          "SA-BR-01 (Brazil)",
+          "US-CA-06 (California)"
+        ],
+        "billing_methods": [
+          "onDemand"
+        ],
+        "raw_price": "55000",
+        "raw_spot": "0",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v1",
+        "id": "L40S.28c125g",
+        "name": "L40S 48GB",
+        "gpu_match": "L40S",
+        "on_demand_usd_hr": 0.55,
+        "spot_usd_hr": 0.275,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "AS-AE-01 (UAE)",
+          "AS-IN-01 (India)",
+          "EU-GB-01 (United Kingdom)",
+          "SA-BR-01 (Brazil)",
+          "AS-SGP-02 (Singapore)",
+          "US-CA-06 (California)",
+          "CN-HK-01 (Hong Kong)",
+          "AF-ZA-01 (South Africa)",
+          "EU-GER-02 (Germany)",
+          "JP-TYO-02 (Japan)",
+          "OC-AU-01 (Australia)"
+        ],
+        "billing_methods": [
+          "onDemand",
+          "spot"
+        ],
+        "raw_price": "55000",
+        "raw_spot": "27500",
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "5090.16c58g",
+        "name": "NVIDIA GeForce RTX 5090 32GB",
+        "gpu_match": "RTX 5090",
+        "on_demand_usd_hr": 0.56,
+        "spot_usd_hr": null,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "us-ca-8",
+          "us-ca-nas-12",
+          "us-ohio-nas-1"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "L40S.22c125g",
+        "name": "NVIDIA L40S 48GB",
+        "gpu_match": "L40S",
+        "on_demand_usd_hr": 0.55,
+        "spot_usd_hr": null,
+        "available": true,
+        "inventory": "high",
+        "regions": [
+          "10",
+          "af-za-1",
+          "as-ae-1",
+          "as-in-1",
+          "as-sgp-2",
+          "eu-gb-1",
+          "eu-ger-2",
+          "eu-is-1",
+          "jp-tyo-2",
+          "oc-au-1",
+          "sa-br-1",
+          "us-ca-6"
+        ],
+        "billing_methods": [
+          "postpaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "5090.24c120g",
+        "name": "RTX 5090 32GB",
+        "gpu_match": "RTX 5090",
+        "on_demand_usd_hr": 0.69,
+        "spot_usd_hr": 0.35,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "us-ca-5",
+          "us-ca-6"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "5090.16c96g.os",
+        "name": "RTX 5090 32GB",
+        "gpu_match": "RTX 5090",
+        "on_demand_usd_hr": 0.73,
+        "spot_usd_hr": 0.365,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "us-dallas-nas-2"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "5090.16c96g",
+        "name": "RTX 5090 32GB",
+        "gpu_match": "RTX 5090",
+        "on_demand_usd_hr": 0.69,
+        "spot_usd_hr": 0.35,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "10",
+          "af-za-1",
+          "as-ae-1",
+          "as-in-1",
+          "eu-ger-2",
+          "jp-tyo-2",
+          "sa-br-1",
+          "us-ca-6",
+          "us-ca-nas-3",
+          "us-ca-nas-2",
+          "cn-hongkong-1",
+          "as-sgp-2",
+          "us-ca-nas-10"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "H100-80GB.16c128g",
+        "name": "H100 SXM 80GB",
+        "gpu_match": null,
+        "on_demand_usd_hr": 3.39,
+        "spot_usd_hr": 1.7,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "eu-is-1",
+          "us-ca-7"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "5090.16c120g",
+        "name": "RTX 5090 32GB",
+        "gpu_match": "RTX 5090",
+        "on_demand_usd_hr": 0.69,
+        "spot_usd_hr": 0.35,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "as-ae-1",
+          "as-in-1",
+          "as-sgp-2",
+          "cn-hongkong-1",
+          "eu-ger-2",
+          "jp-tyo-2",
+          "eu-gb-1",
+          "sa-br-1",
+          "us-ca-6",
+          "us-ca-nas-a"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "L40S.28c125g",
+        "name": "L40S 48GB",
+        "gpu_match": "L40S",
+        "on_demand_usd_hr": 0.55,
+        "spot_usd_hr": 0.275,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "as-ae-1",
+          "as-in-1",
+          "eu-gb-1",
+          "sa-br-1",
+          "as-sgp-2",
+          "us-ca-6",
+          "cn-hongkong-1",
+          "af-za-1",
+          "cn-south-1",
+          "eu-ger-2",
+          "jp-tyo-2",
+          "oc-au-1"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "4090.16c96g.v2",
+        "name": "RTX 4090 24GB",
+        "gpu_match": "RTX 4090",
+        "on_demand_usd_hr": 0.33,
+        "spot_usd_hr": 0.17,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "as-ae-1",
+          "as-in-1",
+          "as-sgp-2",
+          "eu-gb-1",
+          "sa-br-1",
+          "eu-ger-2",
+          "jp-tyo-2",
+          "oc-au-1",
+          "af-za-1",
+          "us-ca-6",
+          "cn-hongkong-1",
+          "us-ca-nas-4",
+          "us-ca-nas-2"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "4090.16c62g.os",
+        "name": "RTX 4090 24GB",
+        "gpu_match": "RTX 4090",
+        "on_demand_usd_hr": 0.33,
+        "spot_usd_hr": 0.17,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "as-ae-1",
+          "as-in-1",
+          "eu-gb-1",
+          "sa-br-1",
+          "as-sgp-2",
+          "eu-ger-2",
+          "jp-tyo-2",
+          "us-ca-6",
+          "cn-hongkong-1",
+          "af-za-1",
+          "oc-au-1",
+          "2"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "H100-80GB.22c150g",
+        "name": "H100 SXM 80GB",
+        "gpu_match": null,
+        "on_demand_usd_hr": 3.39,
+        "spot_usd_hr": 1.7,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "as-ae-1",
+          "as-in-1",
+          "eu-gb-1",
+          "sa-br-1",
+          "us-ca-6",
+          "af-za-1",
+          "oc-au-1",
+          "cn-hongkong-1",
+          "cn-south-1",
+          "as-sgp-2",
+          "eu-ger-2",
+          "jp-tyo-2",
+          "us-ca-nas-11"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "6000ada.22c125g",
+        "name": "RTX 6000 Ada 48GB",
+        "gpu_match": null,
+        "on_demand_usd_hr": 0.77,
+        "spot_usd_hr": 0.385,
+        "available": true,
+        "inventory": "low",
+        "regions": [
+          "2"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "4090.16c62g",
+        "name": "RTX 4090 24GB",
+        "gpu_match": "RTX 4090",
+        "on_demand_usd_hr": 0.33,
+        "spot_usd_hr": 0.17,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "eu-ger-2",
+          "jp-tyo-2",
+          "us-ca-6",
+          "2",
+          "af-za-1",
+          "as-ae-1",
+          "as-in-1",
+          "as-sgp-2",
+          "cn-hongkong-1",
+          "cn-south-1",
+          "sa-br-1",
+          "oc-au-1"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "4090.16c125g.nas",
+        "name": "RTX 4090 24GB",
+        "gpu_match": "RTX 4090",
+        "on_demand_usd_hr": 0.67,
+        "spot_usd_hr": 0.335,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "1",
+          "us-dallas-nas-2"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "4090.16c125g",
+        "name": "RTX 4090 24GB",
+        "gpu_match": "RTX 4090",
+        "on_demand_usd_hr": 0.33,
+        "spot_usd_hr": 0.17,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "10",
+          "5",
+          "as-sgp-2",
+          "us-ca-6",
+          "af-za-1",
+          "as-ae-1",
+          "as-in-1",
+          "cn-hongkong-1",
+          "cn-south-1",
+          "eu-ger-2",
+          "jp-tyo-2",
+          "oc-au-1",
+          "sa-br-1"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      },
+      {
+        "source": "v2",
+        "id": "26",
+        "name": "RTX 4090 24GB",
+        "gpu_match": "RTX 4090",
+        "on_demand_usd_hr": 0.67,
+        "spot_usd_hr": 0.175,
+        "available": false,
+        "inventory": "none",
+        "regions": [
+          "1"
+        ],
+        "billing_methods": [
+          "postpaid",
+          "spot",
+          "prepaid"
+        ],
+        "price_unit_note": "raw/100000 = USD/hr"
+      }
+    ],
+    "errors": [],
+    "summary": [
+      {
+        "name": "RTX 4090",
+        "spot_usd_hr": 0.17,
+        "on_demand_usd_hr": 0.33,
+        "available": false
+      },
+      {
+        "name": "L40S",
+        "spot_usd_hr": 0.275,
+        "on_demand_usd_hr": 0.55,
+        "available": true
+      },
+      {
+        "name": "RTX 5090",
+        "spot_usd_hr": 0.35,
+        "on_demand_usd_hr": 0.56,
+        "available": false
+      },
+      {
+        "name": "RTX 6000 Ada 48GB",
+        "spot_usd_hr": 0.385,
+        "on_demand_usd_hr": 0.77,
+        "available": true
+      },
+      {
+        "name": "H100 SXM 80GB",
+        "spot_usd_hr": 1.7,
+        "on_demand_usd_hr": 3.39,
+        "available": false
+      }
+    ]
+  },
+  "salad": {
+    "updated_at": "2026-10-21 00:07:16 Asia/Shanghai",
+    "status": "pending_org",
+    "balance_usd": null,
+    "note": "Salad 公共 API 在无 Organization 时对 /organizations 返回 404。需先在 Portal 创建 Organization + Project，并把 SSH 公钥加到 SSH Keys。",
+    "portal": "https://portal.salad.com/",
+    "next_steps": [
+      "打开 Portal → 创建 Organization",
+      "在组织内创建 Project / Container Group 空壳（或默认 project）",
+      "SSH Keys → 粘贴 secrets/salad_ssh.pub.txt 公钥",
+      "把 Organization/Project 名称写回 pearl.env（SALAD_ORG / SALAD_PROJECT）",
+      "再用 API 列余额与 GPU 报价"
+    ],
+    "probes": [
+      {
+        "path": "/organizations",
+        "http_status": 404,
+        "error": "HTTP Error 404: Not Found",
+        "snippet": "{'type': 'https://tools.ietf.org/html/rfc9110#section-15.5.5', 'title': 'Not Found', 'status': 404, 'traceId': '00-0204c28e749c3e341a3692a024fcb1e4-a51fa528db8f819a-01'}"
+      },
+      {
+        "path": "/organizations/",
+        "http_status": 404,
+        "error": "HTTP Error 404: Not Found",
+        "snippet": "{'type': 'https://tools.ietf.org/html/rfc9110#section-15.5.5', 'title': 'Not Found', 'status': 404, 'traceId': '00-e7d777940f5db6407e191f004aa8ee25-c4f391d5432eeb63-01'}"
+      },
+      {
+        "path": "/gpu-classes",
+        "http_status": 404,
+        "error": "HTTP Error 404: Not Found",
+        "snippet": "{'type': 'https://tools.ietf.org/html/rfc9110#section-15.5.5', 'title': 'Not Found', 'status': 404, 'traceId': '00-d349b23262798bacca577b761e48ab1b-e347a36dce814020-01'}"
+      }
+    ],
+    "instances": []
+  },
+  "profit": {
+    "updated_at": "2026-10-21 00:07:16 Asia/Shanghai",
+    "pearl_usd": 2.16,
+    "target_margin": 0.3,
+    "calibration": {
+      "x_anchor": {
+        "desc": "X @zaijin338191: 8x2080Ti≈710算力, 租金0.699$/hr, 日利润8.23$ → 小时收入≈1.042$",
+        "usd_per_th_hr": 0.002505,
+        "note": "按 Kryptex 2080Ti=52TH×8 反推，偏保守"
+      },
+      "kryptex_live": {
+        "desc": "Kryptex 4090 月收入$3792.0 @ref $2.17，按现价缩放",
+        "usd_per_th_hr": 0.017647,
+        "note": "偏乐观/当前网络；云租机用电已含在租金里，用毛收入"
+      }
+    },
+    "gpus": [
+      {
+        "gpu": "RTX 2080 Ti",
+        "th_s": 52.0,
+        "revenue_usd_hr_x_anchor": 0.1302,
+        "revenue_usd_hr_kryptex_live": 0.9176,
+        "breakeven_rent_x": 0.1302,
+        "breakeven_rent_live": 0.9176,
+        "max_rent_30pct_x": 0.0912,
+        "max_rent_30pct_live": 0.6424,
+        "daily_revenue_x": 3.13,
+        "daily_revenue_live": 22.02
+      },
+      {
+        "gpu": "RTX 3060",
+        "th_s": 48.0,
+        "revenue_usd_hr_x_anchor": 0.1202,
+        "revenue_usd_hr_kryptex_live": 0.8471,
+        "breakeven_rent_x": 0.1202,
+        "breakeven_rent_live": 0.8471,
+        "max_rent_30pct_x": 0.0842,
+        "max_rent_30pct_live": 0.5929,
+        "daily_revenue_x": 2.89,
+        "daily_revenue_live": 20.33
+      },
+      {
+        "gpu": "RTX 3060 Ti",
+        "th_s": 61.0,
+        "revenue_usd_hr_x_anchor": 0.1528,
+        "revenue_usd_hr_kryptex_live": 1.0765,
+        "breakeven_rent_x": 0.1528,
+        "breakeven_rent_live": 1.0765,
+        "max_rent_30pct_x": 0.1069,
+        "max_rent_30pct_live": 0.7535,
+        "daily_revenue_x": 3.67,
+        "daily_revenue_live": 25.84
+      },
+      {
+        "gpu": "RTX 3070",
+        "th_s": 73.0,
+        "revenue_usd_hr_x_anchor": 0.1828,
+        "revenue_usd_hr_kryptex_live": 1.2882,
+        "breakeven_rent_x": 0.1828,
+        "breakeven_rent_live": 1.2882,
+        "max_rent_30pct_x": 0.128,
+        "max_rent_30pct_live": 0.9018,
+        "daily_revenue_x": 4.39,
+        "daily_revenue_live": 30.92
+      },
+      {
+        "gpu": "RTX 3070 Ti",
+        "th_s": 82.0,
+        "revenue_usd_hr_x_anchor": 0.2054,
+        "revenue_usd_hr_kryptex_live": 1.4471,
+        "breakeven_rent_x": 0.2054,
+        "breakeven_rent_live": 1.4471,
+        "max_rent_30pct_x": 0.1438,
+        "max_rent_30pct_live": 1.0129,
+        "daily_revenue_x": 4.93,
+        "daily_revenue_live": 34.73
+      },
+      {
+        "gpu": "RTX 3080",
+        "th_s": 105.0,
+        "revenue_usd_hr_x_anchor": 0.263,
+        "revenue_usd_hr_kryptex_live": 1.8529,
+        "breakeven_rent_x": 0.263,
+        "breakeven_rent_live": 1.8529,
+        "max_rent_30pct_x": 0.1841,
+        "max_rent_30pct_live": 1.2971,
+        "daily_revenue_x": 6.31,
+        "daily_revenue_live": 44.47
+      },
+      {
+        "gpu": "RTX 3080 Ti",
+        "th_s": 129.0,
+        "revenue_usd_hr_x_anchor": 0.3231,
+        "revenue_usd_hr_kryptex_live": 2.2765,
+        "breakeven_rent_x": 0.3231,
+        "breakeven_rent_live": 2.2765,
+        "max_rent_30pct_x": 0.2262,
+        "max_rent_30pct_live": 1.5935,
+        "daily_revenue_x": 7.75,
+        "daily_revenue_live": 54.64
+      },
+      {
+        "gpu": "RTX 3090",
+        "th_s": 145.0,
+        "revenue_usd_hr_x_anchor": 0.3632,
+        "revenue_usd_hr_kryptex_live": 2.5588,
+        "breakeven_rent_x": 0.3632,
+        "breakeven_rent_live": 2.5588,
+        "max_rent_30pct_x": 0.2542,
+        "max_rent_30pct_live": 1.7912,
+        "daily_revenue_x": 8.72,
+        "daily_revenue_live": 61.41
+      },
+      {
+        "gpu": "RTX 4060",
+        "th_s": 65.0,
+        "revenue_usd_hr_x_anchor": 0.1628,
+        "revenue_usd_hr_kryptex_live": 1.1471,
+        "breakeven_rent_x": 0.1628,
+        "breakeven_rent_live": 1.1471,
+        "max_rent_30pct_x": 0.114,
+        "max_rent_30pct_live": 0.8029,
+        "daily_revenue_x": 3.91,
+        "daily_revenue_live": 27.53
+      },
+      {
+        "gpu": "RTX 4060 Ti",
+        "th_s": 86.0,
+        "revenue_usd_hr_x_anchor": 0.2154,
+        "revenue_usd_hr_kryptex_live": 1.5176,
+        "breakeven_rent_x": 0.2154,
+        "breakeven_rent_live": 1.5176,
+        "max_rent_30pct_x": 0.1508,
+        "max_rent_30pct_live": 1.0624,
+        "daily_revenue_x": 5.17,
+        "daily_revenue_live": 36.42
+      },
+      {
+        "gpu": "RTX 4070",
+        "th_s": 113.0,
+        "revenue_usd_hr_x_anchor": 0.283,
+        "revenue_usd_hr_kryptex_live": 1.9941,
+        "breakeven_rent_x": 0.283,
+        "breakeven_rent_live": 1.9941,
+        "max_rent_30pct_x": 0.1981,
+        "max_rent_30pct_live": 1.3959,
+        "daily_revenue_x": 6.79,
+        "daily_revenue_live": 47.86
+      },
+      {
+        "gpu": "RTX 4070 Ti",
+        "th_s": 153.0,
+        "revenue_usd_hr_x_anchor": 0.3832,
+        "revenue_usd_hr_kryptex_live": 2.7,
+        "breakeven_rent_x": 0.3832,
+        "breakeven_rent_live": 2.7,
+        "max_rent_30pct_x": 0.2682,
+        "max_rent_30pct_live": 1.89,
+        "daily_revenue_x": 9.2,
+        "daily_revenue_live": 64.8
+      },
+      {
+        "gpu": "RTX 4080",
+        "th_s": 187.0,
+        "revenue_usd_hr_x_anchor": 0.4684,
+        "revenue_usd_hr_kryptex_live": 3.3,
+        "breakeven_rent_x": 0.4684,
+        "breakeven_rent_live": 3.3,
+        "max_rent_30pct_x": 0.3279,
+        "max_rent_30pct_live": 2.31,
+        "daily_revenue_x": 11.24,
+        "daily_revenue_live": 79.2
+      },
+      {
+        "gpu": "RTX 4080 Super",
+        "th_s": 203.0,
+        "revenue_usd_hr_x_anchor": 0.5084,
+        "revenue_usd_hr_kryptex_live": 3.5823,
+        "breakeven_rent_x": 0.5084,
+        "breakeven_rent_live": 3.5823,
+        "max_rent_30pct_x": 0.3559,
+        "max_rent_30pct_live": 2.5076,
+        "daily_revenue_x": 12.2,
+        "daily_revenue_live": 85.98
+      },
+      {
+        "gpu": "RTX 4090",
+        "th_s": 293.0,
+        "revenue_usd_hr_x_anchor": 0.7338,
+        "revenue_usd_hr_kryptex_live": 5.1706,
+        "breakeven_rent_x": 0.7338,
+        "breakeven_rent_live": 5.1706,
+        "max_rent_30pct_x": 0.5137,
+        "max_rent_30pct_live": 3.6194,
+        "daily_revenue_x": 17.61,
+        "daily_revenue_live": 124.09
+      },
+      {
+        "gpu": "RTX 5090",
+        "th_s": 400.0,
+        "revenue_usd_hr_x_anchor": 1.0018,
+        "revenue_usd_hr_kryptex_live": 7.0588,
+        "breakeven_rent_x": 1.0018,
+        "breakeven_rent_live": 7.0588,
+        "max_rent_30pct_x": 0.7013,
+        "max_rent_30pct_live": 4.9412,
+        "daily_revenue_x": 24.04,
+        "daily_revenue_live": 169.41
+      },
+      {
+        "gpu": "L40S",
+        "th_s": 259.0,
+        "revenue_usd_hr_x_anchor": 0.6487,
+        "revenue_usd_hr_kryptex_live": 4.5706,
+        "breakeven_rent_x": 0.6487,
+        "breakeven_rent_live": 4.5706,
+        "max_rent_30pct_x": 0.4541,
+        "max_rent_30pct_live": 3.1994,
+        "daily_revenue_x": 15.57,
+        "daily_revenue_live": 109.69
+      }
+    ],
+    "novita_comparisons": [
+      {
+        "gpu": "RTX 4090",
+        "billing": "spot",
+        "rent_usd_hr": 0.17,
+        "th_s": 293.0,
+        "profit_x": 0.5638,
+        "margin_x": 0.7683,
+        "profit_live": 5.0006,
+        "margin_live": 0.9671,
+        "pass_30pct_x": true,
+        "pass_30pct_live": true,
+        "available": false
+      },
+      {
+        "gpu": "RTX 5090",
+        "billing": "spot",
+        "rent_usd_hr": 0.35,
+        "th_s": 400.0,
+        "profit_x": 0.6518,
+        "margin_x": 0.6506,
+        "profit_live": 6.7088,
+        "margin_live": 0.9504,
+        "pass_30pct_x": true,
+        "pass_30pct_live": true,
+        "available": false
+      },
+      {
+        "gpu": "L40S",
+        "billing": "spot",
+        "rent_usd_hr": 0.275,
+        "th_s": 259.0,
+        "profit_x": 0.3737,
+        "margin_x": 0.5761,
+        "profit_live": 4.2956,
+        "margin_live": 0.9398,
+        "pass_30pct_x": true,
+        "pass_30pct_live": true,
+        "available": true
+      },
+      {
+        "gpu": "RTX 4090",
+        "billing": "on_demand",
+        "rent_usd_hr": 0.33,
+        "th_s": 293.0,
+        "profit_x": 0.4038,
+        "margin_x": 0.5503,
+        "profit_live": 4.8406,
+        "margin_live": 0.9362,
+        "pass_30pct_x": true,
+        "pass_30pct_live": true,
+        "available": false
+      },
+      {
+        "gpu": "RTX 5090",
+        "billing": "on_demand",
+        "rent_usd_hr": 0.56,
+        "th_s": 400.0,
+        "profit_x": 0.4418,
+        "margin_x": 0.441,
+        "profit_live": 6.4988,
+        "margin_live": 0.9207,
+        "pass_30pct_x": true,
+        "pass_30pct_live": true,
+        "available": false
+      },
+      {
+        "gpu": "L40S",
+        "billing": "on_demand",
+        "rent_usd_hr": 0.55,
+        "th_s": 259.0,
+        "profit_x": 0.0987,
+        "margin_x": 0.1521,
+        "profit_live": 4.0206,
+        "margin_live": 0.8797,
+        "pass_30pct_x": false,
+        "pass_30pct_live": true,
+        "available": true
+      }
+    ],
+    "formula": {
+      "revenue_hr": "TH × usd_per_th_hr",
+      "breakeven_rent": "revenue_hr",
+      "max_rent": "revenue_hr × (1 - target_margin)",
+      "profit_hr": "revenue_hr - rent_hr"
+    }
+  },
+  "machines": {
+    "updated_at": "2026-10-21 00:07:16 Asia/Shanghai",
+    "instances": [],
+    "note": "暂无在跑实例。充值并批准开机后，refresh 会写入 Salad/Novita 实例列表。"
+  },
+  "strategy": {
+    "updated_at": "2026-10-21 00:07:16 Asia/Shanghai",
+    "pool_address": "prl1plveh2y6ev7xfpd8jpytyrqcznxypwktu299nft6tp340sstcrtwqz2s0ar",
+    "pool_type": "P池 (pearlhash)",
+    "target_margin": 0.3,
+    "miner_image": "pearl-2:native（待部署脚本确认）",
+    "patrol": "每小时巡查算力；低于正常值考虑退租；有利润则锁住机子",
+    "min_balance_hours": 10,
+    "platforms": [
+      "Novita",
+      "Salad"
+    ],
+    "rules": [
+      "只租 max_rent（目标利润率）以下的卡",
+      "优先 spot / 低价区",
+      "自动 SSH 部署挖矿 → 观察算力",
+      "余额不足时提醒充值，不擅自大规模开机"
+    ]
+  }
+}
