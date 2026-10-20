@@ -289,6 +289,10 @@ export interface WalletProtocolCacheEntry {
   /** Last upstream attempt, including failures, so one bad address cannot retry every minute. */
   lastAttemptAt?: string;
   lastError?: string;
+  /** Last successful DeBank/Rabby protocol pull (BN Web3 is primary; Rabby reconciles daily). */
+  rabbyAt?: string;
+  /** Which upstream produced the latest successful protocol pull. */
+  protocolSource?: "bn_web3" | "rabby";
   protocols: Record<string, unknown>[];
   /** DeBank App assets (for example Polymarket) are outside the normal chain total endpoint. */
   appAt?: string;

@@ -61,6 +61,8 @@ const TTL = 5 * 60 * 1000;
 const PROTOCOL_TTL = 6 * 60 * 60 * 1000;
 /** Failed protocol reads retry after 30 minutes instead of occupying every rolling batch. */
 const PROTOCOL_RETRY_TTL = 30 * 60 * 1000;
+/** BN Web3 is the DeFi primary; Rabby re-checks each wallet's protocols at most once per day. */
+const RABBY_PROTOCOL_RECONCILE_MS = 24 * 60 * 60 * 1000;
 /** One protocol request per batch is enough to refresh all 25 records well inside the 6-hour TTL. */
 const PROTOCOL_WALLET_BUDGET = 1;
 /**
@@ -468,6 +470,48 @@ async function fetchComplexProtocols(
   store[normalized] = hit
     ? { ...hit, lastAttemptAt: attemptIso }
     : { at: "", lastAttemptAt: attemptIso, protocols: [] };
+  // Primary: Binance Web3 DeFi position/list (24h A/B on the Tokyo VPS: 100% HTTP 200, zero 429).
+  // Fallback: DeBank Pro / Rabby complex_protocol_list (heavily 429'd from the VPS).
+  // Rabby still reconciles once a day so protocols BN does not cover (Merkl / Sablier / Abstract …)
+  // and positions that closed on BN-uncovered paths do not go permanently stale.
+  const rabbyAt = hit?.rabbyAt ? new Date(hit.rabbyAt).getTime() : 0;
+  const rabbyReconcileDue = !Number.isFinite(rabbyAt) || now - rabbyAt >= RABBY_PROTOCOL_RECONCILE_MS;
+  let bnTried = false;
+  const tryBn = async (
+    base: Record<string, unknown>[] = hit?.protocols ?? [],
+    extra: Partial<WalletProtocolCacheEntry> = {}
+  ): Promise<Record<string, unknown>[] | null> => {
+    if (!bnWeb3Credentials() || bnTried) return null;
+    bnTried = true;
+    try {
+      const bn = await fetchBnDefiProtocols(normalized);
+      if (bn) {
+        const merged = mergeBnProtocolsWithPrevious(base, bn.protocols);
+        store[normalized] = preserveRpcProtocols(store[normalized], {
+          ...store[normalized],
+          ...extra,
+          protocols: merged,
+          at: attemptIso,
+          lastAttemptAt: attemptIso,
+          lastError: undefined,
+          protocolSource: "bn_web3",
+        });
+        return store[normalized].protocols;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "bn_web3_failed";
+      store[normalized] = {
+        ...store[normalized],
+        lastAttemptAt: attemptIso,
+        lastError: /^bn_web3_[a-z0-9_]+$/.test(message) ? message : "bn_web3_failed",
+      };
+    }
+    return null;
+  };
+  if (!rabbyReconcileDue) {
+    const bnFirst = await tryBn();
+    if (bnFirst) return bnFirst;
+  }
   const key = process.env.DEBANK_ACCESS_KEY;
   const urls: Array<{ url: string; headers?: Record<string, string> }> = [];
   if (key) {
@@ -489,35 +533,17 @@ async function fetchComplexProtocols(
         at: attemptIso,
         lastAttemptAt: attemptIso,
         lastError: undefined,
+        rabbyAt: attemptIso,
+        protocolSource: "rabby",
       });
-      return store[normalized].protocols;
+      // Daily reconcile: Rabby fills BN-uncovered protocols, BN stays authoritative where it overlaps.
+      const layered = await tryBn(protocols, { rabbyAt: attemptIso });
+      return layered ?? store[normalized].protocols;
     }
   }
-  // Rabby / DeBank failed or 429: Binance Web3 DeFi position/list as read-only backup.
-  // Covers supported chains (incl. USDai@Arb); unsupported protocols keep the previous Rabby cache.
-  if (bnWeb3Credentials()) {
-    try {
-      const bn = await fetchBnDefiProtocols(normalized);
-      if (bn) {
-        const merged = mergeBnProtocolsWithPrevious(hit?.protocols ?? [], bn.protocols);
-        store[normalized] = preserveRpcProtocols(store[normalized], {
-          ...store[normalized],
-          protocols: merged,
-          at: attemptIso,
-          lastAttemptAt: attemptIso,
-          lastError: undefined,
-        });
-        return store[normalized].protocols;
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "bn_web3_failed";
-      store[normalized] = {
-        ...store[normalized],
-        lastAttemptAt: attemptIso,
-        lastError: /^bn_web3_[a-z0-9_]+$/.test(message) ? message : "bn_web3_failed",
-      };
-    }
-  }
+  // Rabby / DeBank failed or 429 (or this was a reconcile pass): fall back to BN Web3.
+  const bnFallback = await tryBn();
+  if (bnFallback) return bnFallback;
   return hit?.protocols ?? null;
 }
 
