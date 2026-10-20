@@ -137,6 +137,8 @@ function ChartTooltip({
 
 const TAG_W = 136;
 const TAG_H = 34;
+/** 标签水平锚在绘图区略偏左中（0 为左缘，1 为右缘），不跟序列最右端。 */
+const TAG_X_RATIO = 0.38;
 
 interface PlotPoint {
   x: number;
@@ -172,33 +174,51 @@ function tagBox(point: PlotPoint, otherY: number | null, plot: PlotBox) {
   return { x, y };
 }
 
-/** 把图例贴在各自曲线上，并保证两块标签都落在绘图区内且互不遮挡。 */
+/** 水平位置固定在绘图区略偏左中；竖直仍贴着各自曲线的当前高度。 */
+function seriesAnchor(points: PlotPoint[], plot: PlotBox): PlotPoint {
+  return {
+    x: plot.left + plot.width * TAG_X_RATIO,
+    y: points[points.length - 1].y,
+  };
+}
+
+/** 两块标签挤在一起时，保持同一水平锚点，只在竖直方向错开，避免被推回右缘。 */
+function separateVertically(
+  cexY: number,
+  onY: number,
+  plot: PlotBox,
+  x: number
+) {
+  const minY = plot.top + 2;
+  const maxY = Math.max(minY, plot.top + plot.height - TAG_H - 2);
+  const onchainAbove = onY <= cexY;
+  let upperY = clamp(Math.min(cexY, onY) - TAG_H - 8, minY, maxY);
+  let lowerY = upperY + TAG_H + 6;
+  if (lowerY > maxY) {
+    lowerY = maxY;
+    upperY = clamp(maxY - TAG_H - 6, minY, maxY);
+  }
+  const upper = { x, y: upperY };
+  const lower = { x, y: clamp(lowerY, minY, maxY) };
+  return {
+    cexBox: onchainAbove ? lower : upper,
+    onBox: onchainAbove ? upper : lower,
+  };
+}
+
+/** 把图例放在绘图区略偏左中，并保证两块标签都落在绘图区内且互不遮挡。 */
 function placeSeriesTags(cex: PlotPoint[], onchain: PlotPoint[], plot: PlotBox) {
   if (plot.width < TAG_W + 8 || plot.height < TAG_H + 8) return null;
   if (!cex.length && !onchain.length) return null;
-  if (!cex.length) return { cexBox: null, onBox: tagBox(onchain[onchain.length - 1], null, plot) };
-  if (!onchain.length) return { cexBox: tagBox(cex[cex.length - 1], null, plot), onBox: null };
+  if (!cex.length) return { cexBox: null, onBox: tagBox(seriesAnchor(onchain, plot), null, plot) };
+  if (!onchain.length) return { cexBox: tagBox(seriesAnchor(cex, plot), null, plot), onBox: null };
 
-  const n = Math.min(cex.length, onchain.length);
-  let cexBox = tagBox(cex[n - 1], onchain[n - 1].y, plot);
-  let onBox = tagBox(onchain[n - 1], cex[n - 1].y, plot);
+  const cexPt = seriesAnchor(cex, plot);
+  const onPt = seriesAnchor(onchain, plot);
+  const cexBox = tagBox(cexPt, onPt.y, plot);
+  const onBox = tagBox(onPt, cexPt.y, plot);
   if (!boxesOverlap(cexBox, onBox)) return { cexBox, onBox };
-
-  for (let index = n - 1; index >= 0; index -= 1) {
-    cexBox = tagBox(cex[index], onchain[index].y, plot);
-    onBox = tagBox(onchain[index], cex[index].y, plot);
-    if (!boxesOverlap(cexBox, onBox)) return { cexBox, onBox };
-  }
-
-  cexBox = { x: plot.left + 2, y: plot.top + 2 };
-  onBox = {
-    x: Math.max(plot.left + 2, plot.left + plot.width - TAG_W - 2),
-    y: Math.max(plot.top + 2, plot.top + plot.height - TAG_H - 2),
-  };
-  if (boxesOverlap(cexBox, onBox)) {
-    onBox = { ...onBox, y: clamp(cexBox.y + TAG_H + 6, plot.top + 2, Math.max(plot.top + 2, plot.top + plot.height - TAG_H - 2)) };
-  }
-  return { cexBox, onBox };
+  return separateVertically(cexPt.y, onPt.y, plot, cexBox.x);
 }
 
 interface GraphicalEntry {
