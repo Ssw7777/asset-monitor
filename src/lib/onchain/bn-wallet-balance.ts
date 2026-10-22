@@ -6,12 +6,21 @@ import { tokenIdentity } from "./token-cache-policy";
 
 /**
  * Wallet totals from Binance Web3 token balances.
- * Rabby total_balance is a once-per-day reconciliation check and must not
- * replace a fresh Binance total. A failed Binance read keeps the last good
- * value until it is stale, then Rabby may fill in once — never on the next tick.
+ * The published figure is filtered tokens plus app balances plus DeFi position
+ * value that is not already in those tokens. Rabby total_balance is a
+ * once-per-day reconciliation check and must not replace a fresh Binance total.
+ * Until one reconcile has stored Rabby's token list, the previous total stays.
+ * A failed Binance read keeps the last good value until it is stale, then Rabby
+ * may fill in once — never on the next tick.
  */
 
 export const RABBY_TOTAL_RECONCILE_MS = 24 * 60 * 60 * 1000;
+/** One Rabby reconcile at a time, a few minutes apart, so the public limit can recover. */
+export const RABBY_RECONCILE_GAP_MS = 3 * 60 * 1000;
+/** Backoff after HTTP 429 / a dropped call. Doubles from the gap and stops here. */
+export const RABBY_RECONCILE_BACKOFF_MAX_MS = 15 * 60 * 1000;
+/** A confirmed empty token list is not an allowlist. Retry on the daily cadence. */
+export const RABBY_EMPTY_LIST_RETRY_MS = 6 * 60 * 60 * 1000;
 /** Binance miss shorter than this keeps the last Binance total (no source flip). */
 export const BN_TOTAL_STALE_FALLBACK_MS = 6 * 60 * 60 * 1000;
 const ALL_TOKEN_BALANCES = "/api/v1/dex/balance/all-token-balances-by-address";
@@ -442,6 +451,21 @@ export function isTokenizedStock(symbol: string): boolean {
   return /^[A-Z][A-Z0-9]{0,7}c$/.test(symbol.trim());
 }
 
+/**
+ * Robinhood Chain lists cash equities (MCD, PONS) without the 1inch suffix.
+ * Other chains qualify only for the c-suffix or a known issuer name.
+ */
+const STOCK_CHAINS = new Set(["hood"]);
+const STOCK_ISSUER = /dinari|backed|ondo|swarm|xstock|tokenized stock|robinhood stock/i;
+
+export function isStockOrRwa(token: { chainId: string; symbol: string; name: string }): boolean {
+  if (isTokenizedStock(token.symbol)) return true;
+  if (STOCK_ISSUER.test(token.name) || STOCK_ISSUER.test(token.symbol)) return true;
+  if (!STOCK_CHAINS.has(token.chainId)) return false;
+  const symbol = canonicalSymbol(token.symbol);
+  return symbol.length >= 1 && symbol.length <= 8 && /^[A-Z][A-Z0-9]*$/.test(symbol);
+}
+
 function isYieldSymbol(symbol: string): boolean {
   return YIELD_SYMBOLS.has(canonicalSymbol(symbol));
 }
@@ -449,7 +473,7 @@ function isYieldSymbol(symbol: string): boolean {
 function isKnownToken(raw: BnRawToken, native: boolean, stable: boolean): boolean {
   if (native || stable) return true;
   const upper = canonicalSymbol(raw.symbol);
-  if (MAJOR_SYMBOLS.has(upper) || isYieldSymbol(raw.symbol) || isTokenizedStock(raw.symbol)) return true;
+  if (MAJOR_SYMBOLS.has(upper) || isYieldSymbol(raw.symbol) || isStockOrRwa(raw)) return true;
   const allow = (process.env.BN_WALLET_TOKEN_ALLOWLIST || "")
     .split(/[,;\s]+/)
     .map((item) => item.trim().toLowerCase())
@@ -557,6 +581,155 @@ export function binanceGapBlocked(
   const unexplained = Math.abs(binanceUsd - referenceUsd - (Number.isFinite(flowUsd) ? flowUsd : 0));
   const threshold = Math.max(150, Math.max(Math.abs(binanceUsd), Math.abs(referenceUsd)) * 0.03);
   return unexplained > threshold ? { unexplained: round2(unexplained), threshold: round2(threshold) } : null;
+}
+
+/** Next wait after a Rabby reconcile attempt. A 429 doubles the previous wait. */
+export function rabbyBackoffMs(previousMs: number | undefined, limited: boolean): number {
+  if (!limited) return RABBY_RECONCILE_GAP_MS;
+  const previous = previousMs && previousMs >= RABBY_RECONCILE_GAP_MS ? previousMs : RABBY_RECONCILE_GAP_MS;
+  return Math.min(RABBY_RECONCILE_BACKOFF_MAX_MS, previous * 2);
+}
+
+/** The most recent attempt's own wait applies to every wallet, so a 429 slows the whole queue. */
+export function rabbySlotOpen(
+  entries: Array<{ rabbyListAttemptAt?: string; rabbyListBackoffMs?: number } | null | undefined>,
+  nowMs: number
+): boolean {
+  let latest = Number.NEGATIVE_INFINITY;
+  let wait = RABBY_RECONCILE_GAP_MS;
+  for (const entry of entries) {
+    const at = Date.parse(entry?.rabbyListAttemptAt ?? "");
+    if (!Number.isFinite(at) || at < latest) continue;
+    latest = at;
+    wait = entry?.rabbyListBackoffMs && entry.rabbyListBackoffMs > 0 ? entry.rabbyListBackoffMs : RABBY_RECONCILE_GAP_MS;
+  }
+  if (!Number.isFinite(latest)) return true;
+  return nowMs - latest >= wait;
+}
+
+function protocolNetUsd(protocol: Record<string, unknown>): number {
+  const reported = Number(protocol._bnProtocolTotalValue);
+  if (Number.isFinite(reported) && reported !== 0) return reported;
+  const items = Array.isArray(protocol.portfolio_item_list) ? protocol.portfolio_item_list : [];
+  let net = 0;
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const stats = (item as Record<string, unknown>).stats;
+    if (!stats || typeof stats !== "object") continue;
+    const value = Number((stats as Record<string, unknown>).net_usd_value);
+    if (Number.isFinite(value)) net += value;
+  }
+  return net;
+}
+
+function protocolReceiptKeys(protocol: Record<string, unknown>): string[] {
+  const chain = String(protocol.chain || "").toLowerCase();
+  if (!chain) return [];
+  const keys: string[] = [];
+  const items = Array.isArray(protocol.portfolio_item_list) ? protocol.portfolio_item_list : [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const pool = String(row._bnPoolCa || "").toLowerCase();
+    if (pool.startsWith("0x")) keys.push(`${chain}:${pool}`);
+    const detail = row.detail && typeof row.detail === "object" ? (row.detail as Record<string, unknown>) : {};
+    for (const listName of ["supply_token_list", "borrow_token_list", "reward_token_list"]) {
+      const list = detail[listName];
+      if (!Array.isArray(list)) continue;
+      for (const token of list) {
+        if (!token || typeof token !== "object") continue;
+        const id = String((token as Record<string, unknown>).id || "").toLowerCase();
+        if (id.startsWith("0x")) keys.push(`${chain}:${id}`);
+      }
+    }
+  }
+  return keys;
+}
+
+/**
+ * DeFi net that is not already sitting in the filtered token list as a receipt.
+ * App rows are skipped; those are added from the app chain cache instead.
+ */
+export function uncoveredPositionUsd(
+  tokens: Array<{ chain: string; contractAddress?: string; tokenId?: string; valueUsd: number }>,
+  protocols: ReadonlyArray<Record<string, unknown>> | undefined
+): { usd: number; byChain: Array<{ id: string; valueUsd: number }> } {
+  const remaining = tokens.map((token) => {
+    const id = String(token.contractAddress || token.tokenId || "").toLowerCase();
+    const chain = token.chain.toLowerCase();
+    return {
+      key: id.startsWith("0x") ? `${chain}:${id}` : "",
+      left: Number(token.valueUsd) || 0,
+    };
+  });
+  const byChain = new Map<string, number>();
+  for (const protocol of protocols ?? []) {
+    const id = String(protocol.id || "");
+    const chain = String(protocol.chain || "").toLowerCase();
+    if (id.startsWith("app:") || chain.startsWith("app:")) continue;
+    const net = protocolNetUsd(protocol);
+    if (!(net > 0.5)) continue;
+    let matched = 0;
+    for (const key of protocolReceiptKeys(protocol)) {
+      if (matched >= net) break;
+      for (const token of remaining) {
+        if (token.key !== key || !(token.left > 0)) continue;
+        const take = Math.min(token.left, net - matched);
+        token.left -= take;
+        matched += take;
+      }
+    }
+    const extra = net - matched;
+    if (extra < 0.5) continue;
+    const bucket = chain || "defi";
+    byChain.set(bucket, (byChain.get(bucket) || 0) + extra);
+  }
+  const rows = [...byChain.entries()].map(([chainId, valueUsd]) => ({ id: chainId, valueUsd: round2(valueUsd) }));
+  return { usd: round2(rows.reduce((sum, row) => sum + row.valueUsd, 0)), byChain: rows };
+}
+
+export type PublishDecision = "publish" | "hold-gap" | "hold-bootstrap" | "hold-incomplete";
+
+/**
+ * The candidate is the number a successful publish writes: filtered tokens,
+ * plus app USD, plus DeFi that is not already in the token list.
+ * referenceUsd must be the same composition (Rabby total + app, or the
+ * current published total). Without a stored Rabby token list the candidate
+ * is not written.
+ */
+export function decideWalletPublish(input: {
+  tokenUsd: number;
+  appUsd: number;
+  positionUsd: number;
+  incompleteNative: boolean;
+  hasRabbyList: boolean;
+  referenceUsd: number | null;
+  flowUsd: number;
+  previousUsd: number;
+}): {
+  candidateUsd: number;
+  keptUsd: number;
+  decision: PublishDecision;
+  unexplained: number | null;
+} {
+  const candidateUsd = round2(
+    Math.max(0, input.tokenUsd) + Math.max(0, input.appUsd) + Math.max(0, input.positionUsd)
+  );
+  const kept = round2(Number(input.previousUsd) || 0);
+  if (input.incompleteNative) {
+    return { candidateUsd, keptUsd: kept, decision: "hold-incomplete", unexplained: null };
+  }
+  if (!input.hasRabbyList) {
+    return { candidateUsd, keptUsd: kept, decision: "hold-bootstrap", unexplained: null };
+  }
+  const reference = input.referenceUsd;
+  if (reference != null && Number.isFinite(reference) && (input.previousUsd > 0 || reference > 0)) {
+    const blocked = binanceGapBlocked(candidateUsd, reference, input.flowUsd);
+    if (blocked) {
+      return { candidateUsd, keptUsd: kept, decision: "hold-gap", unexplained: blocked.unexplained };
+    }
+  }
+  return { candidateUsd, keptUsd: candidateUsd, decision: "publish", unexplained: null };
 }
 
 interface KeptToken {
@@ -681,7 +854,13 @@ export function valueBnWalletTokens(
       drop(raw, valueUsd, "bad-price");
       continue;
     }
-    if (isTokenizedStock(raw.symbol) && (price < STOCK_PRICE_BAND[0] || price > STOCK_PRICE_BAND[1])) {
+    if (
+      !native &&
+      !stable &&
+      !MAJOR_SYMBOLS.has(canonicalSymbol(raw.symbol)) &&
+      isStockOrRwa(raw) &&
+      (price < STOCK_PRICE_BAND[0] || price > STOCK_PRICE_BAND[1])
+    ) {
       drop(raw, valueUsd, "bad-price");
       continue;
     }
