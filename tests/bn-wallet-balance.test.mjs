@@ -3,12 +3,16 @@ import assert from "node:assert/strict";
 import {
   acceptNativePrice,
   applyBnWalletTokens,
+  bnWalletChainIds,
   chooseWalletTotal,
+  countWalletBatch,
   expandNativePrices,
   extractBnRawTokens,
   fetchBnWalletValuation,
+  fetchWrappedNativePrices,
   rabbyTotalDiscrepancy,
   valueBnWalletTokens,
+  wrappedNativePriceRequests,
   BN_TOTAL_STALE_FALLBACK_MS,
 } from "../src/lib/onchain/bn-wallet-balance.ts";
 import { bnWeb3Read } from "../src/lib/onchain/bn-web3.ts";
@@ -373,4 +377,128 @@ test("balance endpoint is read-only and paginates until a short page", async () 
     () => bnWeb3Read("/api/v1/dex/trade/build", undefined, { credentials, request }),
     /non_read/
   );
+});
+
+test("balance and native-price reads send one chain; a multi-chain query is code 40001", async () => {
+  const seenChains = [];
+  const request = async (url, init) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith("/market/price")) {
+      const body = JSON.parse(init?.body || "[]");
+      const ids = Array.isArray(body) ? body.map((row) => String(row.binanceChainId)) : [];
+      if (ids.length !== 1) {
+        return new Response(
+          JSON.stringify({ code: "40001", message: "Multiple chain IDs in 'chains' are not supported yet" }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          code: "0",
+          data: [{ binanceChainId: ids[0], tokenContractAddress: body[0].tokenContractAddress, price: "100" }],
+        }),
+        { status: 200 }
+      );
+    }
+    const chains = parsed.searchParams.get("chains") || "";
+    if (chains.includes(",")) {
+      return new Response(
+        JSON.stringify({ code: "40001", message: "Multiple chain IDs in 'chains' are not supported yet" }),
+        { status: 200 }
+      );
+    }
+    seenChains.push(chains);
+    const chainIndex = chains;
+    const symbol = chainIndex === "56" ? "BNB" : "ETH";
+    return new Response(
+      JSON.stringify({
+        code: "0",
+        data: [
+          {
+            binanceChainId: chainIndex,
+            tokenAssets: [
+              {
+                chainIndex,
+                tokenContractAddress: "",
+                symbol,
+                balance: "1",
+                tokenPrice: "1",
+                isRiskToken: false,
+              },
+            ],
+          },
+        ],
+      }),
+      { status: 200 }
+    );
+  };
+
+  const valued = await fetchBnWalletValuation("0x" + "ab".repeat(20), {
+    credentials,
+    request,
+    chainIds: ["1", "56"],
+    nativePrices: { eth: 3500, bsc: 600 },
+  });
+  assert.ok(valued);
+  assert.deepEqual(seenChains.slice().sort(), ["1", "56"]);
+  assert.equal(valued.incompleteNative, false);
+  assert.equal(valued.totalUsd, 4100);
+  assert.deepEqual(valued.queriedChains.slice().sort(), ["bsc", "eth"]);
+
+  const priceBodies = [];
+  const priceRequest = async (url, init) => {
+    const body = JSON.parse(init?.body || "[]");
+    priceBodies.push(body);
+    const ids = Array.isArray(body) ? body.map((row) => String(row.binanceChainId)) : [];
+    if (ids.length !== 1) {
+      return new Response(JSON.stringify({ code: "40001", message: "Multiple chain IDs are not supported yet" }), {
+        status: 200,
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        code: "0",
+        data: [{ binanceChainId: ids[0], tokenContractAddress: body[0].tokenContractAddress, price: "100" }],
+      }),
+      { status: 200 }
+    );
+  };
+  const prices = await fetchWrappedNativePrices({ credentials, request: priceRequest });
+  assert.equal(priceBodies.length, wrappedNativePriceRequests());
+  assert.ok(priceBodies.every((body) => Array.isArray(body) && body.length === 1));
+  assert.equal(prices.eth, 100);
+  assert.equal(prices.bsc, 100);
+});
+
+test("one full lap is one balance read per chain per wallet plus one price read per wrapped native", () => {
+  const chains = bnWalletChainIds();
+  const wallets = 16;
+  assert.equal(new Set(chains).size, chains.length);
+  assert.ok(chains.every((id) => /^\d+$/.test(id)));
+  assert.equal(chains.length, 33);
+  assert.equal(wrappedNativePriceRequests(), 14);
+  assert.equal(wallets * chains.length + wrappedNativePriceRequests(), 542);
+});
+
+test("a Binance miss that keeps the last total still completes the wallet-batch round", () => {
+  const kept = countWalletBatch([
+    { attempted: true, status: "ok", successAt: "t0", previousSuccessAt: "t0" },
+    { attempted: true, status: "ok", successAt: "t0", previousSuccessAt: "t0" },
+    { attempted: false, status: "ok", successAt: "t0", previousSuccessAt: "t0" },
+  ]);
+  assert.equal(kept.attempted, 2);
+  assert.equal(kept.succeeded, 2);
+  assert.equal(kept.observed, 0);
+
+  const published = countWalletBatch([
+    { attempted: true, status: "ok", successAt: "t1", previousSuccessAt: "t0" },
+  ]);
+  assert.equal(published.succeeded, 1);
+  assert.equal(published.observed, 1);
+
+  const down = countWalletBatch([
+    { attempted: true, status: "error", successAt: "t0", previousSuccessAt: "t0" },
+  ]);
+  assert.equal(down.succeeded, 0);
+  assert.equal(down.observed, 0);
 });

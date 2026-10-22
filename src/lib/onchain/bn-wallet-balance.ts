@@ -18,7 +18,11 @@ const ALL_TOKEN_BALANCES = "/api/v1/dex/balance/all-token-balances-by-address";
 const MARKET_PRICE = "/api/v1/dex/market/price";
 const PAGE_SIZE = 100;
 const MAX_PAGES = 15;
-const CHAIN_CHUNK = 20;
+/**
+ * Binance rejects `chains=1,56` with code 40001. One chain per request.
+ * A few reads stay in flight; the shared client still starts them 250ms apart.
+ */
+const CHAIN_READ_CONCURRENCY = 4;
 const DUST_USD = 0.05;
 const ABSURD_TOKEN_USD = 2_000_000;
 const OUTLIER_MIN_USD = 10_000;
@@ -182,6 +186,60 @@ function round2(value: number): number {
 
 export function bnWalletChainIds(): string[] {
   return [...new Set(Object.values(OKX_CHAIN_IDS))].filter((id) => /^\d+$/.test(id));
+}
+
+/** Wrapped-native quotes, one request per chain. Cached across a wallet lap. */
+export function wrappedNativePriceRequests(): number {
+  return Object.keys(WRAPPED_NATIVE).filter((chain) => BN_BY_CHAIN[chain]).length;
+}
+
+/**
+ * Cron treats `succeeded > 0` as a completed wallet-batch round.
+ * Keeping the last good total (success clock unchanged) still counts.
+ * `observed` is a real new success and is the only thing that should refresh observation time.
+ */
+export function countWalletBatch(
+  wallets: Array<{
+    attempted: boolean;
+    status: string;
+    successAt?: string | null;
+    previousSuccessAt?: string | null;
+  }>
+): { attempted: number; succeeded: number; observed: number } {
+  let attempted = 0;
+  let succeeded = 0;
+  let observed = 0;
+  for (const wallet of wallets) {
+    if (!wallet.attempted) continue;
+    attempted += 1;
+    if (wallet.status !== "ok") continue;
+    succeeded += 1;
+    const successAt = wallet.successAt || null;
+    const previousSuccessAt = wallet.previousSuccessAt || null;
+    if (successAt && successAt !== previousSuccessAt) observed += 1;
+  }
+  return { attempted, succeeded, observed };
+}
+
+async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  let failed = false;
+  async function worker() {
+    while (!failed && next < items.length) {
+      const index = next;
+      next += 1;
+      try {
+        results[index] = await fn(items[index]);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  }
+  const workers = Math.min(Math.max(1, limit), items.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return results;
 }
 
 export function chainSlugForBn(bnChainId: string): string {
@@ -593,19 +651,29 @@ function parseMarketPrices(payload: unknown): Record<string, number> {
   return expandNativePrices(out);
 }
 
-/** One wrapped-native quote batch, reused across wallets. Failure leaves cached or empty prices. */
+/** One wrapped-native quote per chain, reused across wallets. A miss leaves cached or empty prices. */
 export async function fetchWrappedNativePrices(
   options: { credentials?: BnWeb3Credentials; request?: typeof fetch } = {}
 ): Promise<Record<string, number>> {
   const now = Date.now();
   if (wrappedPriceCache && now - wrappedPriceCache.at < 10 * 60_000) return wrappedPriceCache.prices;
   if (!options.credentials && !bnWeb3Credentials()) return wrappedPriceCache?.prices ?? {};
-  const body = Object.entries(WRAPPED_NATIVE)
-    .filter(([chain]) => BN_BY_CHAIN[chain])
-    .map(([chain, contract]) => ({ binanceChainId: BN_BY_CHAIN[chain], tokenContractAddress: contract }));
+  const pairs = Object.entries(WRAPPED_NATIVE).filter(([chain]) => BN_BY_CHAIN[chain]);
   try {
-    const payload = await bnWeb3Read(MARKET_PRICE, body, options);
-    const prices = parseMarketPrices(payload);
+    const parts = await mapLimited(pairs, CHAIN_READ_CONCURRENCY, async ([chain, contract]) => {
+      try {
+        const payload = await bnWeb3Read(
+          MARKET_PRICE,
+          [{ binanceChainId: BN_BY_CHAIN[chain], tokenContractAddress: contract }],
+          options
+        );
+        return parseMarketPrices(payload);
+      } catch {
+        return {};
+      }
+    });
+    const prices: Record<string, number> = {};
+    for (const part of parts) Object.assign(prices, part);
     if (Object.keys(prices).length) wrappedPriceCache = { at: now, prices };
     return Object.keys(prices).length ? prices : wrappedPriceCache?.prices ?? {};
   } catch {
@@ -638,19 +706,20 @@ export async function fetchBnWalletValuation(
   const rows: BnRawToken[] = [];
   const queried = new Set<string>();
   try {
-    for (let offset = 0; offset < chainIds.length; offset += CHAIN_CHUNK) {
-      if (options.deadlineMs != null && Date.now() >= options.deadlineMs - 1_500) return null;
-      const chunk = chainIds.slice(offset, offset + CHAIN_CHUNK);
-      for (const id of chunk) {
-        const slug = chainSlugForBn(id);
-        if (slug) queried.add(slug);
+    const chainRows = await mapLimited(chainIds, CHAIN_READ_CONCURRENCY, async (chainId) => {
+      if (options.deadlineMs != null && Date.now() >= options.deadlineMs - 1_500) {
+        throw new Error("bn_web3_deadline");
       }
+      const slug = chainSlugForBn(chainId);
       const seen = new Set<string>();
+      const chainTokens: BnRawToken[] = [];
       for (let page = 1; page <= MAX_PAGES; page += 1) {
-        if (options.deadlineMs != null && Date.now() >= options.deadlineMs - 1_500) return null;
+        if (options.deadlineMs != null && Date.now() >= options.deadlineMs - 1_500) {
+          throw new Error("bn_web3_deadline");
+        }
         const params = new URLSearchParams({
           address: normalized,
-          chains: chunk.join(","),
+          chains: chainId,
           excludeRiskToken: "true",
           page: String(page),
           pageSize: String(PAGE_SIZE),
@@ -663,11 +732,16 @@ export async function fetchBnWalletValuation(
           const key = `${row.chainId}:${row.contract}:${row.symbol.toUpperCase()}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          rows.push(row);
+          chainTokens.push(row);
           added += 1;
         }
         if (added === 0 || parsed.length < PAGE_SIZE) break;
       }
+      return { slug, chainTokens };
+    });
+    for (const chain of chainRows) {
+      if (chain.slug) queried.add(chain.slug);
+      rows.push(...chain.chainTokens);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "bn_web3_failed";
