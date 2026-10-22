@@ -1,7 +1,5 @@
 /**
- * Spam / airdrop names that must not appear in the token list or inflate a summed NAV.
- * Wallet totals still come from Rabby / OKX / Zerion, not from these rows — but
- * transfer UI and any local sum must treat these as $0 risk/spam.
+ * Spam / airdrop names that must not appear in the token list, flows, alerts, or a summed NAV.
  */
 const URLISH = /(?:https?:\/\/|www\.|t\.me\/|telegram\.me|\.com\b|\.xyz\b|\.top\b|\.site\b|\.vip\b|\.io\b\/)/i;
 const SCAM = /(?:airdrop|claim(?:\s|$)|\bfree mint\b|visit\s|support desk|wallet.?drain|voucher|giveaway|\.eth\b.*claim)/i;

@@ -52,9 +52,9 @@ async function handle(req: NextRequest) {
         ? await runRefresh({ fast: true })
         : mode === "wallet-batch"
           ? await runWalletBatch({
-              // Rabby-only lane: Vercel egress 429-loops above ~1 total/min while
-              // the GitHub cycle also reads Rabby. Clamp scheduler batches to 1.
-              walletBudget: walletId ? walletBudget : Math.min(walletBudget ?? 1, 1),
+              // Carousel: at most 3 wallets per call. Binance Web3 is the total source,
+              // so this no longer clamps to 1 to protect Rabby.
+              walletBudget: walletBudget ?? 3,
               staleMinutes,
               walletIds: walletId ? [walletId] : undefined,
               live,
@@ -67,7 +67,7 @@ async function handle(req: NextRequest) {
       {
         ok: refreshStatus !== "failed",
         mode,
-        walletBudget: walletBudget ?? 1,
+        walletBudget: mode === "wallet-batch" ? (walletBudget ?? 3) : (walletBudget ?? 1),
         staleMinutes: staleMinutes ?? null,
         ran: result.payload.refreshMode,
         refreshStatus,

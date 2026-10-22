@@ -1,8 +1,9 @@
 import { createHmac, randomUUID } from "node:crypto";
 
 /**
- * Binance Web3 Developer Portal client — READ-ONLY DeFi position backup for Rabby.
- * Never call trading / transaction / calldata-build endpoints from this module.
+ * Binance Web3 Developer Portal client — READ-ONLY DeFi positions, wallet token
+ * balances, and market prices. Never call trading / transaction / calldata-build
+ * endpoints from this module.
  */
 
 const BASE = "https://web3.binance.com";
@@ -12,10 +13,12 @@ const READ_ONLY_ALLOW = [
   "/api/v1/defi/data/position/list",
   "/api/v1/defi/data/protocol/list",
   "/api/v1/dex/balance/supported/chain",
+  "/api/v1/dex/balance/all-token-balances-by-address",
   "/api/v1/dex/market/price",
 ] as const;
 
 const POSITION_LIST = "/api/v1/defi/data/position/list";
+const MARKET_PRICE = "/api/v1/dex/market/price";
 
 /** Stay under the documented 5 RPS per endpoint; leave headroom. */
 const MIN_INTERVAL_MS = 250;
@@ -104,7 +107,8 @@ export async function bnWeb3Read(
   assertReadOnly(path.split("?")[0]);
   const method: "GET" | "POST" = body === undefined ? "GET" : "POST";
   const bare = path.split("?")[0];
-  const postAllowed = bare === POSITION_LIST || bare === "/api/v1/defi/data/protocol/list";
+  const postAllowed =
+    bare === POSITION_LIST || bare === "/api/v1/defi/data/protocol/list" || bare === MARKET_PRICE;
   if (method === "POST" && !postAllowed) throw new Error("bn_web3_invalid_method");
   if (method === "GET" && postAllowed) throw new Error("bn_web3_invalid_method");
   const credentials = options.credentials ?? bnWeb3Credentials();

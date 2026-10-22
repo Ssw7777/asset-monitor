@@ -75,8 +75,8 @@ export interface Wallet {
   updatedAt?: string | null;
   /** Last successful refresh: timestamp + balance at that moment. */
   lastSuccess?: { at: string; balanceUsd: number } | null;
-  /** public = DeBank/Rabby 完整口径；public-partial = App 接口限流时暂缺 App 资产。 */
-  source?: "public" | "public-partial" | "zerion" | "direct";
+  /** public = DeBank/Rabby；bn-web3 = filtered Binance wallet balances; public-partial = App 暂缺。 */
+  source?: "public" | "public-partial" | "zerion" | "direct" | "bn-web3";
   /** true = 暂停自动刷新（页面仍展示最后余额，不进 targets/observation/cron）。 */
   refreshPaused?: boolean;
 }
@@ -240,7 +240,7 @@ export interface EncryptedSecretsBlob {
 /** 某个地址的代币明细缓存（服务端持久化，避免每次冷启动都去消耗 API 额度）。 */
 export interface WalletTokenCacheEntry {
   at: string;
-  source?: "debank" | "zerion" | "rabby-public";
+  source?: "debank" | "zerion" | "rabby-public" | "bn-web3";
   lastError?: string;
   chainUpdatedAt?: Record<string, string>;
   chainAttemptAt?: Record<string, string>;
@@ -325,6 +325,11 @@ export interface WalletChainCacheEntry {
     valueUsd: number;
     logoUrl?: string;
   }>;
+  /** Which upstream last wrote the published wallet total. */
+  balanceSource?: "bn-web3" | "rabby";
+  /** Last Rabby total_balance read used only as a daily reconciliation check. */
+  rabbyTotalAt?: string;
+  rabbyTotalUsd?: number;
 }
 
 export interface PortfolioState {

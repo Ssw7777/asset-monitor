@@ -91,9 +91,9 @@ if (( streak >= WB_FAIL_THRESHOLD )); then
     echo 0 >"$FAIL_FILE"
   fi
 fi
-if (( streak < WB_FAIL_THRESHOLD )) && due "$LOG_DIR/last-wallet-batch" 120; then
+if (( streak < WB_FAIL_THRESHOLD )) && due "$LOG_DIR/last-wallet-batch" 90; then
   if [[ "$over5" != "0" ]] || [[ "$oldest" -gt 180 ]]; then
-    wb_body=$(post "/api/cron/refresh?mode=wallet-batch&walletBudget=2&staleMinutes=3" "vps-wb-${now_epoch}")
+    wb_body=$(post "/api/cron/refresh?mode=wallet-batch&walletBudget=3&staleMinutes=3" "vps-wb-${now_epoch}")
     ok=$(printf '%s' "$wb_body" | python3 -c 'import sys,json
 try:
  j=json.load(sys.stdin)
