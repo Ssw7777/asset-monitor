@@ -29,7 +29,7 @@ import { applySpecificTokenObservation, applyTokenObservation, parseRabbyTokenOb
 import { auditTokens } from "@/lib/token-audit";
 import { isJunkTokenSymbol } from "@/lib/onchain/junk-tokens";
 import { shouldRejectTotalUpdate, comparedTokensFromLines } from "@/lib/onchain/total-calibration";
-import { binanceTotalIsFresh, rabbyTotalDiscrepancy } from "@/lib/onchain/bn-wallet-balance";
+import { binanceTotalIsFresh, countWalletBatch, rabbyTotalDiscrepancy } from "@/lib/onchain/bn-wallet-balance";
 import { activeRefreshWallets, isWalletRefreshEnabled } from "./wallets";
 import { isCryptoManual, manualToUsd, sumManualCryptoUsd } from "./manual-assets";
 
@@ -775,15 +775,19 @@ async function refreshOnchainSlice(
     (wallet) => wallet.status !== "ok" || wallet.source === "public-partial"
   );
   let breakdown = state.onchainBreakdown ?? null;
-  const batchAttempted = wallets.filter(
-    (wallet) => (wallet.updatedAt ?? null) !== previousAttemptById.get(wallet.id)
-  ).length;
-  const batchSucceeded = wallets.filter(
-    (wallet) =>
-      wallet.status === "ok" &&
-      !!wallet.lastSuccess?.at &&
-      wallet.lastSuccess.at !== previousSuccessById.get(wallet.id)
-  ).length;
+  // A Binance miss that keeps the last good total still finishes the round.
+  // The success clock stays put, so this does not look like a fresh observation
+  // and the wallet-batch circuit does not open.
+  const batchProgress = countWalletBatch(
+    wallets.map((wallet) => ({
+      attempted: (wallet.updatedAt ?? null) !== previousAttemptById.get(wallet.id),
+      status: wallet.status,
+      successAt: wallet.lastSuccess?.at ?? null,
+      previousSuccessAt: previousSuccessById.get(wallet.id) ?? null,
+    }))
+  );
+  const batchAttempted = batchProgress.attempted;
+  const batchSucceeded = batchProgress.succeeded;
   try {
     const onchainBreakdown = await refreshOnchainBreakdown(
       wallets,
@@ -870,7 +874,7 @@ async function refreshOnchainSlice(
             rateLimitedUntil: breakdown.rateLimitedUntil ?? null,
           };
     }
-    if (batchSucceeded > 0) latest.lastWalletObservationAt = now;
+    if (batchProgress.observed > 0) latest.lastWalletObservationAt = now;
   });
 
   return {
