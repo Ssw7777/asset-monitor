@@ -765,11 +765,25 @@ async function refreshOnchainSlice(
   const previousAttemptById = new Map(
     state.wallets.map((wallet) => [wallet.id, wallet.updatedAt ?? null])
   );
+  const transferRecords = Object.fromEntries(
+    Object.entries(state.transactionHistory ?? {}).map(([address, entry]) => [
+      address.toLowerCase(),
+      (entry?.records ?? []).map((record) => ({
+        minedAt: record.minedAt,
+        transfers: record.transfers.map((transfer) => ({
+          sender: transfer.sender,
+          recipient: transfer.recipient,
+          valueUsd: transfer.valueUsd,
+        })),
+      })),
+    ])
+  );
   const wallets = await refreshWallets(state.wallets, chainCache, tokenCache, protocolCache, defiCache, longtailCache, {
     budget: walletBudget,
     only: selection.walletIds,
     staleMinutes: selection.staleMinutes,
     live: selection.live,
+    transferRecords,
   });
   let partial = wallets.some(
     (wallet) => wallet.status !== "ok" || wallet.source === "public-partial"

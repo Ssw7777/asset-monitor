@@ -21,13 +21,20 @@ import { isDustTokenValue, isJunkTokenSymbol } from './junk-tokens';
 import { bnWeb3Credentials } from './bn-web3';
 import {
   applyBnWalletTokens,
+  binanceGapBlocked,
   binanceTotalIsFresh,
   chooseWalletTotal,
+  explainedTransferUsd,
   fetchBnWalletValuation,
   fetchWrappedNativePrices,
+  valueBnWalletTokens,
   nativePricesFromTokenCache,
+  parseRabbyHeldTokens,
   RABBY_TOTAL_RECONCILE_MS,
   rabbyTotalDiscrepancy,
+  repeatedRoundKeys,
+  type RabbyHeldToken,
+  type RoundHolding,
 } from './bn-wallet-balance';
 import {
   collectBnDefiTokenKeys,
@@ -411,14 +418,22 @@ async function fetchDetailOnce(
   };
 }
 
+function rabbyUserUrl(address: string, kind: "total_balance" | "token_list"): string {
+  const url = `https://api.rabby.io/v1/user/${kind}?id=${address.toLowerCase()}`;
+  return kind === "token_list" ? `${url}&is_all=true` : url;
+}
+
 /** Rabby net worth only. Does not add App assets and does not write the published total. */
 export async function fetchRabbyTotalBalance(address: string): Promise<TotalBalanceDetail | null> {
-  const response = await fetchJson(
-    `https://api.rabby.io/v1/user/total_balance?id=${address.toLowerCase()}`,
-    {},
-    1
-  );
+  const response = await fetchJson(rabbyUserUrl(address, "total_balance"), {}, 1);
   return parseTotalDetail(response.data);
+}
+
+/** Daily allowlist. An empty or omitted chain list is unknown, not "Rabby holds nothing". */
+export async function fetchRabbyHeldTokens(address: string): Promise<RabbyHeldToken[] | null> {
+  const response = await fetchJson(rabbyUserUrl(address, "token_list"), {}, 0);
+  if (!response.data) return null;
+  return parseRabbyHeldTokens(response.data);
 }
 
 async function fetchWalletDetail(
@@ -589,6 +604,11 @@ export async function refreshWallets(
     staleMinutes?: number;
     /** 实时模式：全部钱包 + DeFi 仓位强制读取（无视 TTL），用于打开页面/手动刷新。 */
     live?: boolean;
+    /** Confirmed transfers used only to explain a Binance/Rabby gap. */
+    transferRecords?: Record<
+      string,
+      Array<{ minedAt: string; transfers: Array<{ sender: string; recipient: string; valueUsd: number | null }> }>
+    >;
   } = {}
 ): Promise<Wallet[]> {
   if (!wallets.length) return [];
@@ -667,6 +687,12 @@ export async function refreshWallets(
     marketNative = await fetchWrappedNativePrices();
   }
   let rabbyTotalBudget = RABBY_TOTAL_BUDGET;
+  const roundsByWallet = new Map<string, RoundHolding[]>();
+  for (const [address, entry] of Object.entries(chainStore)) {
+    if (entry?.roundHoldings?.length) roundsByWallet.set(address, entry.roundHoldings);
+  }
+  const repeatedNow = () =>
+    repeatedRoundKeys([...roundsByWallet.entries()].map(([wallet, rows]) => ({ wallet, rows })));
   const refreshed = await mapPool(targets, CONCURRENCY, async (wallet) => {
     const attemptedAt = new Date().toISOString();
     const previous = wallet.balanceUsd;
@@ -678,22 +704,62 @@ export async function refreshWallets(
     const rabbyAtMs = Date.parse(previousChain?.rabbyTotalAt ?? "");
     const reconcileDue = !Number.isFinite(rabbyAtMs) || Date.now() - rabbyAtMs >= RABBY_TOTAL_RECONCILE_MS;
     const freshBn = binanceTotalIsFresh(wallet.source, wallet.lastSuccess?.at, Date.now());
+    const previousAtMs = wallet.lastSuccess?.at ? Date.parse(wallet.lastSuccess.at) : null;
     // Binance token balances are the published total. OKX/Zerion must not write balanceUsd.
-    const valuation = await fetchBnWalletValuation(wallet.address, {
+    let valuation = await fetchBnWalletValuation(wallet.address, {
       nativePrices: cachedNative,
       marketPrices: marketNative,
+      rabbyHeld: previousChain?.rabbyHeld,
+      repeatedRounds: repeatedNow(),
       deadlineMs: stopAt,
     });
-    const binanceReady = !!valuation && !valuation.incompleteNative;
-    const binanceFull = binanceReady ? Math.round((valuation.totalUsd + appUsd) * 100) / 100 : null;
+    if (valuation) roundsByWallet.set(addressLower, valuation.roundHoldings);
+    const binanceRead = !!valuation && !valuation.incompleteNative;
     let rabbyDetail: TotalBalanceDetail | null = null;
-    const wantReconcile = binanceReady && reconcileDue;
-    const wantFallback = !binanceReady && !freshBn;
+    let rabbyHeldFresh: RabbyHeldToken[] | null = null;
+    const wantReconcile = binanceRead && reconcileDue;
+    const wantFallback = !binanceRead && !freshBn;
     if ((wantReconcile || wantFallback) && rabbyTotalBudget > 0 && hasDetailTime()) {
       rabbyTotalBudget -= 1;
       rabbyDetail = await fetchRabbyTotalBalance(wallet.address);
+      if (wantReconcile && Date.now() < stopAt - 8_000) {
+        rabbyHeldFresh = await fetchRabbyHeldTokens(wallet.address);
+      }
     }
-    if (binanceReady && valuation && rabbyDetail) {
+    if (valuation && rabbyHeldFresh) {
+      const revalued = valueBnWalletTokens(valuation.rawRows, {
+        nativePrices: cachedNative,
+        marketPrices: marketNative,
+        rabbyHeld: rabbyHeldFresh,
+        repeatedRounds: repeatedNow(),
+      });
+      valuation = { ...revalued, queriedChains: valuation.queriedChains, rawRows: valuation.rawRows };
+      roundsByWallet.set(addressLower, valuation.roundHoldings);
+    }
+    const rabbyTokenUsd = rabbyDetail
+      ? rabbyDetail.totalUsd
+      : Number.isFinite(previousChain?.rabbyTotalUsd)
+        ? Number(previousChain?.rabbyTotalUsd)
+        : null;
+    const referenceUsd = rabbyTokenUsd ?? Math.max(0, previous - appUsd);
+    const sinceMs = Number.isFinite(rabbyAtMs)
+      ? rabbyAtMs
+      : Number.isFinite(previousAtMs)
+        ? Number(previousAtMs)
+        : Date.now();
+    const flowUsd = explainedTransferUsd(opts.transferRecords?.[addressLower] ?? [], wallet.address, sinceMs);
+    let publishBn = binanceRead && !!valuation;
+    if (publishBn && valuation && (previous > 0 || rabbyTokenUsd != null)) {
+      const blocked = binanceGapBlocked(valuation.totalUsd, referenceUsd, flowUsd);
+      if (blocked) {
+        publishBn = false;
+        const names = valuation.excluded.slice(0, 6).map((token) => `${token.symbol}:${token.reason}`).join(",");
+        console.warn(
+          `[wallet-total] hold ${addressLower.slice(0, 8)} bn=${valuation.totalUsd.toFixed(2)} ref=${referenceUsd.toFixed(2)} flow=${flowUsd.toFixed(2)} unexplained=${blocked.unexplained.toFixed(2)} excluded=${names}`
+        );
+      }
+    }
+    if (publishBn && valuation && rabbyDetail) {
       const gap = rabbyTotalDiscrepancy(valuation.totalUsd, rabbyDetail.totalUsd);
       if (gap) {
         console.warn(
@@ -701,7 +767,7 @@ export async function refreshWallets(
         );
       }
     }
-    const previousAtMs = wallet.lastSuccess?.at ? Date.parse(wallet.lastSuccess.at) : null;
+    const binanceFull = publishBn && valuation ? Math.round((valuation.totalUsd + appUsd) * 100) / 100 : null;
     const choice = chooseWalletTotal({
       nowMs: Date.now(),
       previousUsd: previous,
@@ -720,6 +786,8 @@ export async function refreshWallets(
         balanceSource: "bn-web3",
         rabbyTotalAt: rabbyDetail ? attemptedAt : previousChain?.rabbyTotalAt,
         rabbyTotalUsd: rabbyDetail ? rabbyDetail.totalUsd : previousChain?.rabbyTotalUsd,
+        rabbyHeld: rabbyHeldFresh ?? previousChain?.rabbyHeld,
+        roundHoldings: valuation.roundHoldings,
       };
       tokenStore[addressLower] = applyBnWalletTokens(
         tokenStore[addressLower],
@@ -753,6 +821,8 @@ export async function refreshWallets(
         balanceSource: "rabby",
         rabbyTotalAt: attemptedAt,
         rabbyTotalUsd: rabbyDetail.totalUsd,
+        rabbyHeld: rabbyHeldFresh ?? previousChain?.rabbyHeld,
+        roundHoldings: valuation?.roundHoldings ?? previousChain?.roundHoldings,
       };
       if (protocolTargets.has(addressLower) && hasDetailTime()) {
         await fetchComplexProtocols(wallet.address, protocolStore);
@@ -776,6 +846,18 @@ export async function refreshWallets(
     // Balance miss must not skip the DeFi lane. Positions use their own endpoint.
     if (protocolTargets.has(addressLower) && hasDetailTime()) {
       await fetchComplexProtocols(wallet.address, protocolStore);
+    }
+    if (valuation || rabbyHeldFresh) {
+      const base = chainStore[addressLower] ?? previousChain ?? {
+        at: attemptedAt,
+        totalUsd: previous,
+        chains: [],
+      };
+      chainStore[addressLower] = {
+        ...base,
+        ...(valuation ? { roundHoldings: valuation.roundHoldings } : {}),
+        ...(rabbyHeldFresh ? { rabbyHeld: rabbyHeldFresh } : {}),
+      };
     }
     // Keep the last good total. updatedAt moves so the carousel rotates, but
     // lastSuccess stays on the real read — otherwise a string of failures

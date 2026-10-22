@@ -330,6 +330,10 @@ export interface WalletChainCacheEntry {
   /** Last Rabby total_balance read used only as a daily reconciliation check. */
   rabbyTotalAt?: string;
   rabbyTotalUsd?: number;
+  /** Tokens Rabby counted on that reconcile. Missing means unknown, not empty. */
+  rabbyHeld?: Array<{ chain: string; id: string; symbol: string; amount: number }>;
+  /** Large round balances seen here, used to spot the same airdrop on other wallets. */
+  roundHoldings?: Array<{ chain: string; symbol: string; amount: number }>;
 }
 
 export interface PortfolioState {
