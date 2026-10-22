@@ -332,6 +332,10 @@ export interface WalletChainCacheEntry {
   rabbyTotalUsd?: number;
   /** Tokens Rabby counted on that reconcile. Missing means unknown, not empty. */
   rabbyHeld?: Array<{ chain: string; id: string; symbol: string; amount: number }>;
+  /** Last attempt to store that token list, shared so reconciles stay a few minutes apart. */
+  rabbyListAttemptAt?: string;
+  /** How long to wait after rabbyListAttemptAt. Grows after a 429. */
+  rabbyListBackoffMs?: number;
   /** Large round balances seen here, used to spot the same airdrop on other wallets. */
   roundHoldings?: Array<{ chain: string; symbol: string; amount: number }>;
 }

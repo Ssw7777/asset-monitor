@@ -7,16 +7,22 @@ import {
   bnWalletChainIds,
   chooseWalletTotal,
   countWalletBatch,
+  decideWalletPublish,
   expandNativePrices,
   extractBnRawTokens,
   fetchBnWalletValuation,
   fetchWrappedNativePrices,
   explainedTransferUsd,
+  rabbyBackoffMs,
+  rabbySlotOpen,
   rabbyTotalDiscrepancy,
   repeatedRoundKeys,
+  uncoveredPositionUsd,
   valueBnWalletTokens,
   wrappedNativePriceRequests,
   BN_TOTAL_STALE_FALLBACK_MS,
+  RABBY_EMPTY_LIST_RETRY_MS,
+  RABBY_RECONCILE_GAP_MS,
 } from "../src/lib/onchain/bn-wallet-balance.ts";
 import { bnWeb3Read } from "../src/lib/onchain/bn-web3.ts";
 
@@ -473,6 +479,43 @@ test("live probe cases: airdrops drop, real large holdings and tokenized stocks 
   assert.equal(afterList.totalUsd, 0);
   assert.equal(afterList.excluded[0].reason, "unlisted");
 
+  const hoodStocks = valueBnWalletTokens([
+    row({
+      chainId: "hood",
+      contract: "0x" + "66".repeat(20),
+      symbol: "MCD",
+      name: "McDonald's",
+      amount: 2.4,
+      price: 301.7,
+      verified: false,
+      liquidity: null,
+    }),
+    row({
+      chainId: "hood",
+      contract: "0x" + "77".repeat(20),
+      symbol: "PONS",
+      name: "PONS",
+      amount: 100,
+      price: 8.13,
+      verified: false,
+      liquidity: 10,
+    }),
+    row({
+      chainId: "hood",
+      contract: "0x" + "88".repeat(20),
+      symbol: "SCAM",
+      name: "Not a stock",
+      amount: 1,
+      price: 1_000_000,
+      verified: false,
+      liquidity: null,
+    }),
+  ]);
+  assert.ok(hoodStocks.tokens.some((token) => token.symbol === "MCD"));
+  assert.ok(hoodStocks.tokens.some((token) => token.symbol === "PONS"));
+  assert.equal(hoodStocks.excluded.find((token) => token.symbol === "SCAM")?.reason, "bad-price");
+  assert.ok(hoodStocks.totalUsd > 724 + 813 - 5);
+
   const held = binanceGapBlocked(11_208, 1_116, 0);
   assert.ok(held);
   assert.equal(binanceGapBlocked(11_208, 1_116, 10_000), null);
@@ -655,4 +698,116 @@ test("a Binance miss that keeps the last total still completes the wallet-batch 
   ]);
   assert.equal(down.succeeded, 0);
   assert.equal(down.observed, 0);
+});
+
+test("published total adds app and DeFi that are not already in the token list", () => {
+  const receipt = "0x" + "aa".repeat(20);
+  const covered = uncoveredPositionUsd(
+    [{ chain: "arb", contractAddress: receipt, valueUsd: 50 }],
+    [{
+      id: "arb_aave",
+      chain: "arb",
+      _bnProtocolTotalValue: 80,
+      portfolio_item_list: [{ stats: { net_usd_value: 80 }, detail: { supply_token_list: [{ id: receipt }] } }],
+    }]
+  );
+  assert.equal(covered.usd, 30);
+
+  const separate = uncoveredPositionUsd(
+    [{ chain: "base", contractAddress: "0x" + "bb".repeat(20), valueUsd: 10 }],
+    [{
+      id: "base_merkl",
+      chain: "base",
+      portfolio_item_list: [{ stats: { net_usd_value: 26 } }],
+    }, {
+      id: "app:polymarket",
+      chain: "app:polymarket",
+      portfolio_item_list: [{ stats: { net_usd_value: 40 } }],
+    }]
+  );
+  assert.equal(separate.usd, 26);
+  assert.equal(separate.byChain[0].id, "base");
+
+  const matched = decideWalletPublish({
+    tokenUsd: 100,
+    appUsd: 20,
+    positionUsd: 15,
+    incompleteNative: false,
+    hasRabbyList: true,
+    referenceUsd: 135,
+    flowUsd: 0,
+    previousUsd: 130,
+  });
+  assert.equal(matched.decision, "publish");
+  assert.equal(matched.candidateUsd, 135);
+  assert.equal(matched.keptUsd, 135);
+
+  const withPosition = decideWalletPublish({
+    tokenUsd: 7.06,
+    appUsd: 0,
+    positionUsd: 26.6,
+    incompleteNative: false,
+    hasRabbyList: true,
+    referenceUsd: 33.66,
+    flowUsd: 0,
+    previousUsd: 33.66,
+  });
+  assert.equal(withPosition.decision, "publish");
+  assert.equal(withPosition.candidateUsd, 33.66);
+
+  const gap = decideWalletPublish({
+    tokenUsd: 1000,
+    appUsd: 0,
+    positionUsd: 0,
+    incompleteNative: false,
+    hasRabbyList: true,
+    referenceUsd: 5000,
+    flowUsd: 0,
+    previousUsd: 5000,
+  });
+  assert.equal(gap.decision, "hold-gap");
+  assert.equal(gap.keptUsd, 5000);
+
+  const bootstrap = decideWalletPublish({
+    tokenUsd: 100,
+    appUsd: 25,
+    positionUsd: 10,
+    incompleteNative: false,
+    hasRabbyList: false,
+    referenceUsd: 135,
+    flowUsd: 0,
+    previousUsd: 135,
+  });
+  assert.equal(bootstrap.decision, "hold-bootstrap");
+  assert.equal(bootstrap.candidateUsd, 135);
+  assert.equal(bootstrap.keptUsd, 135);
+
+  const unpriced = decideWalletPublish({
+    tokenUsd: 100,
+    appUsd: 0,
+    positionUsd: 0,
+    incompleteNative: true,
+    hasRabbyList: true,
+    referenceUsd: 100,
+    flowUsd: 0,
+    previousUsd: 100,
+  });
+  assert.equal(unpriced.decision, "hold-incomplete");
+});
+
+test("Rabby reconcile waits a few minutes and backs off after a 429", () => {
+  assert.equal(rabbyBackoffMs(undefined, false), RABBY_RECONCILE_GAP_MS);
+  assert.equal(rabbyBackoffMs(RABBY_RECONCILE_GAP_MS, true), RABBY_RECONCILE_GAP_MS * 2);
+  assert.equal(rabbyBackoffMs(15 * 60 * 1000, true), 15 * 60 * 1000);
+  const now = Date.now();
+  assert.equal(rabbySlotOpen([], now), true);
+  assert.equal(
+    rabbySlotOpen([{ rabbyListAttemptAt: new Date(now - 60_000).toISOString(), rabbyListBackoffMs: RABBY_RECONCILE_GAP_MS }], now),
+    false
+  );
+  assert.equal(
+    rabbySlotOpen([{ rabbyListAttemptAt: new Date(now - RABBY_RECONCILE_GAP_MS - 1).toISOString(), rabbyListBackoffMs: RABBY_RECONCILE_GAP_MS }], now),
+    true
+  );
+  assert.equal(RABBY_EMPTY_LIST_RETRY_MS, 6 * 60 * 60 * 1000);
 });

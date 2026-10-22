@@ -21,18 +21,23 @@ import { isDustTokenValue, isJunkTokenSymbol } from './junk-tokens';
 import { bnWeb3Credentials } from './bn-web3';
 import {
   applyBnWalletTokens,
-  binanceGapBlocked,
   binanceTotalIsFresh,
   chooseWalletTotal,
+  decideWalletPublish,
   explainedTransferUsd,
   fetchBnWalletValuation,
   fetchWrappedNativePrices,
-  valueBnWalletTokens,
   nativePricesFromTokenCache,
   parseRabbyHeldTokens,
+  RABBY_EMPTY_LIST_RETRY_MS,
+  RABBY_RECONCILE_GAP_MS,
   RABBY_TOTAL_RECONCILE_MS,
+  rabbyBackoffMs,
+  rabbySlotOpen,
   rabbyTotalDiscrepancy,
   repeatedRoundKeys,
+  uncoveredPositionUsd,
+  valueBnWalletTokens,
   type RabbyHeldToken,
   type RoundHolding,
 } from './bn-wallet-balance';
@@ -75,11 +80,10 @@ const PROTOCOL_WALLET_BUDGET = 1;
 /**
  * Active EVM set is ~15. Each run refreshes at most 3 wallets and skips any
  * wallet whose last success is newer than 90s (the carousel). Binance Web3
- * supplies the total; Rabby total_balance is at most one reconciliation per run.
+ * supplies the total. Rabby total + token list is one wallet per refresh,
+ * and not more often than a few minutes.
  */
 const MAX_PUBLIC_REQUESTS_PER_RUN = 3;
-/** At most one Rabby total_balance read per refresh, shared by reconcile and stale fallback. */
-const RABBY_TOTAL_BUDGET = 1;
 /**
  * 直连层（Alchemy/Zerion 鉴权接口）可以并行：无公共接口的串行限制。
  * 公共源兜底请求仍会被 waitForPublicSlot 全局串行化，互不冲突。
@@ -424,16 +428,19 @@ function rabbyUserUrl(address: string, kind: "total_balance" | "token_list"): st
 }
 
 /** Rabby net worth only. Does not add App assets and does not write the published total. */
-export async function fetchRabbyTotalBalance(address: string): Promise<TotalBalanceDetail | null> {
+export async function fetchRabbyTotalBalance(
+  address: string
+): Promise<{ detail: TotalBalanceDetail | null; status: number }> {
   const response = await fetchJson(rabbyUserUrl(address, "total_balance"), {}, 1);
-  return parseTotalDetail(response.data);
+  return { detail: parseTotalDetail(response.data), status: response.status };
 }
 
 /** Daily allowlist. An empty or omitted chain list is unknown, not "Rabby holds nothing". */
-export async function fetchRabbyHeldTokens(address: string): Promise<RabbyHeldToken[] | null> {
+export async function fetchRabbyHeldTokens(
+  address: string
+): Promise<{ tokens: RabbyHeldToken[] | null; status: number }> {
   const response = await fetchJson(rabbyUserUrl(address, "token_list"), {}, 0);
-  if (!response.data) return null;
-  return parseRabbyHeldTokens(response.data);
+  return { tokens: response.data ? parseRabbyHeldTokens(response.data) : null, status: response.status };
 }
 
 async function fetchWalletDetail(
@@ -468,7 +475,8 @@ type ChainCache = Record<string, WalletChainCacheEntry>;
 
 async function fetchComplexProtocols(
   address: string,
-  store: ProtocolCache
+  store: ProtocolCache,
+  rabbySlot?: { allowed: boolean; used: boolean; note: (address: string, status: number) => void }
 ): Promise<Record<string, unknown>[] | null> {
   const normalized = address.toLowerCase();
   const hit = store[normalized] || null;
@@ -519,9 +527,14 @@ async function fetchComplexProtocols(
     }
     return null;
   };
-  if (!rabbyReconcileDue) {
+  const rabbyAllowed = !!rabbySlot?.allowed && !rabbySlot.used;
+  // While the shared Rabby slot is closed, do not call api.rabby.io. Binance
+  // positions still refresh. A token-list bootstrap in this same run owns the slot.
+  if (!rabbyReconcileDue || !rabbyAllowed) {
     const bnFirst = await tryBn();
     if (bnFirst) return bnFirst;
+    const proKey = !!process.env.DEBANK_ACCESS_KEY;
+    if (!rabbyReconcileDue || !proKey) return hit?.protocols ?? null;
   }
   const key = process.env.DEBANK_ACCESS_KEY;
   const urls: Array<{ url: string; headers?: Record<string, string> }> = [];
@@ -535,7 +548,10 @@ async function fetchComplexProtocols(
     { url: `https://api.rabby.io/v1/user/complex_protocol_list?id=${normalized}` }
   );
   for (const candidate of urls) {
+    const isRabby = candidate.url.includes("api.rabby.io");
+    if (isRabby && (!rabbySlot?.allowed || rabbySlot.used)) continue;
     const response = await fetchJson(candidate.url, candidate.headers, 0);
+    if (isRabby) rabbySlot?.note(normalized, response.status);
     const protocols = parseProtocolDetail(response.data);
     if (protocols !== null) {
       store[normalized] = preserveRpcProtocols(store[normalized],{
@@ -686,7 +702,26 @@ export async function refreshWallets(
   if (bnWeb3Credentials() && Date.now() < stopAt - 5_000) {
     marketNative = await fetchWrappedNativePrices();
   }
-  let rabbyTotalBudget = RABBY_TOTAL_BUDGET;
+  const rabbySlot = {
+    allowed: rabbySlotOpen(Object.values(chainStore), Date.now()),
+    used: false,
+    note(address: string, status: number, empty = false) {
+      this.used = true;
+      const key = address.toLowerCase();
+      const existing = chainStore[key];
+      const longest = Object.values(chainStore).reduce(
+        (max, entry) => Math.max(max, entry?.rabbyListBackoffMs ?? 0),
+        0
+      );
+      const limited = status === 429 || status === 0;
+      const backoff = empty && !limited ? RABBY_EMPTY_LIST_RETRY_MS : rabbyBackoffMs(longest, limited);
+      chainStore[key] = {
+        ...(existing ?? { at: new Date().toISOString(), totalUsd: 0, chains: [] }),
+        rabbyListAttemptAt: new Date().toISOString(),
+        rabbyListBackoffMs: backoff,
+      };
+    },
+  };
   const roundsByWallet = new Map<string, RoundHolding[]>();
   for (const [address, entry] of Object.entries(chainStore)) {
     if (entry?.roundHoldings?.length) roundsByWallet.set(address, entry.roundHoldings);
@@ -705,7 +740,10 @@ export async function refreshWallets(
     const reconcileDue = !Number.isFinite(rabbyAtMs) || Date.now() - rabbyAtMs >= RABBY_TOTAL_RECONCILE_MS;
     const freshBn = binanceTotalIsFresh(wallet.source, wallet.lastSuccess?.at, Date.now());
     const previousAtMs = wallet.lastSuccess?.at ? Date.parse(wallet.lastSuccess.at) : null;
-    // Binance token balances are the published total. OKX/Zerion must not write balanceUsd.
+    const paceWait = previousChain?.rabbyListBackoffMs ?? RABBY_RECONCILE_GAP_MS;
+    const paceAt = Date.parse(previousChain?.rabbyListAttemptAt ?? "");
+    const paceReady = !Number.isFinite(paceAt) || Date.now() - paceAt >= paceWait;
+    // Published total is filtered tokens + app + DeFi not already in the token list.
     let valuation = await fetchBnWalletValuation(wallet.address, {
       nativePrices: cachedNative,
       marketPrices: marketNative,
@@ -717,13 +755,42 @@ export async function refreshWallets(
     const binanceRead = !!valuation && !valuation.incompleteNative;
     let rabbyDetail: TotalBalanceDetail | null = null;
     let rabbyHeldFresh: RabbyHeldToken[] | null = null;
-    const wantReconcile = binanceRead && reconcileDue;
+    const hasList = (previousChain?.rabbyHeld?.length ?? 0) > 0;
+    const laterNeedsList = targets
+      .slice(targets.indexOf(wallet) + 1)
+      .some((later) => !(chainStore[later.address.toLowerCase()]?.rabbyHeld?.length));
+    const wantList = !hasList || reconcileDue;
     const wantFallback = !binanceRead && !freshBn;
-    if ((wantReconcile || wantFallback) && rabbyTotalBudget > 0 && hasDetailTime()) {
-      rabbyTotalBudget -= 1;
-      rabbyDetail = await fetchRabbyTotalBalance(wallet.address);
-      if (wantReconcile && Date.now() < stopAt - 8_000) {
-        rabbyHeldFresh = await fetchRabbyHeldTokens(wallet.address);
+    if (!rabbySlot.used && rabbySlot.allowed && paceReady && hasDetailTime()) {
+      const take =
+        (binanceRead && wantList) ||
+        (!binanceRead && !hasList && !laterNeedsList) ||
+        (wantFallback && hasList && !laterNeedsList);
+      if (take) {
+        rabbySlot.used = true;
+        try {
+          const total = await fetchRabbyTotalBalance(wallet.address);
+          if (total.status === 429 || total.status === 0) {
+            rabbySlot.note(addressLower, total.status);
+          } else {
+            rabbyDetail = total.detail;
+            if (wantList && Date.now() < stopAt - 8_000) {
+              const held = await fetchRabbyHeldTokens(wallet.address);
+              if (held.tokens?.length) {
+                rabbyHeldFresh = held.tokens;
+                rabbySlot.note(addressLower, 200);
+              } else if (held.status === 429 || held.status === 0) {
+                rabbySlot.note(addressLower, held.status);
+              } else {
+                rabbySlot.note(addressLower, 200, true);
+              }
+            } else {
+              rabbySlot.note(addressLower, total.status || 200);
+            }
+          }
+        } catch {
+          rabbySlot.note(addressLower, 0);
+        }
       }
     }
     if (valuation && rabbyHeldFresh) {
@@ -736,50 +803,78 @@ export async function refreshWallets(
       valuation = { ...revalued, queriedChains: valuation.queriedChains, rawRows: valuation.rawRows };
       roundsByWallet.set(addressLower, valuation.roundHoldings);
     }
-    const rabbyTokenUsd = rabbyDetail
-      ? rabbyDetail.totalUsd
-      : Number.isFinite(previousChain?.rabbyTotalUsd)
-        ? Number(previousChain?.rabbyTotalUsd)
-        : null;
-    const referenceUsd = rabbyTokenUsd ?? Math.max(0, previous - appUsd);
     const sinceMs = Number.isFinite(rabbyAtMs)
       ? rabbyAtMs
       : Number.isFinite(previousAtMs)
         ? Number(previousAtMs)
         : Date.now();
     const flowUsd = explainedTransferUsd(opts.transferRecords?.[addressLower] ?? [], wallet.address, sinceMs);
-    let publishBn = binanceRead && !!valuation;
-    if (publishBn && valuation && (previous > 0 || rabbyTokenUsd != null)) {
-      const blocked = binanceGapBlocked(valuation.totalUsd, referenceUsd, flowUsd);
-      if (blocked) {
-        publishBn = false;
-        const names = valuation.excluded.slice(0, 6).map((token) => `${token.symbol}:${token.reason}`).join(",");
-        console.warn(
-          `[wallet-total] hold ${addressLower.slice(0, 8)} bn=${valuation.totalUsd.toFixed(2)} ref=${referenceUsd.toFixed(2)} flow=${flowUsd.toFixed(2)} unexplained=${blocked.unexplained.toFixed(2)} excluded=${names}`
-        );
-      }
+    const heldNow = rabbyHeldFresh ?? previousChain?.rabbyHeld;
+    if (protocolTargets.has(addressLower) && hasDetailTime()) {
+      const listsPending = targets.some((item) => !(chainStore[item.address.toLowerCase()]?.rabbyHeld?.length));
+      await fetchComplexProtocols(
+        wallet.address,
+        protocolStore,
+        listsPending ? { allowed: false, used: true, note() {} } : rabbySlot
+      );
     }
-    if (publishBn && valuation && rabbyDetail) {
-      const gap = rabbyTotalDiscrepancy(valuation.totalUsd, rabbyDetail.totalUsd);
+    const position = uncoveredPositionUsd(valuation?.tokens ?? [], protocolStore[addressLower]?.protocols);
+    // Fresh Rabby total_balance excludes app assets. The stored balance already includes them.
+    const referenceUsd = rabbyDetail
+      ? Math.round((rabbyDetail.totalUsd + appUsd) * 100) / 100
+      : previous > 0
+        ? previous
+        : null;
+    const plan = binanceRead && valuation
+      ? decideWalletPublish({
+          tokenUsd: valuation.totalUsd,
+          appUsd,
+          positionUsd: position.usd,
+          incompleteNative: false,
+          hasRabbyList: (heldNow?.length ?? 0) > 0,
+          referenceUsd,
+          flowUsd,
+          previousUsd: previous,
+        })
+      : null;
+    if (plan && plan.decision !== "publish") {
+      const names = (valuation?.excluded ?? []).slice(0, 6).map((token) => `${token.symbol}:${token.reason}`).join(",");
+      console.warn(
+        `[wallet-total] ${plan.decision} ${addressLower.slice(0, 8)} candidate=${plan.candidateUsd.toFixed(2)} kept=${plan.keptUsd.toFixed(2)} ref=${referenceUsd == null ? "none" : referenceUsd.toFixed(2)} flow=${flowUsd.toFixed(2)} unexplained=${plan.unexplained ?? 0} excluded=${names}`
+      );
+    }
+    if (plan?.decision === "publish" && rabbyDetail) {
+      const gap = rabbyTotalDiscrepancy(plan.candidateUsd, referenceUsd ?? rabbyDetail.totalUsd);
       if (gap) {
         console.warn(
-          `[wallet-total] reconcile ${addressLower.slice(0, 8)} bn=${valuation.totalUsd.toFixed(2)} rabby=${rabbyDetail.totalUsd.toFixed(2)} delta=${gap.delta.toFixed(2)}`
+          `[wallet-total] reconcile ${addressLower.slice(0, 8)} bn=${plan.candidateUsd.toFixed(2)} rabby=${(referenceUsd ?? 0).toFixed(2)} delta=${gap.delta.toFixed(2)}`
         );
       }
     }
-    const binanceFull = publishBn && valuation ? Math.round((valuation.totalUsd + appUsd) * 100) / 100 : null;
+    const holdingBinance = plan != null && plan.decision !== "publish";
     const choice = chooseWalletTotal({
       nowMs: Date.now(),
       previousUsd: previous,
       previousAtMs: Number.isFinite(previousAtMs) ? previousAtMs : null,
       previousSource: wallet.source,
-      binanceUsd: binanceFull,
-      rabbyUsd: rabbyDetail ? Math.round((rabbyDetail.totalUsd + appUsd) * 100) / 100 : null,
+      binanceUsd: plan?.decision === "publish" ? plan.candidateUsd : null,
+      rabbyUsd: holdingBinance || !rabbyDetail ? null : Math.round((rabbyDetail.totalUsd + appUsd) * 100) / 100,
     });
+    const paceFields = {
+      rabbyListAttemptAt: chainStore[addressLower]?.rabbyListAttemptAt ?? previousChain?.rabbyListAttemptAt,
+      rabbyListBackoffMs: chainStore[addressLower]?.rabbyListBackoffMs ?? previousChain?.rabbyListBackoffMs,
+    };
     if (choice.source === "bn-web3" && valuation) {
-      const chains = [...valuation.chains, ...previousAppChains].sort((left, right) => right.valueUsd - left.valueUsd);
+      const merged = new Map<string, { id: string; name: string; valueUsd: number; logoUrl?: string }>();
+      for (const chain of [...valuation.chains, ...position.byChain.map((extra) => ({ id: extra.id, name: chainName(extra.id), valueUsd: extra.valueUsd })), ...previousAppChains]) {
+        const prev = merged.get(chain.id);
+        if (!prev) merged.set(chain.id, { ...chain });
+        else prev.valueUsd = Math.round((prev.valueUsd + chain.valueUsd) * 100) / 100;
+      }
+      const chains = [...merged.values()].sort((left, right) => right.valueUsd - left.valueUsd);
       chainStore[addressLower] = {
         ...previousChain,
+        ...paceFields,
         at: attemptedAt,
         totalUsd: choice.usd,
         chains,
@@ -795,9 +890,6 @@ export async function refreshWallets(
         valuation.queriedChains,
         attemptedAt
       );
-      if (protocolTargets.has(addressLower) && hasDetailTime()) {
-        await fetchComplexProtocols(wallet.address, protocolStore);
-      }
       return {
         ...wallet,
         balanceUsd: choice.usd,
@@ -815,6 +907,7 @@ export async function refreshWallets(
       ].sort((left, right) => right.valueUsd - left.valueUsd);
       chainStore[addressLower] = {
         ...previousChain,
+        ...paceFields,
         at: attemptedAt,
         totalUsd: choice.usd,
         chains,
@@ -824,9 +917,6 @@ export async function refreshWallets(
         rabbyHeld: rabbyHeldFresh ?? previousChain?.rabbyHeld,
         roundHoldings: valuation?.roundHoldings ?? previousChain?.roundHoldings,
       };
-      if (protocolTargets.has(addressLower) && hasDetailTime()) {
-        await fetchComplexProtocols(wallet.address, protocolStore);
-      }
       const appAuditAtMs = Date.parse(protocolStore[addressLower]?.appAt ?? "");
       const observedAtMs = Date.parse(attemptedAt);
       const hasCompleteAppAudit =
@@ -842,10 +932,6 @@ export async function refreshWallets(
         status: "ok" as const,
         source: hasCompleteAppAudit ? ("public" as const) : ("public-partial" as const),
       };
-    }
-    // Balance miss must not skip the DeFi lane. Positions use their own endpoint.
-    if (protocolTargets.has(addressLower) && hasDetailTime()) {
-      await fetchComplexProtocols(wallet.address, protocolStore);
     }
     if (valuation || rabbyHeldFresh) {
       const base = chainStore[addressLower] ?? previousChain ?? {
