@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   acceptNativePrice,
   applyBnWalletTokens,
+  binanceGapBlocked,
   bnWalletChainIds,
   chooseWalletTotal,
   countWalletBatch,
@@ -10,7 +11,9 @@ import {
   extractBnRawTokens,
   fetchBnWalletValuation,
   fetchWrappedNativePrices,
+  explainedTransferUsd,
   rabbyTotalDiscrepancy,
+  repeatedRoundKeys,
   valueBnWalletTokens,
   wrappedNativePriceRequests,
   BN_TOTAL_STALE_FALLBACK_MS,
@@ -151,14 +154,13 @@ test("filters drop spam, risk, unverified, illiquid, fake, and absurd outliers",
   ], { nativePrices: { eth: 3500 } });
 
   const symbols = valued.tokens.map((token) => token.symbol).sort();
-  assert.deepEqual(symbols, ["ETH", "USDC"]);
+  // Small unverified or thin-pool rows stay. A large unlisted token with no liquidity does not.
+  assert.deepEqual(symbols, ["DUSTLP", "ETH", "OBSCURE", "USDC"]);
   assert.equal(valued.dropped.risk, 1);
   assert.equal(valued.dropped.junk >= 1, true);
-  assert.equal(valued.dropped.unverified, 1);
   assert.equal(valued.dropped.fake, 1);
-  assert.equal(valued.dropped.illiquid, 1);
-  assert.equal(valued.dropped.absurd, 1);
-  assert.equal(valued.totalUsd, 7100);
+  assert.equal(valued.dropped.unknown, 1);
+  assert.equal(valued.totalUsd, 7500);
   assert.equal(valued.tokens.find((token) => token.symbol === "ETH").valuationPrice, 3500);
   assert.equal(valued.tokens.find((token) => token.symbol === "ETH").priceSource, "coinstats");
 });
@@ -330,6 +332,158 @@ test("token cache drops phishing rows on covered chains and keeps RPC quantities
   assert.equal(next.tokens[0].quantitySource, "rpc");
   assert.equal(next.tokens[0].valueUsd, 3.5);
   assert.equal(next.source, "bn-web3");
+});
+
+test("live probe cases: airdrops drop, real large holdings and tokenized stocks stay", () => {
+  const boom = (chainId) => row({
+    chainId,
+    contract: "0x" + "b0".repeat(20),
+    symbol: "BOOM",
+    name: "Boom",
+    amount: 62_000,
+    amountExact: "62000",
+    price: 3135 / 62_000,
+    verified: false,
+    liquidity: 5_000_000,
+    risk: false,
+  });
+  const act = row({
+    chainId: "bsc",
+    contract: "0x" + "ac".repeat(20),
+    symbol: "ACT",
+    name: "Act",
+    amount: 60_000,
+    amountExact: "60000",
+    price: 2765 / 60_000,
+    verified: false,
+    liquidity: 5_000_000,
+    risk: false,
+  });
+  const lineaSpam = [
+    row({ contract: "0x" + "a1".repeat(20), symbol: "AICC", name: "AICC", amount: 5740, price: 1, verified: false, liquidity: null }),
+    row({
+      chainId: "bsc",
+      contract: "0x" + "b0".repeat(20),
+      symbol: "BOOM",
+      name: "Boom",
+      amount: 62_000,
+      price: 3135 / 62_000,
+      verified: false,
+      liquidity: null,
+    }),
+    row({ contract: "0x" + "c0".repeat(20), symbol: "PVC", name: "PVC", amount: 1289, price: 1, verified: false, liquidity: 100 }),
+  ];
+  const linea = valueBnWalletTokens([
+    row({ contract: USDC, symbol: "USDC", name: "USD Coin", amount: 1116, price: 1, verified: true }),
+    ...lineaSpam,
+  ], { nativePrices: { eth: 3500 } });
+  assert.equal(linea.totalUsd, 1116);
+  assert.deepEqual(linea.excluded.map((token) => token.symbol).sort(), ["AICC", "BOOM", "PVC"]);
+
+  const peers = ["trust", "xter1", "xter2", "xter4", "xter5", "xter6", "gas", "xter3", "linea"].map((wallet) => ({
+    wallet,
+    rows: [{ chain: "bsc", symbol: "BOOM", amount: 62_000 }],
+  }));
+  peers.push(
+    ...["trust", "xter1", "xter2", "xter4", "xter5", "xter6", "gas"].map((wallet) => ({
+      wallet,
+      rows: [{ chain: "bsc", symbol: "ACT", amount: 60_000 }],
+    }))
+  );
+  const repeated = repeatedRoundKeys(peers);
+  assert.equal(repeated.has("bsc:BOOM:62000"), true);
+  assert.equal(repeated.has("bsc:ACT:60000"), true);
+  const trust = valueBnWalletTokens([
+    row({ contract: USDC, symbol: "USDC", name: "USD Coin", amount: 420, price: 1, verified: true }),
+    boom("bsc"),
+    act,
+  ], { repeatedRounds: repeated });
+  assert.equal(trust.totalUsd, 420);
+  assert.deepEqual(trust.excluded.map((token) => token.reason).sort(), ["airdrop", "airdrop"]);
+
+  const binanceWallet = valueBnWalletTokens([
+    row({ contract: USDC, symbol: "USDC", name: "USD Coin", amount: 3347, price: 1, verified: true }),
+    row({
+      chainId: "bsc",
+      contract: "0x" + "11".repeat(20),
+      symbol: "U",
+      name: "U",
+      amount: 69_946,
+      price: 1,
+      verified: false,
+      liquidity: null,
+    }),
+    row({
+      chainId: "arb",
+      contract: "0x" + "22".repeat(20),
+      symbol: "sUSDai",
+      name: "Staked USDai",
+      amount: 17_094,
+      price: 1.05,
+      verified: false,
+      liquidity: null,
+    }),
+  ]);
+  assert.equal(binanceWallet.totalUsd, 3347 + 69_946 + Math.round(17_094 * 1.05 * 100) / 100);
+  assert.equal(binanceWallet.excluded.length, 0);
+
+  const stock = valueBnWalletTokens([
+    row({ contract: USDC, symbol: "USDC", name: "USD Coin", amount: 19.06, price: 1, verified: true }),
+    row({
+      chainId: "base",
+      contract: "0x" + "33".repeat(20),
+      symbol: "NVDAc",
+      name: "NVIDIA",
+      amount: 0.0327,
+      price: 180,
+      verified: false,
+      liquidity: 10,
+    }),
+  ]);
+  assert.ok(stock.tokens.some((token) => token.symbol === "NVDAc"));
+  assert.ok(stock.totalUsd > 19.06);
+
+  const safePal = valueBnWalletTokens([
+    row({
+      contract: "0x" + "44".repeat(20),
+      symbol: "PET",
+      name: "Small cap",
+      amount: 5.17,
+      price: 1,
+      verified: false,
+      liquidity: 10,
+    }),
+  ]);
+  assert.equal(safePal.totalUsd, 5.17);
+
+  const freshCoin = row({
+    contract: "0x" + "55".repeat(20),
+    symbol: "NEWCOIN",
+    name: "New coin",
+    amount: 1000,
+    price: 1,
+    verified: true,
+    liquidity: 80_000,
+  });
+  const beforeList = valueBnWalletTokens([freshCoin]);
+  assert.equal(beforeList.totalUsd, 1000);
+  const afterList = valueBnWalletTokens([freshCoin], {
+    rabbyHeld: [{ chain: "eth", id: USDC, symbol: "USDC", amount: 1 }],
+  });
+  assert.equal(afterList.totalUsd, 0);
+  assert.equal(afterList.excluded[0].reason, "unlisted");
+
+  const held = binanceGapBlocked(11_208, 1_116, 0);
+  assert.ok(held);
+  assert.equal(binanceGapBlocked(11_208, 1_116, 10_000), null);
+  assert.equal(
+    explainedTransferUsd(
+      [{ minedAt: new Date().toISOString(), transfers: [{ sender: "0x" + "01".repeat(20), recipient: "0x" + "ab".repeat(20), valueUsd: 10_000 }] }],
+      "0x" + "ab".repeat(20),
+      Date.now() - 60_000
+    ),
+    10_000
+  );
 });
 
 test("balance endpoint is read-only and paginates until a short page", async () => {

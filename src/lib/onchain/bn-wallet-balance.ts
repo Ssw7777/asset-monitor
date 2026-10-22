@@ -25,10 +25,13 @@ const MAX_PAGES = 15;
 const CHAIN_READ_CONCURRENCY = 4;
 const DUST_USD = 0.05;
 const ABSURD_TOKEN_USD = 2_000_000;
-const OUTLIER_MIN_USD = 10_000;
-const ILLIQUID_MAX_USD = 1_000;
 const ILLIQUID_VALUE_USD = 50;
 const LIQUID_KEEP_USD = 50_000;
+/** Unknown, weakly priced tokens at or above this are held out until Rabby has seen them. */
+const UNKNOWN_HOLD_USD = 500;
+const AIRDROP_MIN_WALLETS = 3;
+const YIELD_PRICE_BAND: [number, number] = [0.5, 3];
+const STOCK_PRICE_BAND: [number, number] = [0.01, 20_000];
 
 const CHAIN_BY_BN: Record<string, string> = Object.fromEntries(
   Object.entries(OKX_CHAIN_IDS).map(([slug, id]) => [id, slug])
@@ -152,6 +155,27 @@ export interface BnWalletChain {
   valueUsd: number;
 }
 
+export interface RabbyHeldToken {
+  chain: string;
+  id: string;
+  symbol: string;
+  amount: number;
+}
+
+export interface RoundHolding {
+  chain: string;
+  symbol: string;
+  amount: number;
+}
+
+export interface ExcludedToken {
+  chain: string;
+  symbol: string;
+  amount: number;
+  valueUsd: number;
+  reason: string;
+}
+
 export interface BnWalletValuation {
   totalUsd: number;
   chains: BnWalletChain[];
@@ -160,6 +184,9 @@ export interface BnWalletValuation {
   incompleteNative: boolean;
   explicitEmpty: boolean;
   dropped: Record<string, number>;
+  excluded: ExcludedToken[];
+  /** Large round balances, kept so the same airdrop can be recognized on later wallets. */
+  roundHoldings: RoundHolding[];
 }
 
 export type WalletTotalChoice = "bn-web3" | "rabby" | "last-good";
@@ -395,9 +422,141 @@ function bump(dropped: Record<string, number>, reason: string) {
   dropped[reason] = (dropped[reason] || 0) + 1;
 }
 
+function canonicalSymbol(symbol: string): string {
+  return symbol.trim().toUpperCase().replace(/\.E$/, "");
+}
+
 function stableSymbol(symbol: string): boolean {
-  const upper = symbol.trim().toUpperCase().replace(/\.E$/, "");
-  return STABLE_SYMBOLS.has(upper);
+  const upper = canonicalSymbol(symbol);
+  // "U" on BSC is a real dollar token. A non-dollar price still fails the stable band.
+  return STABLE_SYMBOLS.has(upper) || upper === "U";
+}
+
+const YIELD_SYMBOLS = new Set(["SUSDAI", "SUSDE", "SUSDS", "SDAI", "SFRAX", "USDAI"]);
+const MAJOR_SYMBOLS = new Set([
+  "ETH", "WETH", "BNB", "WBNB", "BTC", "WBTC", "POL", "WPOL", "MATIC", "AVAX", "WAVAX",
+]);
+
+/** 1inch tokenized stocks use a lowercase trailing c (NVDAc). USDC does not match. */
+export function isTokenizedStock(symbol: string): boolean {
+  return /^[A-Z][A-Z0-9]{0,7}c$/.test(symbol.trim());
+}
+
+function isYieldSymbol(symbol: string): boolean {
+  return YIELD_SYMBOLS.has(canonicalSymbol(symbol));
+}
+
+function isKnownToken(raw: BnRawToken, native: boolean, stable: boolean): boolean {
+  if (native || stable) return true;
+  const upper = canonicalSymbol(raw.symbol);
+  if (MAJOR_SYMBOLS.has(upper) || isYieldSymbol(raw.symbol) || isTokenizedStock(raw.symbol)) return true;
+  const allow = (process.env.BN_WALLET_TOKEN_ALLOWLIST || "")
+    .split(/[,;\s]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  const contract = raw.contract.toLowerCase();
+  return allow.some((item) => item === `${raw.chainId}:${raw.symbol.toLowerCase()}` || (contract && item === `${raw.chainId}:${contract}`));
+}
+
+/** Identical round airdrop amounts (62000, 60000), not ordinary dust. */
+export function roundHoldingKey(chain: string, symbol: string, amount: number): string | null {
+  if (!(amount >= 1000)) return null;
+  const nearest = Math.round(amount);
+  if (Math.abs(amount - nearest) > 0.05) return null;
+  if (nearest % 1000 !== 0) return null;
+  return `${chain}:${canonicalSymbol(symbol)}:${nearest}`;
+}
+
+export function repeatedRoundKeys(
+  groups: Array<{ wallet: string; rows: RoundHolding[] }>,
+  minWallets = AIRDROP_MIN_WALLETS
+): Set<string> {
+  const seen = new Map<string, Set<string>>();
+  for (const group of groups) {
+    const local = new Set<string>();
+    for (const row of group.rows) {
+      const key = roundHoldingKey(row.chain, row.symbol, row.amount);
+      if (key) local.add(key);
+    }
+    for (const key of local) {
+      const wallets = seen.get(key) ?? new Set<string>();
+      wallets.add(group.wallet);
+      seen.set(key, wallets);
+    }
+  }
+  const out = new Set<string>();
+  for (const [key, wallets] of seen) if (wallets.size >= minWallets) out.add(key);
+  return out;
+}
+
+export function parseRabbyHeldTokens(payload: unknown): RabbyHeldToken[] | null {
+  if (!Array.isArray(payload) || payload.length === 0 || payload.length > 5_000) return null;
+  const out: RabbyHeldToken[] = [];
+  for (const item of payload) {
+    const row = asRecord(item);
+    if (!row || row.is_scam === true || row.is_suspicious === true) continue;
+    const chain = String(row.chain || "").trim().toLowerCase();
+    const id = String(row.id || "").trim().toLowerCase();
+    const symbol = String(row.optimized_symbol || row.display_symbol || row.symbol || "").trim();
+    const amount = finite(row.amount);
+    const value = finite(row.usd_value);
+    if (!chain || !symbol || !(amount > 0)) continue;
+    if (Number.isFinite(value) && value < DUST_USD) continue;
+    out.push({ chain, id, symbol, amount });
+    if (out.length >= 200) break;
+  }
+  return out.length ? out : null;
+}
+
+function rabbyHolds(raw: BnRawToken, held: RabbyHeldToken[] | undefined): boolean {
+  if (!held?.length) return false;
+  const symbol = canonicalSymbol(raw.symbol);
+  const contract = raw.contract.toLowerCase();
+  return held.some((token) => {
+    if (token.chain !== raw.chainId) return false;
+    const id = token.id.toLowerCase();
+    if (contract && id === contract) return true;
+    if (!contract && (id === raw.chainId || id === symbol.toLowerCase())) return true;
+    return canonicalSymbol(token.symbol) === symbol && Math.abs(token.amount - raw.amount) / Math.max(raw.amount, 1) < 0.05;
+  });
+}
+
+export function explainedTransferUsd(
+  records: Array<{ minedAt: string; transfers: Array<{ sender: string; recipient: string; valueUsd: number | null }> }>,
+  address: string,
+  sinceMs: number
+): number {
+  const owner = address.toLowerCase();
+  let net = 0;
+  for (const record of records) {
+    const mined = Date.parse(record.minedAt);
+    if (!Number.isFinite(mined) || mined < sinceMs) continue;
+    for (const transfer of record.transfers) {
+      const value = transfer.valueUsd;
+      if (value == null || !Number.isFinite(value)) continue;
+      const sender = transfer.sender.toLowerCase();
+      const recipient = transfer.recipient.toLowerCase();
+      if (recipient === owner && sender !== owner) net += Math.abs(value);
+      else if (sender === owner && recipient !== owner) net -= Math.abs(value);
+    }
+  }
+  return round2(net);
+}
+
+/**
+ * Block a publish when the filtered Binance total is far from the last Rabby
+ * figure and transfers since that figure do not explain the gap.
+ * This stops a source switch from writing a fake step into the balance history.
+ */
+export function binanceGapBlocked(
+  binanceUsd: number,
+  referenceUsd: number,
+  flowUsd: number
+): { unexplained: number; threshold: number } | null {
+  if (!Number.isFinite(binanceUsd) || !Number.isFinite(referenceUsd) || referenceUsd < 0) return null;
+  const unexplained = Math.abs(binanceUsd - referenceUsd - (Number.isFinite(flowUsd) ? flowUsd : 0));
+  const threshold = Math.max(150, Math.max(Math.abs(binanceUsd), Math.abs(referenceUsd)) * 0.03);
+  return unexplained > threshold ? { unexplained: round2(unexplained), threshold: round2(threshold) } : null;
 }
 
 interface KeptToken {
@@ -426,10 +585,16 @@ function wrappedPriceFromRows(rows: BnRawToken[], chain: string): number {
  */
 export function valueBnWalletTokens(
   rows: BnRawToken[],
-  options: { nativePrices?: Record<string, number>; marketPrices?: Record<string, number> } = {}
+  options: {
+    nativePrices?: Record<string, number>;
+    marketPrices?: Record<string, number>;
+    rabbyHeld?: RabbyHeldToken[];
+    repeatedRounds?: Iterable<string>;
+  } = {}
 ): BnWalletValuation {
   const trusted = expandNativePrices(options.nativePrices ?? {});
   const market = expandNativePrices(options.marketPrices ?? {});
+  const repeated = new Set(options.repeatedRounds ?? []);
   const dedup = new Map<string, BnRawToken>();
   for (const row of rows) {
     const key = `${row.chainId}:${row.contract}:${row.symbol.toUpperCase()}`;
@@ -438,25 +603,36 @@ export function valueBnWalletTokens(
   }
   const unique = [...dedup.values()];
   const dropped: Record<string, number> = {};
+  const excluded: ExcludedToken[] = [];
   const kept: KeptToken[] = [];
   let incompleteNative = false;
+  const drop = (raw: BnRawToken, valueUsd: number, reason: string) => {
+    bump(dropped, reason);
+    excluded.push({
+      chain: raw.chainId,
+      symbol: raw.symbol,
+      amount: raw.amount,
+      valueUsd: round2(Number.isFinite(valueUsd) ? valueUsd : 0),
+      reason,
+    });
+  };
 
   for (const raw of unique) {
     const native = isNativeCoin(raw.chainId, raw.contract, raw.symbol);
     if (!raw.symbol || isJunkTokenSymbol(raw.symbol, raw.name)) {
-      bump(dropped, "junk");
+      drop(raw, raw.amount * raw.price, "junk");
       continue;
     }
     if (isFakeTokenContract(raw.chainId, raw.symbol, raw.contract)) {
-      bump(dropped, "fake");
+      drop(raw, raw.amount * raw.price, "fake");
       continue;
     }
     if (raw.risk) {
-      bump(dropped, "risk");
+      drop(raw, raw.amount * raw.price, "risk");
       continue;
     }
     if (!(raw.amount > 0)) {
-      bump(dropped, "zero");
+      drop(raw, 0, "zero");
       continue;
     }
 
@@ -474,66 +650,69 @@ export function valueBnWalletTokens(
         if (chosen === fromCache) priceSource = "coinstats";
       } else if (raw.amount > 1e-6) {
         incompleteNative = true;
-        bump(dropped, "native-unpriced");
+        drop(raw, 0, "native-unpriced");
         continue;
       } else {
-        bump(dropped, "dust");
+        drop(raw, 0, "dust");
         continue;
       }
     } else if (!(price > 0)) {
-      bump(dropped, "unpriced");
+      drop(raw, 0, "unpriced");
       continue;
     }
 
     const stable = stableSymbol(raw.symbol);
+    const known = isKnownToken(raw, native, stable);
+    const rabbyOk = rabbyHolds(raw, options.rabbyHeld);
     const valueUsd = raw.amount * price;
     if (!Number.isFinite(valueUsd) || valueUsd < 0) {
-      bump(dropped, "unpriced");
+      drop(raw, 0, "unpriced");
       continue;
     }
     if (valueUsd < DUST_USD) {
-      bump(dropped, "dust");
+      drop(raw, valueUsd, "dust");
       continue;
     }
     if (stable && (price < 0.5 || price > 1.5)) {
-      bump(dropped, "bad-stable");
+      drop(raw, valueUsd, "bad-stable");
       continue;
     }
-    if (raw.verified === false && !native && !stable && valueUsd >= 1) {
-      bump(dropped, "unverified");
+    if (isYieldSymbol(raw.symbol) && (price < YIELD_PRICE_BAND[0] || price > YIELD_PRICE_BAND[1])) {
+      drop(raw, valueUsd, "bad-price");
       continue;
     }
-    if (
-      !native &&
-      !stable &&
-      raw.liquidity != null &&
-      raw.liquidity < ILLIQUID_MAX_USD &&
-      valueUsd >= ILLIQUID_VALUE_USD
-    ) {
-      bump(dropped, "illiquid");
+    if (isTokenizedStock(raw.symbol) && (price < STOCK_PRICE_BAND[0] || price > STOCK_PRICE_BAND[1])) {
+      drop(raw, valueUsd, "bad-price");
       continue;
     }
-    if (valueUsd > ABSURD_TOKEN_USD) {
-      bump(dropped, "absurd");
+    const roundKey = roundHoldingKey(raw.chainId, raw.symbol, raw.amount);
+    // Same round balance on many wallets is an airdrop, even when the ticker looks familiar.
+    if (roundKey && repeated.has(roundKey) && !native && !stable && !isYieldSymbol(raw.symbol) && valueUsd >= ILLIQUID_VALUE_USD) {
+      drop(raw, valueUsd, "airdrop");
       continue;
+    }
+    if (!known && !rabbyOk && !native && valueUsd >= UNKNOWN_HOLD_USD) {
+      // Once Rabby has named this wallet's tokens, anything valuable it has not
+      // seen waits for the next reconcile or a manual allowlist entry.
+      const seenByRabby = (options.rabbyHeld?.length ?? 0) > 0;
+      const weak = raw.liquidity == null || raw.liquidity < LIQUID_KEEP_USD;
+      if (seenByRabby || weak) {
+        drop(raw, valueUsd, seenByRabby && !weak ? "unlisted" : "unknown");
+        continue;
+      }
+      if (raw.verified === false) {
+        drop(raw, valueUsd, "unverified");
+        continue;
+      }
+      if (valueUsd > ABSURD_TOKEN_USD) {
+        drop(raw, valueUsd, "absurd");
+        continue;
+      }
     }
     kept.push({ raw, price, valueUsd, native, stable, priceSource });
   }
 
-  let list = kept;
-  for (let pass = 0; pass < 5; pass += 1) {
-    const sorted = [...list].sort((left, right) => right.valueUsd - left.valueUsd);
-    const top = sorted[0];
-    if (!top || top.native || top.stable || top.raw.verified === true) break;
-    if (top.raw.liquidity != null && top.raw.liquidity >= LIQUID_KEEP_USD) break;
-    const rest = sorted.slice(1).reduce((sum, token) => sum + token.valueUsd, 0);
-    if (top.valueUsd >= OUTLIER_MIN_USD && top.valueUsd > Math.max(150, rest) * 3) {
-      list = list.filter((token) => token !== top);
-      bump(dropped, "absurd");
-      continue;
-    }
-    break;
-  }
+  const list = kept;
 
   const chainTotals = new Map<string, number>();
   const tokens: Array<TokenLine & { chain: string }> = [];
@@ -564,6 +743,15 @@ export function valueBnWalletTokens(
     }))
     .filter((chain) => chain.valueUsd >= 0.01)
     .sort((left, right) => right.valueUsd - left.valueUsd);
+  const roundHoldings: RoundHolding[] = [];
+  const seenRound = new Set<string>();
+  for (const raw of unique) {
+    const key = roundHoldingKey(raw.chainId, raw.symbol, raw.amount);
+    if (!key || seenRound.has(key)) continue;
+    seenRound.add(key);
+    roundHoldings.push({ chain: raw.chainId, symbol: canonicalSymbol(raw.symbol), amount: Math.round(raw.amount) });
+    if (roundHoldings.length >= 40) break;
+  }
   return {
     totalUsd,
     chains,
@@ -571,6 +759,8 @@ export function valueBnWalletTokens(
     incompleteNative,
     explicitEmpty: totalUsd < 0.01 && !incompleteNative,
     dropped,
+    excluded,
+    roundHoldings,
   };
 }
 
@@ -686,12 +876,14 @@ export async function fetchBnWalletValuation(
   options: {
     nativePrices?: Record<string, number>;
     marketPrices?: Record<string, number>;
+    rabbyHeld?: RabbyHeldToken[];
+    repeatedRounds?: Iterable<string>;
     deadlineMs?: number;
     credentials?: BnWeb3Credentials;
     request?: typeof fetch;
     chainIds?: string[];
   } = {}
-): Promise<(BnWalletValuation & { queriedChains: string[] }) | null> {
+): Promise<(BnWalletValuation & { queriedChains: string[]; rawRows: BnRawToken[] }) | null> {
   const normalized = address.trim().toLowerCase();
   if (!/^0x[a-f0-9]{40}$/.test(normalized)) return null;
   if (!options.credentials && !bnWeb3Credentials()) {
@@ -753,8 +945,10 @@ export async function fetchBnWalletValuation(
   const valuation = valueBnWalletTokens(rows, {
     nativePrices: options.nativePrices,
     marketPrices: options.marketPrices,
+    rabbyHeld: options.rabbyHeld,
+    repeatedRounds: options.repeatedRounds,
   });
-  return { ...valuation, queriedChains: [...queried] };
+  return { ...valuation, queriedChains: [...queried], rawRows: rows };
 }
 
 export function binanceTotalIsFresh(
