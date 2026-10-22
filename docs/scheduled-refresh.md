@@ -99,7 +99,7 @@ journalctl -u dashboard-refresh.service -n 20 --no-pager
 ## 高频刷新提示
 
 - 单机 VPS 可把 timer 设到 **30s–2min**；接口会跳过进行中的刷新，不必担心叠爆
-- 若上游（Rabby 等）对你的出口 IP 限流，可配置备用数据源（如币安 Web3 DeFi Key），而不是再挂外部云调度
+- 钱包总额走币安 Web3，Rabby 只做每日对账。定时器仍按大约 3 个钱包 / 90 秒轮转；上游限流时保留上次成功余额。
 - 反向代理只暴露 UI；定时器继续打 `127.0.0.1`，避免把 `CRON_SECRET` 打到公网
 
 ## 验收清单

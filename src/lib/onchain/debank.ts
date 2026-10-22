@@ -14,12 +14,21 @@ import type {
   ZerionDefiCacheEntry,
   Wallet,
 } from "../types";
-import { activeTokenSource, fetchZerionTokens, type TokenSource } from "./token-providers";
-import { mergeTokenCacheObservation, tokenCacheNeedsRefresh, tokenIdentity, hasNonzeroHolding } from "./token-cache-policy";
+import { activeTokenSource } from "./token-providers";
+import { tokenIdentity, hasNonzeroHolding } from "./token-cache-policy";
 import {preserveRpcProtocols} from './protocol-observation';
-import { comparedTokensFromLines, shouldRejectIncomingWalletTotal } from './total-calibration';
 import { isDustTokenValue, isJunkTokenSymbol } from './junk-tokens';
 import { bnWeb3Credentials } from './bn-web3';
+import {
+  applyBnWalletTokens,
+  binanceTotalIsFresh,
+  chooseWalletTotal,
+  fetchBnWalletValuation,
+  fetchWrappedNativePrices,
+  nativePricesFromTokenCache,
+  RABBY_TOTAL_RECONCILE_MS,
+  rabbyTotalDiscrepancy,
+} from './bn-wallet-balance';
 import {
   collectBnDefiTokenKeys,
   fetchBnDefiProtocols,
@@ -46,15 +55,6 @@ export interface AppBalanceDetail {
   protocols: Record<string, unknown>[];
 }
 
-/** Token lines for one wallet, already classified. `chain` is the DeBank chain id. */
-interface WalletTokenDetail {
-  tokens: Array<TokenLine & { chain: string }>;
-  unpricedCount: number;
-  unpricedByChain: Record<string, number>;
-  /** 本次真正取到明细的链；`*` 表示官方接口一次性覆盖全部链。 */
-  coveredChains: string[];
-}
-
 const cache = new Map<string, { detail: TotalBalanceDetail; at: number; complete: boolean }>();
 const TTL = 5 * 60 * 1000;
 /** 协议明细缓存 6 小时；过期时一轮尝试补齐全部地址，失败则继续保留上次成功值。 */
@@ -66,12 +66,13 @@ const RABBY_PROTOCOL_RECONCILE_MS = 24 * 60 * 60 * 1000;
 /** One protocol request per batch is enough to refresh all 25 records well inside the 6-hour TTL. */
 const PROTOCOL_WALLET_BUDGET = 1;
 /**
- * Active EVM set is ~15; budget 3/min from pinned Rabby totals (8s spaced).
- * OKX/Zerion must NOT publish competing wallet totals — they miss Base
- * tokenized equities (NVDAc / 1inch stock campaign) and cause ±$1k flaps.
- * CF fires wallet-batch every minute while walletsOver5min > 0 or oldest > 90s.
+ * Active EVM set is ~15. Each run refreshes at most 3 wallets and skips any
+ * wallet whose last success is newer than 90s (the carousel). Binance Web3
+ * supplies the total; Rabby total_balance is at most one reconciliation per run.
  */
 const MAX_PUBLIC_REQUESTS_PER_RUN = 3;
+/** At most one Rabby total_balance read per refresh, shared by reconcile and stale fallback. */
+const RABBY_TOTAL_BUDGET = 1;
 /**
  * 直连层（Alchemy/Zerion 鉴权接口）可以并行：无公共接口的串行限制。
  * 公共源兜底请求仍会被 waitForPublicSlot 全局串行化，互不冲突。
@@ -82,23 +83,8 @@ const CONCURRENCY = 1;
  * 刚成功的地址默认跳过约 90 秒，避免五分钟窗口内重复烧额度。
  */
 const PUBLIC_REQUEST_INTERVAL_MS = 8_000;
-/** Skip wallets whose lastSuccess is newer than this (unless only/live). */
-const FRESH_SKIP_MS = 60_000;
-/**
- * 代币明细发现额度控制：成功缓存 12 小时，失败至少间隔 15 分钟；每轮最多 1 个地址。
- * lastAttemptAt 仅用于失败退避，不能冒充上次成功更新时间。
- */
-const TOKEN_WALLET_BUDGET = 1;
-const TOKEN_CHAINS_PER_WALLET = 3;
-const TOKEN_MIN_CHAIN_USD = 5;
-const TOKEN_MIN_VALUE_USD = 0.01;
-
-/** 稳定币白名单：这些代币在链上分类时归入“稳定币”，其余归入“现货”。 */
-const STABLE_SYMBOLS = new Set([
-  "USDT", "USDC", "USDG", "USDE", "USD1", "USDT.E", "USDC.E", "USDT0", "USD0",
-  "DAI", "FDUSD", "TUSD", "BUSD", "USDD", "PYUSD", "GHO", "USDS", "SUSDE", "SUSDS",
-  "FRAX", "LUSD", "USDX", "USDP", "USDR", "USDF", "USDY", "USD+", "SUSD", "CRVUSD",
-]);
+/** Skip wallets whose lastSuccess is newer than this (unless only/live). Carousel is 3 wallets / 90s. */
+const FRESH_SKIP_MS = 90_000;
 
 const TOKENS_PER_GROUP = 12;
 
@@ -425,6 +411,16 @@ async function fetchDetailOnce(
   };
 }
 
+/** Rabby net worth only. Does not add App assets and does not write the published total. */
+export async function fetchRabbyTotalBalance(address: string): Promise<TotalBalanceDetail | null> {
+  const response = await fetchJson(
+    `https://api.rabby.io/v1/user/total_balance?id=${address.toLowerCase()}`,
+    {},
+    1
+  );
+  return parseTotalDetail(response.data);
+}
+
 async function fetchWalletDetail(
   address: string,
   force = false,
@@ -547,170 +543,13 @@ async function fetchComplexProtocols(
   return hit?.protocols ?? null;
 }
 
-function tokenKind(symbol: string, isCore: boolean): TokenLine["kind"] {
-  const upper = symbol.toUpperCase();
-  if (STABLE_SYMBOLS.has(upper)) return "stable";
-  if (upper.endsWith(".E") && STABLE_SYMBOLS.has(upper.slice(0, -2))) return "stable";
-  return isCore ? "native" : "spot";
-}
-
-/**
- * Parse `/v1/user/all_token_list` output into wallet token lines.
- * Returns null only when the response shape is unusable, so an empty wallet is still "ok".
- */
-function parseTokenList(data: unknown): WalletTokenDetail | null {
-  if (data === null || data === undefined) return null;
-  const items = unwrapArray(data);
-  const tokens: Array<TokenLine & { chain: string }> = [];
-  const unpricedByChain: Record<string, number> = {};
-  let unpricedCount = 0;
-  for (const item of items) {
-    const symbol = String(item.optimized_symbol || item.display_symbol || item.symbol || "").trim();
-    if (!symbol || isJunkTokenSymbol(symbol, String(item.name || ""))) continue;
-    const amount = number(item.amount);
-    if (!amount || Math.abs(amount) < 1e-9) continue;
-    const chain = String(item.chain || "unknown");
-    // Protocol receipt tokens (aToken / PT / YT / LP share…) belong to the DApp section,
-    // not to “钱包内稳定币 / 现货”. Skipping them keeps the two views from double-explaining.
-    if (String(item.protocol_id || "").trim()) continue;
-    const price = number(item.price);
-    const valueUsd = number(item.usd_value) || Math.abs(amount * price);
-    const isCore = item.is_core === true;
-    const isVerified = item.is_verified === true || isCore;
-    const isSuspicious = item.is_suspicious === true;
-    // Unverified / suspicious / valueless tokens never enter the priced lists, so scam-token
-    // prices cannot inflate the explanatory totals.
-    if (!Number.isFinite(valueUsd) || valueUsd < TOKEN_MIN_VALUE_USD || !isVerified || isSuspicious) {
-      unpricedCount += 1;
-      unpricedByChain[chain] = (unpricedByChain[chain] || 0) + 1;
-      continue;
-    }
-    tokens.push({
-      symbol,
-      amount,
-      valueUsd: Math.abs(valueUsd),
-      tokenId: String(item.id || symbol),
-      kind: tokenKind(symbol, isCore),
-      isCore,
-      logoUrl: typeof item.logo_url === "string" && item.logo_url ? item.logo_url : undefined,
-      chain,
-    });
-  }
-  tokens.sort((left, right) => right.valueUsd - left.valueUsd);
-  return { tokens, unpricedCount, unpricedByChain, coveredChains: [] };
-}
-
-/**
- * Wallet token list (stablecoins / native / spot per chain).
- * Official DeBank Pro endpoint first (one request covers every chain), then the Rabby
- * public endpoint for a bounded number of chains per wallet.
- */
-async function fetchTokenListOnce(
-  address: string,
-  chainIds: string[],
-  deadlineMs?: number
-): Promise<WalletTokenDetail | null> {
-  const key = process.env.DEBANK_ACCESS_KEY;
-  if (key) {
-    const official = await fetchJson(
-      `https://pro-openapi.debank.com/v1/user/all_token_list?id=${address}&is_all=true`,
-      { AccessKey: key },
-      0,
-      deadlineMs
-    );
-    const parsed = parseTokenList(official.data);
-    if (parsed) return { ...parsed, coveredChains: ["*"] };
-  }
-
-  // 免费替代方案：Zerion 一个请求拿到全链代币（含价格与图标）
-  if (process.env.ZERION_API_KEY) {
-    const zerion = await fetchZerionTokens(address, { deadlineMs });
-    if (zerion) return zerion;
-  }
-
-  if (!chainIds.length) return null;
-  const merged: WalletTokenDetail = {
-    tokens: [],
-    unpricedCount: 0,
-    unpricedByChain: {},
-    coveredChains: [],
-  };
-  let anyOk = false;
-  for (const chainId of chainIds) {
-    if (deadlineMs != null && Date.now() >= deadlineMs - 500) break;
-    const response = await fetchJson(
-      `https://api.rabby.io/v1/user/token_list?id=${address}&chain_id=${encodeURIComponent(chainId)}&is_all=true`,
-      {},
-      0,
-      deadlineMs
-    );
-    const parsed = parseTokenList(response.data);
-    if (!parsed) continue;
-    anyOk = true;
-    merged.tokens.push(...parsed.tokens);
-    merged.unpricedCount += parsed.unpricedCount;
-    for (const [chain, count] of Object.entries(parsed.unpricedByChain)) {
-      merged.unpricedByChain[chain] = (merged.unpricedByChain[chain] || 0) + count;
-    }
-    merged.coveredChains.push(chainId);
-  }
-  if (!anyOk) return null;
-  merged.tokens.sort((left, right) => right.valueUsd - left.valueUsd);
-  return merged;
-}
-
-async function fetchWalletTokens(
-  address: string,
-  chainIds: string[],
-  store: TokenCache,
-  force = false,
-  deadlineMs?: number
-): Promise<{ detail: WalletTokenDetail | null; status: WalletFetchStatus }> {
-  const normalized = address.toLowerCase();
-  const hit = store[normalized] || null;
-  if (!force && hit && !tokenCacheNeedsRefresh(hit)) return { detail: hit, status: "cached" };
-  const attemptedAt = new Date().toISOString();
-  store[normalized] = hit
-    ? { ...hit, lastAttemptAt: attemptedAt }
-    : {
-        at: "",
-        lastAttemptAt: attemptedAt,
-        tokens: [],
-        unpricedCount: 0,
-        unpricedByChain: {},
-        coveredChains: [],
-      };
-  const detail = await fetchTokenListOnce(normalized, chainIds, deadlineMs);
-  if (detail) {
-    const merged = mergeTokenCacheObservation(hit, detail, attemptedAt);
-    store[normalized] = merged;
-    return { detail: merged, status: detail.coveredChains.length ? "ok" : hit ? "cached" : "error" };
-  }
-  return hit ? { detail: hit, status: "cached" } : { detail: null, status: "error" };
-}
-
 type TokenCache = Record<string, WalletTokenCacheEntry>;
-
-/** 需要补代币明细的地址：本地缓存过期，或从来没取过。 */
-function tokenCacheStale(address: string, store: TokenCache) {
-  return tokenCacheNeedsRefresh(store[address.toLowerCase()]);
-}
 
 function protocolCacheStale(address: string, store: ProtocolCache) {
   const hit = store[address.toLowerCase()];
   if (!hit?.at) return true;
   const successAt = new Date(hit.at).getTime();
   return !Number.isFinite(successAt) || Date.now() - successAt >= PROTOCOL_TTL;
-}
-
-/** Chains worth a token request: the largest ones that actually hold value. */
-function tokenChainsFor(address: string): string[] {
-  const detail = cache.get(address.toLowerCase())?.detail;
-  if (!detail) return [];
-  return detail.chains
-    .filter((chain) => chain.valueUsd >= TOKEN_MIN_CHAIN_USD)
-    .slice(0, TOKEN_CHAINS_PER_WALLET)
-    .map((chain) => chain.id);
 }
 
 export async function fetchWalletUsd(
@@ -754,8 +593,8 @@ export async function refreshWallets(
 ): Promise<Wallet[]> {
   if (!wallets.length) return [];
   // Kept in the persisted schema for backward compatibility. Canonical totals now
-  // come from DeBank/Rabby; these old estimator caches are no longer allowed to
-  // replace a successfully observed wallet net worth.
+  // come from Binance Web3 token balances; these old estimator caches are no
+  // longer allowed to replace a successfully observed wallet net worth.
   void defiStore;
   void longtailStore;
   const originalOrder = new Map(wallets.map((wallet, index) => [wallet.id, index]));
@@ -797,7 +636,7 @@ export async function refreshWallets(
       const minAgeMs = opts.staleMinutes * 60_000;
       pool = pool.filter((wallet) => nowMs - successTs(wallet) >= minAgeMs);
     } else if (!opts.live) {
-      // Skip recently successful addresses so Rabby quota goes to stale wallets.
+      // Skip wallets refreshed in the last 90s so the 3-wallet carousel keeps moving.
       pool = pool.filter((wallet) => nowMs - successTs(wallet) >= FRESH_SKIP_MS);
     }
   }
@@ -811,22 +650,6 @@ export async function refreshWallets(
     )
     .slice(0, budget);
   const targetIds = new Set(targets.map((wallet) => wallet.id));
-  /**
-   * 本轮要补代币明细的地址：优先“从来没取过”的地址（例如余额抓取失败的币安钱包，
-   * 里面的 PONS / stonks 只能靠代币明细补出来），其次按余额从大到小。
-   */
-  const tokenTargets = new Set(
-    [...targets]
-      .filter((wallet) => tokenCacheStale(wallet.address, tokenStore))
-      .sort((left, right) => {
-        const leftCached = tokenStore[left.address.toLowerCase()] ? 1 : 0;
-        const rightCached = tokenStore[right.address.toLowerCase()] ? 1 : 0;
-        if (leftCached !== rightCached) return leftCached - rightCached;
-        return right.balanceUsd - left.balanceUsd;
-      })
-      .slice(0, TOKEN_WALLET_BUDGET)
-      .map((wallet) => wallet.address.toLowerCase())
-  );
   const protocolTargets = new Set(
     [...targets]
       .filter((wallet) => protocolCacheStale(wallet.address, protocolStore))
@@ -838,136 +661,141 @@ export async function refreshWallets(
       .slice(0, PROTOCOL_WALLET_BUDGET)
       .map((wallet) => wallet.address.toLowerCase())
   );
+  const cachedNative = nativePricesFromTokenCache(Object.values(tokenStore));
+  let marketNative: Record<string, number> = {};
+  if (bnWeb3Credentials() && Date.now() < stopAt - 5_000) {
+    marketNative = await fetchWrappedNativePrices();
+  }
+  let rabbyTotalBudget = RABBY_TOTAL_BUDGET;
   const refreshed = await mapPool(targets, CONCURRENCY, async (wallet) => {
     const attemptedAt = new Date().toISOString();
     const previous = wallet.balanceUsd;
     const addressLower = wallet.address.toLowerCase();
     const hasDetailTime = () => opts.live || Date.now() < stopAt - 10_000;
-    const wantsTokenDetail = tokenTargets.has(addressLower);
-    const previousAppChains = (chainStore[addressLower]?.chains ?? []).filter((chain) =>
-      chain.id.startsWith("app:")
-    );
-    // Pinned sole total source: Rabby/public. OKX/Zerion calibration used to
-    // rewrite balanceUsd (source=direct/zerion) and drop Base NVDAc (~$1k) on
-    // Trust/Xter1/Xter2 — that is the ±$1000 fake flow. Never publish those totals.
-    const { detail, apps, status, attempted } = await fetchWalletDetail(
-      wallet.address,
-      true,
-      previousAppChains
-    );
-
-    if (status === "ok" && detail) {
-      chainStore[addressLower] = {
-        at: attemptedAt,
-        totalUsd: detail.totalUsd,
-        chains: detail.chains.map((chain) => ({ ...chain })),
-      };
-      if (apps !== null) {
-        const protocolEntry = protocolStore[addressLower] ?? { at: "", protocols: [] };
-        protocolStore[addressLower] = {
-          ...protocolEntry,
-          apps,
-          appAt: attemptedAt,
-          appLastAttemptAt: attemptedAt,
-        };
+    const previousChain = chainStore[addressLower];
+    const previousAppChains = (previousChain?.chains ?? []).filter((chain) => chain.id.startsWith("app:"));
+    const appUsd = previousAppChains.reduce((sum, chain) => sum + (Number(chain.valueUsd) || 0), 0);
+    const rabbyAtMs = Date.parse(previousChain?.rabbyTotalAt ?? "");
+    const reconcileDue = !Number.isFinite(rabbyAtMs) || Date.now() - rabbyAtMs >= RABBY_TOTAL_RECONCILE_MS;
+    const freshBn = binanceTotalIsFresh(wallet.source, wallet.lastSuccess?.at, Date.now());
+    // Binance token balances are the published total. OKX/Zerion must not write balanceUsd.
+    const valuation = await fetchBnWalletValuation(wallet.address, {
+      nativePrices: cachedNative,
+      marketPrices: marketNative,
+      deadlineMs: stopAt,
+    });
+    const binanceReady = !!valuation && !valuation.incompleteNative;
+    const binanceFull = binanceReady ? Math.round((valuation.totalUsd + appUsd) * 100) / 100 : null;
+    let rabbyDetail: TotalBalanceDetail | null = null;
+    const wantReconcile = binanceReady && reconcileDue;
+    const wantFallback = !binanceReady && !freshBn;
+    if ((wantReconcile || wantFallback) && rabbyTotalBudget > 0 && hasDetailTime()) {
+      rabbyTotalBudget -= 1;
+      rabbyDetail = await fetchRabbyTotalBalance(wallet.address);
+    }
+    if (binanceReady && valuation && rabbyDetail) {
+      const gap = rabbyTotalDiscrepancy(valuation.totalUsd, rabbyDetail.totalUsd);
+      if (gap) {
+        console.warn(
+          `[wallet-total] reconcile ${addressLower.slice(0, 8)} bn=${valuation.totalUsd.toFixed(2)} rabby=${rabbyDetail.totalUsd.toFixed(2)} delta=${gap.delta.toFixed(2)}`
+        );
       }
+    }
+    const previousAtMs = wallet.lastSuccess?.at ? Date.parse(wallet.lastSuccess.at) : null;
+    const choice = chooseWalletTotal({
+      nowMs: Date.now(),
+      previousUsd: previous,
+      previousAtMs: Number.isFinite(previousAtMs) ? previousAtMs : null,
+      previousSource: wallet.source,
+      binanceUsd: binanceFull,
+      rabbyUsd: rabbyDetail ? Math.round((rabbyDetail.totalUsd + appUsd) * 100) / 100 : null,
+    });
+    if (choice.source === "bn-web3" && valuation) {
+      const chains = [...valuation.chains, ...previousAppChains].sort((left, right) => right.valueUsd - left.valueUsd);
+      chainStore[addressLower] = {
+        ...previousChain,
+        at: attemptedAt,
+        totalUsd: choice.usd,
+        chains,
+        balanceSource: "bn-web3",
+        rabbyTotalAt: rabbyDetail ? attemptedAt : previousChain?.rabbyTotalAt,
+        rabbyTotalUsd: rabbyDetail ? rabbyDetail.totalUsd : previousChain?.rabbyTotalUsd,
+      };
+      tokenStore[addressLower] = applyBnWalletTokens(
+        tokenStore[addressLower],
+        valuation.tokens,
+        valuation.queriedChains,
+        attemptedAt
+      );
       if (protocolTargets.has(addressLower) && hasDetailTime()) {
         await fetchComplexProtocols(wallet.address, protocolStore);
       }
-      // Recover Base NVDAc (and similar) into the token table when the chain
-      // total is large but no matching priced row exists yet.
-      const topChainMissingTokens = (() => {
-        const chains = chainStore[addressLower]?.chains ?? [];
-        const top = chains.find((chain) => !chain.id.startsWith("app:") && chain.valueUsd >= 100);
-        if (!top) return false;
-        const tokens = tokenStore[addressLower]?.tokens ?? [];
-        return !tokens.some((token) => token.chain === top.id && (Number(token.valueUsd) || 0) >= 50);
-      })();
-      if ((wantsTokenDetail || topChainMissingTokens) && hasDetailTime()) {
-        const chainIds = tokenChainsFor(wallet.address);
-        // Always include the largest chain so NVDAc on Base is not skipped.
-        const topId = (chainStore[addressLower]?.chains ?? []).find(
-          (chain) => !chain.id.startsWith("app:") && chain.valueUsd >= 100
-        )?.id;
-        const ids = topId && !chainIds.includes(topId) ? [topId, ...chainIds].slice(0, TOKEN_CHAINS_PER_WALLET) : chainIds;
-        await fetchWalletTokens(wallet.address, ids, tokenStore, true, stopAt);
+      return {
+        ...wallet,
+        balanceUsd: choice.usd,
+        lastUpdated: attemptedAt,
+        updatedAt: attemptedAt,
+        lastSuccess: { at: attemptedAt, balanceUsd: choice.usd },
+        status: "ok" as const,
+        source: "bn-web3" as const,
+      };
+    }
+    if (choice.source === "rabby" && rabbyDetail) {
+      const chains = [
+        ...rabbyDetail.chains.filter((chain) => !chain.id.startsWith("app:")),
+        ...previousAppChains,
+      ].sort((left, right) => right.valueUsd - left.valueUsd);
+      chainStore[addressLower] = {
+        ...previousChain,
+        at: attemptedAt,
+        totalUsd: choice.usd,
+        chains,
+        balanceSource: "rabby",
+        rabbyTotalAt: attemptedAt,
+        rabbyTotalUsd: rabbyDetail.totalUsd,
+      };
+      if (protocolTargets.has(addressLower) && hasDetailTime()) {
+        await fetchComplexProtocols(wallet.address, protocolStore);
       }
-      const balanceUsd = Math.round(detail.totalUsd * 100) / 100;
-      // A successful App audit may legitimately contain no positions. Its
-      // timestamp, rather than a non-empty app chain list, proves completeness
-      // when the public App endpoint is temporarily unavailable.
       const appAuditAtMs = Date.parse(protocolStore[addressLower]?.appAt ?? "");
       const observedAtMs = Date.parse(attemptedAt);
       const hasCompleteAppAudit =
         Number.isFinite(appAuditAtMs) &&
         appAuditAtMs <= observedAtMs + 60_000 &&
         observedAtMs - appAuditAtMs <= 6 * 60 * 60 * 1000;
-      const source = hasCompleteAppAudit ? ("public" as const) : ("public-partial" as const);
-      const cachedTokens = tokenStore[addressLower]?.tokens;
-      const previousTokens = cachedTokens ? comparedTokensFromLines(cachedTokens) : null;
-      // Rabby itself can price phishing/scam tokens into total_usd_value (Debot
-      // 0.44 → 23718). Reject spikes and risk-inflated flaps for EVERY wallet.
-      if (
-        await shouldRejectIncomingWalletTotal({
-          address: wallet.address,
-          previousUsd: previous,
-          nextUsd: balanceUsd,
-          nextSource: source,
-          confirmedEmpty: detail.explicitEmpty === true,
-          previousTokens,
-          deadlineMs: stopAt,
-        })
-      ) {
-        // Keep last-good NAV after a successful Rabby contact, but always bump
-        // lastSuccess so freshness clocks do not stall on intentional rejects.
-        return {
-          ...wallet,
-          balanceUsd: previous,
-          lastUpdated: attemptedAt,
-          updatedAt: attemptedAt,
-          lastSuccess: { at: attemptedAt, balanceUsd: previous },
-          status: "ok" as const,
-          source: wallet.source === "public" || wallet.source === "public-partial"
-            ? wallet.source
-            : source,
-        };
-      }
       return {
         ...wallet,
-        balanceUsd,
+        balanceUsd: choice.usd,
         lastUpdated: attemptedAt,
         updatedAt: attemptedAt,
-        lastSuccess: { at: attemptedAt, balanceUsd },
+        lastSuccess: { at: attemptedAt, balanceUsd: choice.usd },
         status: "ok" as const,
-        source,
+        source: hasCompleteAppAudit ? ("public" as const) : ("public-partial" as const),
       };
     }
-
-    // Rabby/public failed or blocked: keep last-good. Do NOT fall through to
-    // OKX/Zerion totals (coverage hole on tokenized stocks / Base NVDAc).
-    // Keep last confirmed balance; never zero on provider failure.
-    if (!attempted && !publicBlocked()) return wallet;
-    if (wantsTokenDetail && hasDetailTime()) {
-      await fetchWalletTokens(
-        wallet.address,
-        tokenChainsFor(wallet.address),
-        tokenStore,
-        true,
-        stopAt
-      );
+    // Balance miss must not skip the DeFi lane. Positions use their own endpoint.
+    if (protocolTargets.has(addressLower) && hasDetailTime()) {
+      await fetchComplexProtocols(wallet.address, protocolStore);
     }
-    // Rate-limit / provider miss with last-good: bump lastSuccess like intentional
-    // reject path so budget=1 batches rotate and freshness clocks do not stall for hours.
+    // Keep the last good total. updatedAt moves so the carousel rotates, but
+    // lastSuccess stays on the real read — otherwise a string of failures
+    // would refresh the 6h clock and Rabby could never take over.
+    if (freshBn || previous > 0) {
+      return {
+        ...wallet,
+        balanceUsd: previous,
+        lastUpdated: attemptedAt,
+        updatedAt: attemptedAt,
+        status: "ok" as const,
+        source: wallet.source,
+      };
+    }
     return {
       ...wallet,
       balanceUsd: previous,
       lastUpdated: attemptedAt,
       updatedAt: attemptedAt,
-      lastSuccess:
-        previous > 0
-          ? { at: attemptedAt, balanceUsd: previous }
-          : wallet.lastSuccess,
-      status: previous > 0 ? ("ok" as const) : ("error" as const),
+      status: "error" as const,
     };
   });
   // 没被选中的地址原样返回（保留上次成功的余额与状态）

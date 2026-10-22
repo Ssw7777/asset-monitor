@@ -29,6 +29,7 @@ import { applySpecificTokenObservation, applyTokenObservation, parseRabbyTokenOb
 import { auditTokens } from "@/lib/token-audit";
 import { isJunkTokenSymbol } from "@/lib/onchain/junk-tokens";
 import { shouldRejectTotalUpdate, comparedTokensFromLines } from "@/lib/onchain/total-calibration";
+import { binanceTotalIsFresh, rabbyTotalDiscrepancy } from "@/lib/onchain/bn-wallet-balance";
 import { activeRefreshWallets, isWalletRefreshEnabled } from "./wallets";
 import { isCryptoManual, manualToUsd, sumManualCryptoUsd } from "./manual-assets";
 
@@ -185,6 +186,7 @@ async function refreshStaleAppAudits(seedState: PortfolioState) {
         appLastAttemptAt: observation.observedAt,
       };
       chainCache[observation.address] = {
+        ...previousChainEntry,
         at:
           previousChainEntry?.at ||
           wallet.lastSuccess?.at ||
@@ -475,7 +477,27 @@ export async function ingestWalletObservations(
       const existingProtocolMs = previousProtocol.at
         ? new Date(previousProtocol.at).getTime()
         : Number.NaN;
-      const applyTotal = !Number.isFinite(existingSuccessMs) || existingSuccessMs < entry.observedMs;
+      let applyTotal = !Number.isFinite(existingSuccessMs) || existingSuccessMs < entry.observedMs;
+      let reconciledBn = false;
+      if (applyTotal && binanceTotalIsFresh(wallet.source, wallet.lastSuccess?.at, receivedMs)) {
+        const bnTokenUsd = Math.max(0, (Number(wallet.balanceUsd) || 0) - previousAppUsd);
+        const gap = rabbyTotalDiscrepancy(bnTokenUsd, entry.detail.totalUsd);
+        if (gap) {
+          console.warn(
+            `[wallet-total] reconcile ${entry.normalized.slice(0, 8)} bn=${bnTokenUsd.toFixed(2)} rabby=${entry.detail.totalUsd.toFixed(2)} delta=${gap.delta.toFixed(2)}`
+          );
+        }
+        const existingChain = chainCache[entry.normalized];
+        chainCache[entry.normalized] = {
+          ...(existingChain ?? { at: wallet.lastSuccess?.at || entry.observationTime, totalUsd: wallet.balanceUsd, chains: previousChains }),
+          balanceSource: "bn-web3",
+          rabbyTotalAt: entry.observationTime,
+          rabbyTotalUsd: entry.detail.totalUsd,
+        };
+        // Rabby confirms or disagrees. It does not replace a fresh Binance total.
+        applyTotal = false;
+        reconciledBn = true;
+      }
       const applyApp =
         !!entry.appDetail &&
         (!Number.isFinite(existingAppMs) || existingAppMs < entry.observedMs);
@@ -552,7 +574,8 @@ export async function ingestWalletObservations(
         if (rejectZero || rejectSpikeOrRisk) {
           // Keep the last-good NAV, but still stamp lastSuccess so CF/GH observations
           // that confirm a coverage flap do not leave the wallet aging past 5 minutes.
-          if (applyTotal) {
+          // A Binance total keeps its own clock — a rejected Rabby row must not make it look fresh.
+          if (applyTotal && wallet.source !== "bn-web3") {
             wallets[walletIndex] = {
               ...wallet,
               balanceUsd: previousBalance,
@@ -583,12 +606,22 @@ export async function ingestWalletObservations(
             : wallet.lastSuccess
               ? { lastSuccess: { ...wallet.lastSuccess, balanceUsd } }
               : {}),
-          source: hasCompleteAppAudit ? "public" : "public-partial",
+          source: applyTotal
+            ? hasCompleteAppAudit
+              ? "public"
+              : "public-partial"
+            : wallet.source === "bn-web3"
+              ? "bn-web3"
+              : hasCompleteAppAudit
+                ? "public"
+                : "public-partial",
         };
         chainCache[entry.normalized] = {
+          ...chainCache[entry.normalized],
           at: applyTotal ? entry.observationTime : (chainCache[entry.normalized]?.at ?? entry.observationTime),
           totalUsd: balanceUsd,
           chains: combinedChains,
+          balanceSource: applyTotal ? "rabby" : wallet.source === "bn-web3" ? "bn-web3" : chainCache[entry.normalized]?.balanceSource,
         };
         }
       }
@@ -598,7 +631,7 @@ export async function ingestWalletObservations(
         totalRefreshed += 1;
         latestAppliedObservationMs = Math.max(latestAppliedObservationMs, entry.observedMs);
       }
-      if (applyTotal || applyApp || applyProtocol || applyToken) applied += 1;
+      if (applyTotal || applyApp || applyProtocol || applyToken || reconciledBn) applied += 1;
     }
 
     state.wallets = wallets;
