@@ -768,7 +768,23 @@ test("published total adds app and DeFi that are not already in the token list",
   assert.equal(gap.decision, "hold-gap");
   assert.equal(gap.keptUsd, 5000);
 
-  const bootstrap = decideWalletPublish({
+  const bootstrapCold = decideWalletPublish({
+    tokenUsd: 100,
+    appUsd: 25,
+    positionUsd: 10,
+    incompleteNative: false,
+    hasRabbyList: false,
+    hasRabbyTotal: false,
+    referenceUsd: null,
+    flowUsd: 0,
+    previousUsd: 0,
+  });
+  assert.equal(bootstrapCold.decision, "hold-bootstrap");
+  assert.equal(bootstrapCold.candidateUsd, 135);
+  assert.equal(bootstrapCold.keptUsd, 0);
+
+  // Prior published total soft-exits hold-bootstrap and gap-checks vs reference.
+  const softPrevious = decideWalletPublish({
     tokenUsd: 100,
     appUsd: 25,
     positionUsd: 10,
@@ -779,9 +795,22 @@ test("published total adds app and DeFi that are not already in the token list",
     flowUsd: 0,
     previousUsd: 135,
   });
-  assert.equal(bootstrap.decision, "hold-bootstrap");
-  assert.equal(bootstrap.candidateUsd, 135);
-  assert.equal(bootstrap.keptUsd, 135);
+  assert.equal(softPrevious.decision, "publish");
+  assert.equal(softPrevious.candidateUsd, 135);
+
+  const softPreviousGap = decideWalletPublish({
+    tokenUsd: 10,
+    appUsd: 0,
+    positionUsd: 0,
+    incompleteNative: false,
+    hasRabbyList: false,
+    hasRabbyTotal: false,
+    referenceUsd: 5000,
+    flowUsd: 0,
+    previousUsd: 5000,
+  });
+  assert.equal(softPreviousGap.decision, "hold-gap");
+  assert.equal(softPreviousGap.keptUsd, 5000);
 
   const totalAnchor = decideWalletPublish({
     tokenUsd: 100,
