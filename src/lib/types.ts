@@ -336,6 +336,8 @@ export interface WalletChainCacheEntry {
   rabbyListAttemptAt?: string;
   /** How long to wait after rabbyListAttemptAt. Grows after a 429. */
   rabbyListBackoffMs?: number;
+  /** When token_list last returned a confirmed empty array (API still 200). */
+  rabbyListEmptyAt?: string;
   /** Large round balances seen here, used to spot the same airdrop on other wallets. */
   roundHoldings?: Array<{ chain: string; symbol: string; amount: number }>;
 }

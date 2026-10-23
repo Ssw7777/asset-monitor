@@ -774,6 +774,7 @@ test("published total adds app and DeFi that are not already in the token list",
     positionUsd: 10,
     incompleteNative: false,
     hasRabbyList: false,
+    hasRabbyTotal: false,
     referenceUsd: 135,
     flowUsd: 0,
     previousUsd: 135,
@@ -781,6 +782,20 @@ test("published total adds app and DeFi that are not already in the token list",
   assert.equal(bootstrap.decision, "hold-bootstrap");
   assert.equal(bootstrap.candidateUsd, 135);
   assert.equal(bootstrap.keptUsd, 135);
+
+  const totalAnchor = decideWalletPublish({
+    tokenUsd: 100,
+    appUsd: 25,
+    positionUsd: 10,
+    incompleteNative: false,
+    hasRabbyList: false,
+    hasRabbyTotal: true,
+    referenceUsd: 135,
+    flowUsd: 0,
+    previousUsd: 135,
+  });
+  assert.equal(totalAnchor.decision, "publish");
+  assert.equal(totalAnchor.candidateUsd, 135);
 
   const unpriced = decideWalletPublish({
     tokenUsd: 100,
@@ -810,4 +825,6 @@ test("Rabby reconcile waits a few minutes and backs off after a 429", () => {
     true
   );
   assert.equal(RABBY_EMPTY_LIST_RETRY_MS, 6 * 60 * 60 * 1000);
+  // Empty-list retry must stay longer than the shared slot gap.
+  assert.ok(RABBY_EMPTY_LIST_RETRY_MS > RABBY_RECONCILE_GAP_MS);
 });

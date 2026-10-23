@@ -9,9 +9,12 @@ import { tokenIdentity } from "./token-cache-policy";
  * The published figure is filtered tokens plus app balances plus DeFi position
  * value that is not already in those tokens. Rabby total_balance is a
  * once-per-day reconciliation check and must not replace a fresh Binance total.
- * Until one reconcile has stored Rabby's token list, the previous total stays.
- * A failed Binance read keeps the last good value until it is stale, then Rabby
- * may fill in once — never on the next tick.
+ * Until Rabby total_balance has anchored a wallet (or a token list is stored),
+ * the previous total stays. Token list is preferred for junk filtering, but
+ * Rabby's public token_list can return empty while total_balance still works —
+ * in that case the total alone is enough to leave hold-bootstrap and run the
+ * gap check. A failed Binance read keeps the last good value until it is stale,
+ * then Rabby may fill in once — never on the next tick.
  */
 
 export const RABBY_TOTAL_RECONCILE_MS = 24 * 60 * 60 * 1000;
@@ -19,7 +22,11 @@ export const RABBY_TOTAL_RECONCILE_MS = 24 * 60 * 60 * 1000;
 export const RABBY_RECONCILE_GAP_MS = 3 * 60 * 1000;
 /** Backoff after HTTP 429 / a dropped call. Doubles from the gap and stops here. */
 export const RABBY_RECONCILE_BACKOFF_MAX_MS = 15 * 60 * 1000;
-/** A confirmed empty token list is not an allowlist. Retry on the daily cadence. */
+/**
+ * After Rabby token_list returns a confirmed empty array, skip re-fetching that
+ * list for this long. Do NOT use this as the shared rabbySlot backoff — that
+ * would freeze every wallet's total_balance reconcile for hours.
+ */
 export const RABBY_EMPTY_LIST_RETRY_MS = 6 * 60 * 60 * 1000;
 /** Binance miss shorter than this keeps the last Binance total (no source flip). */
 export const BN_TOTAL_STALE_FALLBACK_MS = 6 * 60 * 60 * 1000;
@@ -694,8 +701,8 @@ export type PublishDecision = "publish" | "hold-gap" | "hold-bootstrap" | "hold-
  * The candidate is the number a successful publish writes: filtered tokens,
  * plus app USD, plus DeFi that is not already in the token list.
  * referenceUsd must be the same composition (Rabby total + app, or the
- * current published total). Without a stored Rabby token list the candidate
- * is not written.
+ * current published total). Without a Rabby token list OR a Rabby total
+ * anchor the candidate is not written.
  */
 export function decideWalletPublish(input: {
   tokenUsd: number;
@@ -703,6 +710,8 @@ export function decideWalletPublish(input: {
   positionUsd: number;
   incompleteNative: boolean;
   hasRabbyList: boolean;
+  /** True when Rabby total_balance is available this cycle or still within the daily window. */
+  hasRabbyTotal?: boolean;
   referenceUsd: number | null;
   flowUsd: number;
   previousUsd: number;
@@ -719,7 +728,7 @@ export function decideWalletPublish(input: {
   if (input.incompleteNative) {
     return { candidateUsd, keptUsd: kept, decision: "hold-incomplete", unexplained: null };
   }
-  if (!input.hasRabbyList) {
+  if (!input.hasRabbyList && !input.hasRabbyTotal) {
     return { candidateUsd, keptUsd: kept, decision: "hold-bootstrap", unexplained: null };
   }
   const reference = input.referenceUsd;
