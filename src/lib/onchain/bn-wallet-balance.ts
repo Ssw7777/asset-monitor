@@ -9,11 +9,12 @@ import { tokenIdentity } from "./token-cache-policy";
  * The published figure is filtered tokens plus app balances plus DeFi position
  * value that is not already in those tokens. Rabby total_balance is a
  * once-per-day reconciliation check and must not replace a fresh Binance total.
- * Until Rabby total_balance has anchored a wallet (or a token list is stored),
- * the previous total stays. Token list is preferred for junk filtering, but
- * Rabby's public token_list can return empty while total_balance still works —
- * in that case the total alone is enough to leave hold-bootstrap and run the
- * gap check. A failed Binance read keeps the last good value until it is stale,
+ * Until a Rabby list/total anchors a wallet OR a previous published total
+ * already exists, the candidate is not written. With a previous total, gap
+ * vs that total (or a fresh Rabby total) decides publish vs hold-gap — so a
+ * 429 / empty token_list cannot freeze every wallet forever. Token list is
+ * preferred for junk filtering; total_balance alone is enough when the list
+ * is empty. A failed Binance read keeps the last good value until it is stale,
  * then Rabby may fill in once — never on the next tick.
  */
 
@@ -701,8 +702,9 @@ export type PublishDecision = "publish" | "hold-gap" | "hold-bootstrap" | "hold-
  * The candidate is the number a successful publish writes: filtered tokens,
  * plus app USD, plus DeFi that is not already in the token list.
  * referenceUsd must be the same composition (Rabby total + app, or the
- * current published total). Without a Rabby token list OR a Rabby total
- * anchor the candidate is not written.
+ * current published total). Without a Rabby list/total AND without a previous
+ * published total, the candidate is not written (cold start). If a previous
+ * total exists, gap-check against it until Rabby catches up.
  */
 export function decideWalletPublish(input: {
   tokenUsd: number;
@@ -728,7 +730,10 @@ export function decideWalletPublish(input: {
   if (input.incompleteNative) {
     return { candidateUsd, keptUsd: kept, decision: "hold-incomplete", unexplained: null };
   }
-  if (!input.hasRabbyList && !input.hasRabbyTotal) {
+  // Soft exit: a prior published total is enough to leave cold-start hold and
+  // gap-check (vs referenceUsd, which callers set to Rabby+app or previous).
+  // Otherwise Rabby 429 / empty token_list freezes every wallet forever.
+  if (!input.hasRabbyList && !input.hasRabbyTotal && !(kept > 0)) {
     return { candidateUsd, keptUsd: kept, decision: "hold-bootstrap", unexplained: null };
   }
   const reference = input.referenceUsd;
