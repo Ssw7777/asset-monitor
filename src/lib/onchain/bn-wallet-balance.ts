@@ -12,7 +12,9 @@ import { tokenIdentity } from "./token-cache-policy";
  * Until a Rabby list/total anchors a wallet OR a previous published total
  * already exists, the candidate is not written. With a previous total, gap
  * vs that total (or a fresh Rabby total) decides publish vs hold-gap — so a
- * 429 / empty token_list cannot freeze every wallet forever. Token list is
+ * 429 / empty token_list cannot freeze every wallet forever. Without a Rabby
+ * token_list, moderate upward bn-web3 corrections soft-exit hold-gap (primary
+ * source); downward and list-reconcile checks stay strict. Token list is
  * preferred for junk filtering; total_balance alone is enough when the list
  * is empty. A failed Binance read keeps the last good value until it is stale,
  * then Rabby may fill in once — never on the next tick.
@@ -576,18 +578,27 @@ export function explainedTransferUsd(
 }
 
 /**
- * Block a publish when the filtered Binance total is far from the last Rabby
- * figure and transfers since that figure do not explain the gap.
- * This stops a source switch from writing a fake step into the balance history.
+ * Block a publish when the filtered Binance total is far from the reference
+ * and transfers do not explain the gap.
+ * softUpward: when Rabby token_list is missing, allow a moderate upward
+ * bn-web3 correction (primary source) so a stale Rabby-era total cannot
+ * freeze forever. Downward moves and Rabby-list reconciles stay strict
+ * (3% / $150) so empty/junk reads cannot wipe a real balance, and absurd
+ * spam candidates (e.g. 1000× jumps) still hold-gap.
  */
 export function binanceGapBlocked(
   binanceUsd: number,
   referenceUsd: number,
-  flowUsd: number
+  flowUsd: number,
+  options?: { softUpward?: boolean }
 ): { unexplained: number; threshold: number } | null {
   if (!Number.isFinite(binanceUsd) || !Number.isFinite(referenceUsd) || referenceUsd < 0) return null;
-  const unexplained = Math.abs(binanceUsd - referenceUsd - (Number.isFinite(flowUsd) ? flowUsd : 0));
-  const threshold = Math.max(150, Math.max(Math.abs(binanceUsd), Math.abs(referenceUsd)) * 0.03);
+  const flow = Number.isFinite(flowUsd) ? flowUsd : 0;
+  const delta = binanceUsd - referenceUsd - flow;
+  const unexplained = Math.abs(delta);
+  const softUp = Boolean(options?.softUpward) && delta > 0;
+  const scale = Math.max(Math.abs(binanceUsd), Math.abs(referenceUsd));
+  const threshold = softUp ? Math.max(8_000, scale * 0.15) : Math.max(150, scale * 0.03);
   return unexplained > threshold ? { unexplained: round2(unexplained), threshold: round2(threshold) } : null;
 }
 
@@ -738,7 +749,11 @@ export function decideWalletPublish(input: {
   }
   const reference = input.referenceUsd;
   if (reference != null && Number.isFinite(reference) && (input.previousUsd > 0 || reference > 0)) {
-    const blocked = binanceGapBlocked(candidateUsd, reference, input.flowUsd);
+    // Without a Rabby token_list, treat bn-web3 as primary: soft-exit moderate
+    // upward corrections vs a stale previous total (e.g. 币安钱包 90k→96k).
+    const blocked = binanceGapBlocked(candidateUsd, reference, input.flowUsd, {
+      softUpward: !input.hasRabbyList,
+    });
     if (blocked) {
       return { candidateUsd, keptUsd: kept, decision: "hold-gap", unexplained: blocked.unexplained };
     }
