@@ -714,11 +714,14 @@ export async function refreshWallets(
         0
       );
       const limited = status === 429 || status === 0;
-      const backoff = empty && !limited ? RABBY_EMPTY_LIST_RETRY_MS : rabbyBackoffMs(longest, limited);
+      // Empty token_list must not freeze the shared slot for hours — total_balance
+      // still works and is what unblocks hold-bootstrap. Mark empty separately.
+      const backoff = empty && !limited ? RABBY_RECONCILE_GAP_MS : rabbyBackoffMs(longest, limited);
       chainStore[key] = {
         ...(existing ?? { at: new Date().toISOString(), totalUsd: 0, chains: [] }),
         rabbyListAttemptAt: new Date().toISOString(),
         rabbyListBackoffMs: backoff,
+        ...(empty && !limited ? { rabbyListEmptyAt: new Date().toISOString() } : {}),
       };
     },
   };
@@ -774,7 +777,10 @@ export async function refreshWallets(
             rabbySlot.note(addressLower, total.status);
           } else {
             rabbyDetail = total.detail;
-            if (wantList && Date.now() < stopAt - 8_000) {
+            const emptyAtMs = Date.parse(previousChain?.rabbyListEmptyAt ?? "");
+            const listRecentlyEmpty =
+              Number.isFinite(emptyAtMs) && Date.now() - emptyAtMs < RABBY_EMPTY_LIST_RETRY_MS;
+            if (wantList && !listRecentlyEmpty && Date.now() < stopAt - 8_000) {
               const held = await fetchRabbyHeldTokens(wallet.address);
               if (held.tokens?.length) {
                 rabbyHeldFresh = held.tokens;
@@ -825,6 +831,9 @@ export async function refreshWallets(
       : previous > 0
         ? previous
         : null;
+    const hasRabbyTotal =
+      Boolean(rabbyDetail) ||
+      (Number.isFinite(rabbyAtMs) && Date.now() - rabbyAtMs < RABBY_TOTAL_RECONCILE_MS);
     const plan = binanceRead && valuation
       ? decideWalletPublish({
           tokenUsd: valuation.totalUsd,
@@ -832,6 +841,7 @@ export async function refreshWallets(
           positionUsd: position.usd,
           incompleteNative: false,
           hasRabbyList: (heldNow?.length ?? 0) > 0,
+          hasRabbyTotal,
           referenceUsd,
           flowUsd,
           previousUsd: previous,
@@ -851,14 +861,15 @@ export async function refreshWallets(
         );
       }
     }
-    const holdingBinance = plan != null && plan.decision !== "publish";
+    // When Binance is held (bootstrap/gap), still allow a fresh Rabby total to
+    // publish so lastSuccess and on-chain figures keep moving.
     const choice = chooseWalletTotal({
       nowMs: Date.now(),
       previousUsd: previous,
       previousAtMs: Number.isFinite(previousAtMs) ? previousAtMs : null,
       previousSource: wallet.source,
       binanceUsd: plan?.decision === "publish" ? plan.candidateUsd : null,
-      rabbyUsd: holdingBinance || !rabbyDetail ? null : Math.round((rabbyDetail.totalUsd + appUsd) * 100) / 100,
+      rabbyUsd: !rabbyDetail ? null : Math.round((rabbyDetail.totalUsd + appUsd) * 100) / 100,
     });
     const paceFields = {
       rabbyListAttemptAt: chainStore[addressLower]?.rabbyListAttemptAt ?? previousChain?.rabbyListAttemptAt,
