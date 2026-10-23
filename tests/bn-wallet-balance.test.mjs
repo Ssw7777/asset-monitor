@@ -519,6 +519,10 @@ test("live probe cases: airdrops drop, real large holdings and tokenized stocks 
   const held = binanceGapBlocked(11_208, 1_116, 0);
   assert.ok(held);
   assert.equal(binanceGapBlocked(11_208, 1_116, 10_000), null);
+  assert.ok(binanceGapBlocked(96_456, 90_445, 0));
+  assert.equal(binanceGapBlocked(96_456, 90_445, 0, { softUpward: true }), null);
+  assert.ok(binanceGapBlocked(550_469, 164, 0, { softUpward: true }));
+  assert.ok(binanceGapBlocked(10, 5_000, 0, { softUpward: true }));
   assert.equal(
     explainedTransferUsd(
       [{ minedAt: new Date().toISOString(), transfers: [{ sender: "0x" + "01".repeat(20), recipient: "0x" + "ab".repeat(20), valueUsd: 10_000 }] }],
@@ -811,6 +815,52 @@ test("published total adds app and DeFi that are not already in the token list",
   });
   assert.equal(softPreviousGap.decision, "hold-gap");
   assert.equal(softPreviousGap.keptUsd, 5000);
+
+  // Soft upward without Rabby list: bn-web3 primary may correct a stale
+  // Rabby-era total (币安钱包 ~90k → ~96k) without waiting for reconcile.
+  const softUpward = decideWalletPublish({
+    tokenUsd: 96_456,
+    appUsd: 0,
+    positionUsd: 0,
+    incompleteNative: false,
+    hasRabbyList: false,
+    hasRabbyTotal: false,
+    referenceUsd: 90_445,
+    flowUsd: 0,
+    previousUsd: 90_445,
+  });
+  assert.equal(softUpward.decision, "publish");
+  assert.equal(softUpward.candidateUsd, 96_456);
+  assert.equal(softUpward.keptUsd, 96_456);
+
+  // Absurd upward junk (Linea-style) still hold-gaps even without Rabby.
+  const softAbsurdUp = decideWalletPublish({
+    tokenUsd: 550_469,
+    appUsd: 0,
+    positionUsd: 0,
+    incompleteNative: false,
+    hasRabbyList: false,
+    hasRabbyTotal: false,
+    referenceUsd: 164,
+    flowUsd: 0,
+    previousUsd: 164,
+  });
+  assert.equal(softAbsurdUp.decision, "hold-gap");
+  assert.equal(softAbsurdUp.keptUsd, 164);
+
+  // With a Rabby list, the strict 3% band still applies on upward moves.
+  const rabbyListStrictUp = decideWalletPublish({
+    tokenUsd: 96_456,
+    appUsd: 0,
+    positionUsd: 0,
+    incompleteNative: false,
+    hasRabbyList: true,
+    hasRabbyTotal: true,
+    referenceUsd: 90_445,
+    flowUsd: 0,
+    previousUsd: 90_445,
+  });
+  assert.equal(rabbyListStrictUp.decision, "hold-gap");
 
   const totalAnchor = decideWalletPublish({
     tokenUsd: 100,
