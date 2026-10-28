@@ -3,10 +3,9 @@
 import type { ExchangeBalance } from "@/lib/types";
 import type { ChangeRangeKey, ChangeSummary } from "@/lib/changes";
 import { CHANGE_RANGES } from "@/lib/changes";
+import { exchangeIconId, exchangeLabel } from "@/lib/exchange-labels";
 import { amountNum, deltaClass, signedPct, signedUsd, timeAgo, usd } from "./format";
 import { TokenIcon } from "./TokenIcon";
-
-const LABEL: Record<string, string> = { okx: "OKX", binance: "Binance", gate: "Gate", bitget: "Bitget" };
 
 function statusText(exchange: ExchangeBalance) {
   switch (exchange.status) {
@@ -49,7 +48,7 @@ export function ExchangeSection({
       <div className="section-head">
         <div className="section-title">
           <h2>交易所</h2>
-          <span className="hint">OKX / Binance / Gate / Bitget · 只读 API，密钥仅服务端</span>
+          <span className="hint">OKX / Binance / Gate / Gate妈妈 / Gate哥哥 / Bitget · 只读 API，密钥仅服务端</span>
         </div>
         <span className="section-total num">{usd(totalUsd)}</span>
       </div>
@@ -62,13 +61,13 @@ export function ExchangeSection({
           </div>
           {exchanges.map((exchange) => {
             const status = statusText(exchange);
-            const label = LABEL[exchange.exchange] || exchange.exchange;
+            const label = exchangeLabel(exchange.exchange);
             return (
               <div className="trow exchange-balance-grid" key={exchange.exchange}>
                 <div className="cell-token">
                   <TokenIcon
                     symbol={label}
-                    localSrc={`/icons/exchanges/${exchange.exchange}.png`}
+                    localSrc={`/icons/exchanges/${exchangeIconId(exchange.exchange)}.png`}
                     size={28}
                     shape="square"
                   />
@@ -109,7 +108,7 @@ export function ExchangeSection({
               const row = exchangeChanges.get(exchange.exchange);
               return (
                 <div className="exchange-change-row" key={`change-${exchange.exchange}`}>
-                  <span>{LABEL[exchange.exchange]}</span>
+                  <span>{exchangeLabel(exchange.exchange)}</span>
                   <span className="num exchange-change-balance">
                     {row ? `${amountNum(row.before)} → ${usd(row.after)}` : usd(exchange.balanceUsd)}
                   </span>

@@ -1,4 +1,11 @@
-import { fetchBinanceBalance, fetchBitgetBalance, fetchGateBalance, fetchOkxBalance, type CexResult } from "@/lib/cex/balances";
+import {
+  fetchBinanceBalance,
+  fetchBitgetBalance,
+  fetchConfiguredGateAccounts,
+  fetchOkxBalance,
+  type CexResult,
+} from "@/lib/cex/balances";
+import { retirePublishedGateStubs } from "@/lib/cex/gate-accounts";
 import {
   parseAppDetail,
   parseProtocolDetail,
@@ -18,8 +25,6 @@ import {
   pushSnapshotLive,
   readStore,
   readLiveStore,
-  updateExchanges,
-  updateExchangesLive,
   updateCexValuationVersions,
   updateCexValuationVersionsLive,
   writeStore,
@@ -976,19 +981,35 @@ export async function runRefresh(
   const now = new Date().toISOString();
   const blob = liveState.encryptedSecrets;
 
-  const [okx, binance, gate, bitget] = await Promise.all([
+  const [okx, binance, gateAccounts, bitget] = await Promise.all([
     fetchOkxBalance(blob),
     fetchBinanceBalance(blob),
-    fetchGateBalance(blob),
+    fetchConfiguredGateAccounts(blob),
     fetchBitgetBalance(blob),
   ]);
+  const gateById = new Map(gateAccounts.map((account) => [account.id, account]));
+  const personalGate = gateById.get("gate") ?? {
+    balanceUsd: 0,
+    status: "missing_keys" as const,
+    error: "Gate API key/secret not configured",
+  };
 
   // 全账户估值口径首次成功时只建立新基准，不把“旧算法 → 新算法”的差额记成交易。
+  // 家庭 Gate 账户第一次成功发布同样只建基准，避免把手动占位迁入交易所记成入金。
   const valuationVersion = 2;
   const previousVersions = liveState.cexValuationVersions ?? {};
-  const cexResults = { okx, binance, gate, bitget } as const;
-  const suppressExchangeFlows = (Object.keys(cexResults) as Array<keyof typeof cexResults>).filter(
-    (exchange) => cexResults[exchange].status === "ok" && previousVersions[exchange] !== valuationVersion
+  const cexResults: Partial<Record<ExchangeBalance["exchange"], CexResult>> = {
+    okx,
+    binance,
+    gate: personalGate,
+    bitget,
+  };
+  for (const id of ["gate_mom", "gate_brother"] as const) {
+    const account = gateById.get(id);
+    if (account) cexResults[id] = account;
+  }
+  const suppressExchangeFlows = (Object.keys(cexResults) as Array<ExchangeBalance["exchange"]>).filter(
+    (exchange) => cexResults[exchange]?.status === "ok" && previousVersions[exchange] !== valuationVersion
   );
 
   const prevMap = Object.fromEntries(liveState.exchanges.map((item) => [item.exchange, item])) as Record<
@@ -998,10 +1019,31 @@ export async function runRefresh(
   const exchanges: ExchangeBalance[] = [
     mapExchange("okx", okx, prevMap.okx, BASELINE.okx, now),
     mapExchange("binance", binance, prevMap.binance, BASELINE.binance, now),
-    mapExchange("gate", gate, prevMap.gate, BASELINE.gate, now),
-    mapExchange("bitget", bitget, prevMap.bitget, BASELINE.bitget, now),
+    mapExchange("gate", personalGate, prevMap.gate, BASELINE.gate, now),
   ];
-  let latest = fast ? await updateExchangesLive(exchanges) : await updateExchanges(exchanges);
+  for (const id of ["gate_mom", "gate_brother"] as const) {
+    const account = gateById.get(id);
+    if (!account) continue;
+    exchanges.push(mapExchange(id, account, prevMap[id], 0, now));
+  }
+  exchanges.push(mapExchange("bitget", bitget, prevMap.bitget, BASELINE.bitget, now));
+  // Only retire a manual stub when this refresh actually stored the live API equity.
+  // A spike-rejected read keeps the previous figure and must not drop the stub.
+  const publishedGate = gateAccounts.filter((account) => {
+    const row = exchanges.find((item) => item.exchange === account.id);
+    return account.status === "ok" && row?.status === "ok" && row.balanceUsd === account.balanceUsd;
+  });
+  const applied = await (fast ? mutateLiveStore : mutateStore)((state) => {
+    state.exchanges = exchanges;
+    const retired = retirePublishedGateStubs(state.manual, publishedGate);
+    if (retired.removed.length) state.manual = retired.manual;
+    return retired.removed;
+  });
+  const removedStubs = applied.result;
+  if (removedStubs.length) {
+    console.info(`[refresh] removed manual Gate stubs now covered by API: ${removedStubs.join(" | ")}`);
+  }
+  let latest = applied.state;
   // App audits pull Zerion and rewrite caches — skip on Workers-friendly fast lane.
   const appAudit = fast
     ? { state: latest, attempted: 0, refreshed: 0 }
@@ -1055,6 +1097,7 @@ export async function runRefresh(
       : undefined,
     partial,
     suppressExchangeFlows: suppressExchangeFlows.length ? suppressExchangeFlows : undefined,
+    suppressManualFlows: removedStubs.length ? removedStubs : undefined,
   };
   let finalState = fast ? await pushSnapshotLive(snapInput) : await pushSnapshot(snapInput);
   if (suppressExchangeFlows.length) {

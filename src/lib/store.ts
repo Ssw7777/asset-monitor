@@ -101,6 +101,7 @@ function trimSnapshots(list: SnapshotPoint[]): SnapshotPoint[] {
       partial: point.partial,
       seeded: point.seeded,
       suppressExchangeFlows: point.suppressExchangeFlows,
+      suppressManualFlows: point.suppressManualFlows,
     };
   });
   return changed ? out : sliced;
@@ -280,6 +281,9 @@ function normalizeSnapshot(raw: unknown): SnapshotPoint | null {
     seeded: point.seeded === true ? true : undefined,
     suppressExchangeFlows: Array.isArray(point.suppressExchangeFlows)
       ? point.suppressExchangeFlows.filter((item): item is string => typeof item === "string")
+      : undefined,
+    suppressManualFlows: Array.isArray(point.suppressManualFlows)
+      ? point.suppressManualFlows.filter((item): item is string => typeof item === "string")
       : undefined,
   };
 }
@@ -883,6 +887,7 @@ export async function pushSnapshot(point: Omit<SnapshotPoint, "ts"> & { ts?: str
     dapps: point.dapps,
     partial: point.partial === true ? true : undefined,
     suppressExchangeFlows: point.suppressExchangeFlows,
+    suppressManualFlows: point.suppressManualFlows,
   };
     const previous = s.snapshots.at(-1);
     if (previous && !previous.seeded && previous.wallets && snap.wallets) {
@@ -930,6 +935,7 @@ export async function pushSnapshotLive(point: Omit<SnapshotPoint, "ts"> & { ts?:
     dapps: point.dapps,
     partial: point.partial === true ? true : undefined,
     suppressExchangeFlows: point.suppressExchangeFlows,
+    suppressManualFlows: point.suppressManualFlows,
   };
   const snapJson = JSON.stringify(snap);
   const lastRefreshJson = JSON.stringify(snap.ts);

@@ -1,5 +1,6 @@
 import type { PortfolioState, SnapshotPoint } from "./types";
 import { isWalletRefreshEnabled } from "./wallets";
+import { exchangeLabel } from "./exchange-labels";
 import { cnyManualNames, isCryptoManual, stripCnyManualFromSnapshot } from "./manual-assets";
 
 export type ChangeRangeKey = "1h" | "12h" | "24h" | "7d";
@@ -168,13 +169,16 @@ export function buildChangeSummary(
   });
 
   for (const exchange of state.exchanges) {
+    const pastMap = past.exchanges;
+    // A newly published account (Gate妈妈 / Gate哥哥) is a baseline, not a deposit.
+    if (pastMap && !Object.prototype.hasOwnProperty.call(pastMap, exchange.exchange)) continue;
     push({
       key: `exchange:${exchange.exchange}`,
       type: "exchange",
-      label: { okx: "OKX", binance: "Binance", gate: "Gate", bitget: "Bitget" }[exchange.exchange] || exchange.exchange,
+      label: exchangeLabel(exchange.exchange),
       detail: "交易所余额",
       address: null,
-      before: round2(past.exchanges?.[exchange.exchange] ?? 0),
+      before: round2(pastMap?.[exchange.exchange] ?? 0),
       after: round2(latest.exchanges?.[exchange.exchange] ?? exchange.balanceUsd),
       updatedAt: exchange.lastUpdated,
       dataStatus:

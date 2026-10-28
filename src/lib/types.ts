@@ -81,8 +81,10 @@ export interface Wallet {
   refreshPaused?: boolean;
 }
 
+export type ExchangeId = "okx" | "binance" | "gate" | "gate_mom" | "gate_brother" | "bitget";
+
 export interface ExchangeBalance {
-  exchange: "okx" | "binance" | "gate" | "bitget";
+  exchange: ExchangeId;
   balanceUsd: number;
   lastUpdated: string | null;
   status: "ok" | "missing_keys" | "missing_passphrase" | "error" | "baseline";
@@ -107,6 +109,11 @@ export interface SnapshotPoint {
   seeded?: boolean;
   /** 余额口径升级当轮需要忽略的交易所，避免把算法差额误记为真实流水。 */
   suppressExchangeFlows?: string[];
+  /**
+   * Manual rows removed in this snapshot because a live Gate account replaced
+   * them. Their disappearance is a bookkeeping move, not an outflow.
+   */
+  suppressManualFlows?: string[];
   /** 本快照里这些地址的余额来自 Zerion 兜底读数；相邻快照任一侧为兜底值时不记流水（估值口径切换，不是真实资金变动）。 */
   zerionWallets?: string[];
   /** 本快照每个地址的余额口径（public / direct）；某地址口径在相邻快照间切换的那一轮不记流水。 */

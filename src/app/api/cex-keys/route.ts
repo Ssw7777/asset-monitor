@@ -31,6 +31,8 @@ export async function GET() {
       okx: !!(process.env.OKX_API_KEY && process.env.OKX_API_SECRET && process.env.OKX_API_PASSPHRASE),
       binance: !!(process.env.BINANCE_API_KEY && process.env.BINANCE_API_SECRET),
       gate: !!(process.env.GATE_API_KEY && process.env.GATE_API_SECRET),
+      gateMom: !!(process.env.GATE_MOM_KEY?.trim() && process.env.GATE_MOM_SECRET?.trim()),
+      gateBrother: !!(process.env.GATE_BROTHER_KEY?.trim() && process.env.GATE_BROTHER_SECRET?.trim()),
       bitget: !!(process.env.BITGET_API_KEY && process.env.BITGET_API_SECRET && process.env.BITGET_API_PASSPHRASE),
     },
   });

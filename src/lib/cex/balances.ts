@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { resolveGateAccounts, type GateAccountId } from "./gate-accounts";
 import { resolveCexKeys } from "../crypto";
 import type { EncryptedSecretsBlob } from "../types";
 
@@ -11,6 +12,8 @@ export interface CexResult {
 const BINANCE_BASE = "https://api.binance.com";
 const OKX_BASE = "https://www.okx.com";
 const GATE_BASE = "https://api.gateio.ws";
+/** Read-only unified equity. Spot, finance/earn (including GHO lending), and other wallets are inside this total. */
+export const GATE_TOTAL_BALANCE_PATH = "/api/v4/wallet/total_balance";
 const BITGET_BASE = "https://api.bitget.com";
 
 function missing(...keys: (string | undefined)[]) {
@@ -222,49 +225,78 @@ async function gateSignedGet(
   return { ok: true, data };
 }
 
-export async function fetchGateBalance(blob?: EncryptedSecretsBlob | null): Promise<CexResult> {
-  const keys = resolveCexKeys(blob);
-  const apiKey = keys.gate.apiKey;
-  const secret = keys.gate.secret;
-  if (missing(apiKey, secret)) {
-    return { balanceUsd: 0, status: "missing_keys", error: "Gate API key/secret not configured" };
+export function gateEquityUsd(data: unknown): { ok: true; balanceUsd: number } | { ok: false; error: string } {
+  const total = data && typeof data === "object" ? (data as { total?: Record<string, unknown> }).total : undefined;
+  const raw = total?.amount;
+  const amount = Number(raw);
+  const unrealisedRaw = total?.unrealised_pnl;
+  const borrowedRaw = total?.borrowed;
+  const unrealisedPnl = unrealisedRaw == null ? 0 : Number(unrealisedRaw);
+  const borrowed = borrowedRaw == null ? 0 : Number(borrowedRaw);
+  if (
+    raw != null &&
+    Number.isFinite(amount) &&
+    Number.isFinite(unrealisedPnl) &&
+    Number.isFinite(borrowed)
+  ) {
+    // Gate 将合约未实现盈亏与杠杆借款作为独立字段返回；净资产需在总余额上加减。
+    return { ok: true, balanceUsd: roundUsd(amount + unrealisedPnl - borrowed) };
+  }
+  return { ok: false, error: "Gate total_balance returned invalid equity fields" };
+}
+
+/** One read-only account. GET total_balance only — no trade, withdraw, or transfer. */
+export async function fetchGateBalanceForKeys(
+  apiKey: string | undefined,
+  secret: string | undefined,
+  missingError = "Gate API key/secret not configured"
+): Promise<CexResult> {
+  const key = apiKey?.trim();
+  const secretKey = secret?.trim();
+  if (missing(key, secretKey)) {
+    return { balanceUsd: 0, status: "missing_keys", error: missingError };
   }
 
   try {
-    // Prefer unified estimated total (spot + finance + other accounts, no double-count)
-    const totalBal = await gateSignedGet(
-      "/api/v4/wallet/total_balance",
-      apiKey!,
-      secret!,
-      "currency=USDT"
-    );
+    // Unified estimated total (spot + finance/earn including GHO lending + other accounts, no double-count).
+    const totalBal = await gateSignedGet(GATE_TOTAL_BALANCE_PATH, key!, secretKey!, "currency=USDT");
     if (totalBal.ok) {
-      const raw = totalBal.data?.total?.amount;
-      const amount = Number(raw);
-      const unrealisedRaw = totalBal.data?.total?.unrealised_pnl;
-      const borrowedRaw = totalBal.data?.total?.borrowed;
-      const unrealisedPnl = unrealisedRaw == null ? 0 : Number(unrealisedRaw);
-      const borrowed = borrowedRaw == null ? 0 : Number(borrowedRaw);
-      if (
-        raw != null &&
-        Number.isFinite(amount) &&
-        Number.isFinite(unrealisedPnl) &&
-        Number.isFinite(borrowed)
-      ) {
-        // Gate 将合约未实现盈亏与杠杆借款作为独立字段返回；净资产需在总余额上加减。
-        const equity = amount + unrealisedPnl - borrowed;
-        return {
-          balanceUsd: roundUsd(equity),
-          status: "ok",
-        };
-      }
-      return { balanceUsd: 0, status: "error", error: "Gate total_balance returned invalid equity fields" };
+      const equity = gateEquityUsd(totalBal.data);
+      if (equity.ok) return { balanceUsd: equity.balanceUsd, status: "ok" };
+      return { balanceUsd: 0, status: "error", error: equity.error };
     }
     // 不使用 Spot + Earn 的不完整回退；失败时由上层保留最近一次完整总额。
     return { balanceUsd: 0, status: "error", error: `total_balance: ${totalBal.error}` };
   } catch (e) {
     return { balanceUsd: 0, status: "error", error: e instanceof Error ? e.message : "gate fail" };
   }
+}
+
+export async function fetchGateBalance(blob?: EncryptedSecretsBlob | null): Promise<CexResult> {
+  const keys = resolveCexKeys(blob);
+  return fetchGateBalanceForKeys(keys.gate.apiKey, keys.gate.secret);
+}
+
+export interface GateAccountResult extends CexResult {
+  id: GateAccountId;
+  label: string;
+}
+
+/**
+ * Personal account is always returned (missing keys stay missing_keys).
+ * Mom and brother are omitted when their env pair is absent, so a refresh
+ * does not crash or go partial just because a family account is not configured.
+ */
+export async function fetchConfiguredGateAccounts(
+  blob?: EncryptedSecretsBlob | null
+): Promise<GateAccountResult[]> {
+  const accounts = resolveGateAccounts(blob);
+  return Promise.all(
+    accounts.map(async (account) => {
+      const result = await fetchGateBalanceForKeys(account.apiKey, account.secret, account.missingError);
+      return { ...result, id: account.id, label: account.label };
+    })
+  );
 }
 
 // ─── Bitget ──────────────────────────────────────────────────────────────────

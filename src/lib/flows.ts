@@ -5,6 +5,7 @@ import type {
   PortfolioState,
   SnapshotPoint,
 } from "./types";
+import { EXCHANGE_LABEL } from "./exchange-labels";
 import { isWalletRefreshEnabled } from "./wallets";
 
 export type { FlowDirection, FlowEntityType, FlowEvent } from "./types";
@@ -34,7 +35,6 @@ export interface FlowSummary {
   note: string;
 }
 
-const EXCHANGE_LABEL: Record<string, string> = { okx: "OKX", binance: "Binance", gate: "Gate", bitget: "Bitget" };
 /** 间隔超过 6 小时就不做归因：中间可能发生了多次变动，硬算会得出错误结论。 */
 const MAX_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** UI 的最低提示档。达到这个金额的记录会立即持久化，不随七天快照淘汰。 */
@@ -106,6 +106,7 @@ function collectDeltas(state: PortfolioState, prev: SnapshotPoint, cur: Snapshot
   }
 
   const suppressedExchanges = new Set(cur.suppressExchangeFlows ?? []);
+  const suppressedManual = new Set(cur.suppressManualFlows ?? []);
   for (const [key, label] of Object.entries(EXCHANGE_LABEL)) {
     if (suppressedExchanges.has(key)) continue;
     const before = Number(prev.exchanges?.[key] ?? 0);
@@ -126,6 +127,7 @@ function collectDeltas(state: PortfolioState, prev: SnapshotPoint, cur: Snapshot
     ...Object.keys(cur.manualItems || {}),
   ]);
   for (const name of manualKeys) {
+    if (suppressedManual.has(name)) continue;
     const before = Number(prev.manualItems?.[name] ?? 0);
     const after = Number(cur.manualItems?.[name] ?? before);
     out.push({
